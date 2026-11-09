@@ -23,19 +23,36 @@ func (r *runtime) modelTools() []llm.ToolDefinition {
 	return out
 }
 
-func (r *runtime) beforeTool(ctx workflow.Context, call llm.ToolCall, p PreflightResult) (bool, string) {
+// toolPolicyDecision permits execution only after any required approval is granted.
+type toolPolicyDecision struct {
+	Allowed          bool
+	Reason           string
+	RequiresApproval bool
+}
+
+// beforeTool is pure policy over static registry metadata and the preflight result.
+// Path/schema checks and action hashing remain the preflight activity's responsibility.
+func beforeTool(call llm.ToolCall, p PreflightResult) toolPolicyDecision {
 	var registry tools.LocalRegistry
 	def, ok := registry.Lookup(call.Name)
 	if !ok {
-		return false, "unknown tool"
+		return toolPolicyDecision{Reason: "unknown tool"}
 	}
 	if !p.Allowed {
-		return false, p.Reason
+		return toolPolicyDecision{Reason: p.Reason}
 	}
 	if p.Mode != def.ExecutionMode || p.Replay != def.Replay || p.ActionHash == "" {
-		return false, "invalid preflight metadata"
+		return toolPolicyDecision{Reason: "invalid preflight metadata"}
 	}
-	if p.RequiresApproval || def.Replay == tools.Unsafe {
+	return toolPolicyDecision{Allowed: true, RequiresApproval: p.RequiresApproval || def.Replay == tools.Unsafe}
+}
+
+func (r *runtime) authorizeTool(ctx workflow.Context, call llm.ToolCall, p PreflightResult) (bool, string) {
+	decision := beforeTool(call, p)
+	if !decision.Allowed {
+		return false, decision.Reason
+	}
+	if decision.RequiresApproval {
 		allowed, err := r.approveTool(ctx, call)
 		if err != nil {
 			return false, err.Error()
@@ -68,7 +85,7 @@ func (r *runtime) executeBatch(ctx workflow.Context, calls []llm.ToolCall) (Batc
 		if err != nil {
 			reason = err.Error()
 		} else {
-			allowed[i], reason = r.beforeTool(ctx, call, preflight[i])
+			allowed[i], reason = r.authorizeTool(ctx, call, preflight[i])
 		}
 		batch.Results[i] = tools.Result{ToolCallID: call.ID, IsError: true, Output: bounded(reason, 8192)}
 	}
