@@ -4,7 +4,7 @@ A local Go + Bubble Tea + Ollama teaching harness for Temporal's long-running ac
 
 ## Stack status
 
-This is the scaffold PR. Commands are discoverable with `--help` but deliberately return an error until implemented in later draft PRs. **The demo is not implemented at this stack position.** No draft in this stack should be merged independently without review.
+This stack position includes the scaffold, contracts and environment doctor. Commands are discoverable with `--help`; `doctor [--fix]` checks or starts dependencies, while other runtime commands deliberately return errors until their later PRs. **The demo is not implemented at this stack position.** No draft in this stack should be merged independently without review.
 
 ## Development
 
@@ -19,7 +19,7 @@ mise run test
 mise run lint
 ```
 
-The completed stack will support `mise trust && mise run setup && ./bin/harness demo`. The setup task currently stops at the unimplemented doctor command. `mise setup` is also a supported task shorthand; documentation uses `mise run setup` explicitly.
+The completed stack will support `mise trust && mise run setup && ./bin/harness demo`. Setup builds the binary, starts dependencies and pulls the model. Standalone `doctor --fix` deliberately leaves services it starts running; later demo invocations reuse them without taking ownership. Demo-owned services will be stopped on exit. `mise setup` is also a supported task shorthand; documentation uses `mise run setup` explicitly.
 
 Pins: Go 1.27.3, Temporal CLI 1.10.0, Ollama 0.40.15. Ollama's macOS arm64 mise installation was verified during scaffolding; CI validates Linux amd64. Model downloads require several GB. No cloud model API keys are needed. Runtime files will live in gitignored `.data/`.
 
