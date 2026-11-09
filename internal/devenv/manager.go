@@ -91,7 +91,9 @@ func (m *Manager) Check(ctx context.Context, fix bool, progress io.Writer) error
 	}
 	if m.cfg.Model == "mock" {
 		fmt.Fprintln(progress, "[GREEN] Ollama skipped (HARNESS_MODEL=mock)")
-		return errors.Join(failures...)
+		// Registration is best effort, but cancellation of Check itself is not.
+		// In particular, owned services may already be stopping on ctx.Done().
+		return errors.Join(append(failures, ctx.Err())...)
 	}
 	present, err := m.modelPresent(ctx)
 	if err != nil && fix {
