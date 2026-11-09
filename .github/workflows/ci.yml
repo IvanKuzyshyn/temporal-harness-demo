@@ -1,0 +1,25 @@
+name: CI
+on:
+  push:
+    branches: ['stack/**']
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      HARNESS_MODEL: mock
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v3
+      - name: Validate tool installations
+        run: |
+          go version
+          temporal --version
+          ollama --version
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test -race ./...
+      - name: Check formatting
+        run: test -z "$(gofmt -l cmd internal 2>/dev/null)"

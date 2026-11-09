@@ -1,0 +1,6 @@
+.data/
+bin/
+.env
+.env.*
+.worktrees/
+.superpowers/

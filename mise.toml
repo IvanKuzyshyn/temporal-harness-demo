@@ -1,0 +1,23 @@
+[tools]
+go = "1.27.3"
+"github:temporalio/cli" = "1.10.0" # `temporal` shorthand points to the server, not CLI.
+ollama = "0.40.15"
+
+[env]
+HARNESS_MODEL = "gemma4:e4b"
+TEMPORAL_ADDRESS = "localhost:7233"
+OLLAMA_HOST = "127.0.0.1:11434"
+HARNESS_WORKDIR = "{{config_root}}/examples/sample-project"
+
+[tasks.setup]
+description = "Install tools, build, start dependencies, pull model"
+run = ["mise install", "ollama --version", "go mod download", "go build -o bin/harness ./cmd/harness", "./bin/harness doctor --fix"]
+
+[tasks.demo]
+run = "./bin/harness demo"
+
+[tasks.test]
+run = "go test ./..."
+
+[tasks.lint]
+run = "go vet ./..."
