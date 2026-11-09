@@ -219,8 +219,12 @@ func (m *Model) View() tea.View {
 	if lipgloss.Width(link) > m.width {
 		link = "UI: http://localhost:8233 (default namespace)"
 	}
+	banner := "Harness · /help · Esc stop · Ctrl+C quit"
+	if m.opts.Demo {
+		banner = "Harness · /demo: guided demo · /help · Esc stop · Ctrl+C quit"
+	}
 	content := strings.Join([]string{
-		title.Render("Harness · /demo: guided demo · /help · Esc stop · Ctrl+C quit"),
+		title.Render(banner),
 		title.Render(panel), m.viewport.View(),
 		title.Render("Commands (Ctrl+T collapse)"), commandPane,
 		m.approvalView(), m.prompt.View(), footer, link,

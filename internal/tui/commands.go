@@ -61,7 +61,7 @@ func (m *Model) submitPrompt(steer bool) tea.Cmd {
 		m.notice = "Session is initializing; try again"
 		return nil
 	}
-	mode := "followup"
+	mode := "followUp"
 	if steer {
 		mode = "steer"
 	}

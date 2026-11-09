@@ -18,7 +18,7 @@ calls have a ten-second timeout. Ctrl+C cancels the session context.
 
 ## Controls
 
-- Enter sends `WhenBusy: "followup"`; Alt+Enter or `/steer <text>` sends `"steer"`.
+- Enter sends `WhenBusy: "followUp"`; Alt+Enter or `/steer <text>` sends `"steer"`.
 - Shift+Enter inserts a newline; Ctrl+J is the fallback for terminals that cannot
   distinguish Shift+Enter. Pasted multiline text is retained.
 - Esc requests Stop; Ctrl+C quits (does not implicitly stop the workflow).
@@ -28,7 +28,8 @@ calls have a ten-second timeout. Ctrl+C cancels the session context.
   `/sessions <id>` reconnects to that session. `/new` generates a crypto-random ID.
 - `/explore ...` and `/run ...` are submitted unchanged for workflow handling.
 - `/demo` sends the guided demo prompt with `Input.Scenario = "demo"`.
-  `Options.Demo` submits it once at startup, after starting the event tail.
+  `Options.Demo` only offers the demo banner. Startup never submits by default;
+  `Options.Autoplay: true` explicitly submits the demo once after starting the tail.
 
 ## Reconnect and rendering
 
@@ -36,8 +37,12 @@ The first `events.Tail` completes before a snapshot query is dispatched. Further
 tails run while that query is pending and are buffered with `events.NewReconnect`.
 Only events newer than the snapshot's `LastSeq` are replayed. Sequence gaps,
 truncation, and buffer exhaustion trigger a fresh snapshot. Epoch and query
-identifiers reject obsolete asynchronous results. Offsets are retained for up to
-32 recently visited sessions; switching clears the displayed session state.
+identifiers reject obsolete asynchronous results, including clipboard reads.
+Gap retries retain the bounded unprocessed suffix, including after a failed
+Resolve. Overflow rewinds the tail. Session checkpoints (up to 32) use offset zero:
+switching clears displayed state and rereads the file because a last-read offset
+alone cannot reconstruct output newer than the snapshot. This trades extra local
+reads for correctness, including switches during an initial query.
 
 A 150ms polling tail and independent two-second snapshot refresh ensure the final
 answer/status do not depend on a final stream event. A bounded replay cache keeps
@@ -46,7 +51,10 @@ repeating tool/pattern logs. Snapshot answers are authoritative.
 
 The UI retains 128 entries each for local transcript, pattern log, and command
 output (4KiB per entry), 128 assistant segments (64KiB each), and 512 compact
-replay events. Pending reconnect buffers use the events package's 4096-event cap.
+replay events. Pending reconnect buffers use the events package's 4096-event cap,
+with a same-sized recovery copy. Prompt input has a hard aggregate 16,384-rune
+bound (at most 64KiB UTF-8), independent of display width; all keyboard and paste
+insertions share sanitization and the retained-rune budget.
 Display payloads are compacted before buffering, and C0/C1/escape and Unicode
 format controls are removed from untrusted display text. Rendering is clipped to
 the terminal dimensions; extremely small terminals necessarily hide some panes.

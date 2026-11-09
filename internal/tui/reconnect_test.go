@@ -207,7 +207,7 @@ func TestCompactedEventsAndReplayAreBounded(t *testing.T) {
 
 func TestInitDemoAndEmptyIDAreCommands(t *testing.T) {
 	f := &fakeBackend{}
-	m := New(f, Options{Demo: true, DataDir: t.TempDir()})
+	m := New(f, Options{Demo: true, Autoplay: true, DataDir: t.TempDir()})
 	defer m.cancel()
 	initial := m.Init()().(tea.BatchMsg)
 	if f.queries != 0 || len(f.messages) != 0 {

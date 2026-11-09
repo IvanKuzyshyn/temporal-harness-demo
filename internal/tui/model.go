@@ -26,11 +26,11 @@ type Backend interface {
 }
 
 // Options describes the initial session. Empty SessionID generates a new ID in
-// Init. Demo submits the demo prompt after starting the initial event tail.
+// Init. Demo offers a banner; Autoplay explicitly submits the demo at startup.
 type Options struct {
 	SessionID, Model, DataDir string
 	Input                     workflows.Input
-	Demo                      bool
+	Demo, Autoplay            bool
 }
 
 const (
@@ -42,6 +42,7 @@ const (
 	maxAnswer        = 64 * 1024
 	maxSessions      = 32
 	maxReplayEvents  = 512
+	maxPromptRunes   = 16 * 1024
 )
 
 type streamEntry struct{ label, text string }
@@ -56,6 +57,7 @@ type Model struct {
 	epoch, queryID                  uint64
 	started, queryPending, quitting bool
 	reconnect                       *events.Reconnect
+	pending                         []events.Event
 	lastSnapshot                    time.Time
 	lastSeq                         uint64
 	displaySeq                      uint64
@@ -92,7 +94,8 @@ func New(backend Backend, opts Options) *Model {
 	p.Prompt = "> "
 	p.Placeholder = "Message or /help"
 	p.ShowLineNumbers = false
-	p.CharLimit = 16 * 1024
+	p.CharLimit = 0 // We enforce retained runes, not Bubbles' display-cell limit.
+	p.KeyMap.Paste.SetEnabled(false)
 	p.MaxWidth = 0
 	p.MaxHeight = 64
 	p.SetHeight(3)
@@ -132,8 +135,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.submitPrompt(false)
 		case "alt+enter":
 			return m, m.submitPrompt(true)
+		case "ctrl+v":
+			return m, m.clipboardCmd(readClipboard)
 		case "shift+enter", "ctrl+j":
-			m.prompt.InsertString("\n")
+			m.insertPrompt("\n")
 			return m, nil
 		case "tab":
 			m.showPatterns = !m.showPatterns
@@ -170,24 +175,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.started {
 			m.started = true
 			cmds = append(cmds, m.beginQuery())
-			if m.opts.Demo {
-				m.opts.Demo = false
-				cmds = append(cmds, m.submitCmd(demoPrompt, "followup", true))
+			if m.opts.Autoplay {
+				m.opts.Autoplay = false
+				cmds = append(cmds, m.submitCmd(demoPrompt, "followUp", true))
 			}
 		}
 		if m.reconnect != nil {
-			if err := m.reconnect.Buffer(msg.events); err != nil {
+			if err := m.bufferEvents(msg.events); err != nil {
 				m.notice = "Stream buffer full; refreshing snapshot"
 				cmds = append(cmds, m.restartQuery())
 			}
 		} else {
-			for _, e := range msg.events {
+			for i, e := range msg.events {
 				if e.Seq <= m.lastSeq {
 					continue
 				}
 				if e.Seq != m.lastSeq+1 {
 					m.notice = "Stream gap; refreshing snapshot"
 					cmds = append(cmds, m.beginQuery())
+					if err := m.bufferEvents(msg.events[i:]); err != nil {
+						cmds = append(cmds, m.restartQuery())
+					}
 					break
 				}
 				m.applyEvent(e)
@@ -222,10 +230,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			pending, err := m.reconnect.Resolve(m.lastSeq)
 			m.reconnect = nil
 			if err != nil {
+				m.reconnect = events.NewReconnect()
+				_ = m.reconnect.Buffer(m.pending)
 				m.notice = "Stream gap; refreshing snapshot"
 				m.refreshViewport(false)
 				return m, m.beginQuery()
 			}
+			m.pending = nil
 			for _, e := range pending {
 				m.applyEvent(e)
 			}
@@ -265,14 +276,27 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
+	case clipboardMsg:
+		if msg.epoch != m.epoch {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.notice = "Clipboard: " + bounded(safeText(msg.err.Error()), maxText)
+			return m, nil
+		}
+		m.insertPrompt(msg.text)
+		return m, nil
 	case tea.PasteMsg:
-		msg.Content = safeText(msg.Content)
-		var cmd tea.Cmd
-		m.prompt, cmd = m.prompt.Update(msg)
-		return m, cmd
+		m.insertPrompt(msg.Content)
+		return m, nil
+	}
+	if key, ok := msg.(tea.KeyPressMsg); ok {
+		key.Text = m.promptBudget(key.Text)
+		msg = key
 	}
 	var cmd tea.Cmd
 	m.prompt, cmd = m.prompt.Update(msg)
+	m.capPrompt()
 	return m, cmd
 }
 
@@ -284,7 +308,7 @@ func (m *Model) beginQuery() tea.Cmd {
 		m.reconnect = events.NewReconnect()
 		// State.LastSeq may lag the live stream while an activity is running.
 		// Keep newer already-rendered deltas through periodic snapshots too.
-		_ = m.reconnect.Buffer(m.recent)
+		_ = m.bufferEvents(m.recent)
 	}
 	m.queryID++
 	m.queryPending = true
@@ -292,6 +316,9 @@ func (m *Model) beginQuery() tea.Cmd {
 }
 
 func (m *Model) restartQuery() tea.Cmd {
+	// Overflow discarded data: the last-read offset is no longer replay-safe.
+	m.offset = 0
+	m.pending = nil
 	m.reconnect = events.NewReconnect()
 	m.queryPending = false
 	return m.beginQuery()
@@ -302,7 +329,8 @@ func (m *Model) switchSession(id string) tea.Cmd {
 		m.sessionOrder = append(m.sessionOrder, m.opts.SessionID)
 	}
 	if m.opts.SessionID != "" {
-		m.offsets[m.opts.SessionID] = m.offset
+		// Without caching the full pending replay, only the file origin is safe.
+		m.offsets[m.opts.SessionID] = 0
 	}
 	if len(m.sessionOrder) > maxSessions {
 		delete(m.offsets, m.sessionOrder[0])
@@ -316,6 +344,7 @@ func (m *Model) switchSession(id string) tea.Cmd {
 	m.lastSeq = 0
 	m.displaySeq = 0
 	m.recent = nil
+	m.pending = nil
 	m.newMessage = false
 	m.state = workflows.State{}
 	m.started = false

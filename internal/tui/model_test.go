@@ -106,7 +106,7 @@ func TestSendSteerStopContinueAndMultiline(t *testing.T) {
 	for _, tc := range []struct {
 		text, mode string
 		mod        tea.KeyMod
-	}{{"hello", "followup", 0}, {"redirect", "steer", tea.ModAlt}, {"/steer change course", "steer", 0}, {"/explore internal", "followup", 0}, {"/run go test ./...", "followup", 0}} {
+	}{{"hello", "followUp", 0}, {"redirect", "steer", tea.ModAlt}, {"/steer change course", "steer", 0}, {"/explore internal", "followUp", 0}, {"/run go test ./...", "followUp", 0}} {
 		msg := runCommand(t, m, tc.text, tc.mod)
 		m.Update(msg)
 		got := f.messages[len(f.messages)-1]
@@ -170,8 +170,8 @@ func TestSwitchIgnoresStaleInflightResults(t *testing.T) {
 		t.Fatal("stale result accepted")
 	}
 	m.switchSession("one")
-	if m.offset != 42 {
-		t.Fatal("per-session offset lost")
+	if m.offset != 0 {
+		t.Fatal("restored offset is not replay-safe")
 	}
 }
 func TestSnapshotAuthoritativeWithoutStream(t *testing.T) {
