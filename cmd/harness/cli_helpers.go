@@ -76,10 +76,39 @@ func terminalParent(e events.Event, id string) bool {
 	return e.Type == events.AgentSettled && e.WorkflowID == id && e.ParentWorkflowID == ""
 }
 func sessionSettled(s workflows.State) bool {
-	if s.RunCounter < 1 || s.PendingApproval != nil || len(s.Inbox) > 0 || len(s.ActiveTools) > 0 {
+	if s.RunCounter < 1 || s.PendingApproval != nil || len(s.ActiveTools) > 0 {
+		return false
+	}
+	// Failed/aborted runs explicitly pause retained inputs until new input or
+	// continue. An idle failed queue is held, not automatically runnable.
+	if len(s.Inbox) > 0 && !sessionFailed(s) {
 		return false
 	}
 	return s.Status == "idle" || s.Status == "settled" || s.Status == "failed"
+}
+func sessionFailed(s workflows.State) bool {
+	return s.LastRunFailure != nil || s.Status == "failed"
+}
+
+// Inbox entries can be steers consumed by the current run, not new runs.
+// Success needs at least baseline+1 and an empty, authoritative idle queue.
+func runSettled(s, baseline workflows.State) bool {
+	if !sessionSettled(s) || s.RunCounter < baseline.RunCounter {
+		return false
+	}
+	if sessionFailed(s) {
+		// A new run may fail while retaining our request. Also recognize failure
+		// of the run already active at Submit, without a counter increment.
+		// Do not report a preexisting idle failure while Submit is being drained.
+		changedFailure := (s.LastRunFailure == nil) != (baseline.LastRunFailure == nil)
+		if s.LastRunFailure != nil && baseline.LastRunFailure != nil {
+			changedFailure = *s.LastRunFailure != *baseline.LastRunFailure
+		}
+		baselineActive := baseline.Status == "working" || baseline.Status == "blocked"
+		return s.RunCounter > baseline.RunCounter || baselineActive || changedFailure ||
+			(s.Status == "failed" && !sessionFailed(baseline))
+	}
+	return s.RunCounter > baseline.RunCounter
 }
 func settlementError(s workflows.State) error {
 	if s.LastRunFailure != nil {

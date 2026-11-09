@@ -80,7 +80,6 @@ func runSession(ctx context.Context, b cliBackend, cfg config.Config, o runOptio
 		}
 		newSession = true
 	}
-	target := baseline.RunCounter + len(baseline.Inbox) + 1
 	requestID, err := cliID()
 	if err != nil {
 		return err
@@ -96,10 +95,12 @@ func runSession(ctx context.Context, b cliBackend, cfg config.Config, o runOptio
 		return err
 	}
 	var offset int64
+	streamOK := true
 	if st, e := os.Stat(path); e == nil {
 		offset = st.Size()
 	} else if !errors.Is(e, os.ErrNotExist) {
-		return e
+		fmt.Fprintf(diag, "warning: event stream unavailable; recovering via state query: %v\n", e)
+		streamOK = false
 	}
 	var actor string
 	if o.autoApprove {
@@ -123,7 +124,6 @@ func runSession(ctx context.Context, b cliBackend, cfg config.Config, o runOptio
 		return fmt.Errorf("unexpected submit disposition %q", receipt.Disposition)
 	}
 	encoder := json.NewEncoder(out)
-	streamOK := true
 	plainStreamed := false
 	lastDecision := ""
 	for {
@@ -131,7 +131,7 @@ func runSession(ctx context.Context, b cliBackend, cfg config.Config, o runOptio
 			return err
 		}
 		if streamOK {
-			batch, next, e := events.Tail(path, offset)
+			batch, next, e := tailCLIEvents(path, offset)
 			offset = next
 			for _, event := range batch {
 				// Terminal child events are display only, never completion signals. Even
@@ -162,14 +162,7 @@ func runSession(ctx context.Context, b cliBackend, cfg config.Config, o runOptio
 		if e != nil {
 			return fmt.Errorf("session query: %w", e)
 		}
-		pending := false
-		for _, msg := range state.Inbox {
-			if msg.RequestID == requestID {
-				pending = true
-				break
-			}
-		}
-		if !pending && state.RunCounter >= target && sessionSettled(state) {
+		if runSettled(state, baseline) {
 			if plainStreamed {
 				if _, err := fmt.Fprintln(out); err != nil {
 					return err

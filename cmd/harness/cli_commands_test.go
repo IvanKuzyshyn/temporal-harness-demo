@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -21,6 +22,8 @@ type cliFake struct {
 	submit      func()
 	queryErrors map[int]error
 	listError   error
+	disposition string
+	decideError error
 }
 
 func (f *cliFake) Query(context.Context, string) (workflows.State, error) {
@@ -40,11 +43,15 @@ func (f *cliFake) Submit(_ context.Context, _ string, in workflows.Input, m work
 	if f.submit != nil {
 		f.submit()
 	}
-	return workflows.MessageReceipt{Disposition: "started"}, nil
+	disposition := f.disposition
+	if disposition == "" {
+		disposition = "started"
+	}
+	return workflows.MessageReceipt{Disposition: disposition}, nil
 }
 func (f *cliFake) Decide(_ context.Context, _ string, d workflows.DecisionInput) error {
 	f.decisions = append(f.decisions, d)
-	return nil
+	return f.decideError
 }
 func (f *cliFake) Sessions(context.Context) ([]string, error) { return []string{"s"}, f.listError }
 
@@ -65,11 +72,15 @@ func TestRunHistoricalAndChildSettlement(t *testing.T) {
 		}
 	}
 	var out, diag bytes.Buffer
-	err := runSession(context.Background(), f, config.Config{DataDir: dir}, runOptions{session: "s", prompt: "hello", timeout: time.Second}, &out, &diag, time.Millisecond)
+	err := runSession(context.Background(), f, config.Config{DataDir: dir}, runOptions{session: "s", prompt: "hello", json: true, timeout: time.Second}, &out, &diag, time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.queries < 4 || out.String() != "authoritative\n" {
+	var final cliSummary
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &final); err != nil {
+		t.Fatalf("expected only final JSON, no historical/child terminal records: %q: %v", out.String(), err)
+	}
+	if f.queries != 4 || final.Type != "session_state" || final.Answer != "authoritative" || final.ID != "s" {
 		t.Fatalf("queries=%d output=%q", f.queries, out.String())
 	}
 	if len(f.decisions) != 0 || diag.Len() != 0 || f.submitted.RequestID == "" {
