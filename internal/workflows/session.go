@@ -5,11 +5,13 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
-// SessionWorkflow deliberately does not return after a run settles. Its Query
-// remains authoritative and new Updates can reconnect to the same execution.
+// SessionWorkflow stays queryable after settlement, until global cancellation.
 func SessionWorkflow(ctx workflow.Context, input Input) error {
 	if input.MaxTurns <= 0 {
 		input.MaxTurns = 12
+	}
+	if input.ContinueAfterTurns <= 0 {
+		input.ContinueAfterTurns = 100
 	}
 	if input.DataDir == "" {
 		input.DataDir = ".data"
@@ -24,7 +26,10 @@ func SessionWorkflow(ctx workflow.Context, input Input) error {
 		r.state.Status = "idle"
 		r.state.MaxTurns = input.MaxTurns
 	}
-	if err := workflow.SetQueryHandler(ctx, StateQuery, func() (State, error) { return r.state, nil }); err != nil {
+	r.cfg.Carry = nil // Never nest a previous carry into the next execution.
+	r.executionStartTurns = r.state.TotalTurns
+	r.pruneChildren()
+	if err := workflow.SetQueryHandler(ctx, StateQuery, func() (State, error) { return r.queryState(), nil }); err != nil {
 		return err
 	}
 	if err := r.registerInboxHandlers(ctx); err != nil {
@@ -43,22 +48,31 @@ func SessionWorkflow(ctx workflow.Context, input Input) error {
 		}
 		runCtx, cancel := workflow.WithCancel(ctx)
 		r.cancel = cancel
+		r.deferringSteers = false
+		r.steerCounter = 0
 		r.state.Status = "working"
 		r.state.RunCounter++
 		r.state.Turn = 0
 		r.state.Answer = ""
 		r.state.LastRunFailure = nil
-		r.state.AfterRunCount = 0
+		r.state.WroteFile = false
 		r.inputID = runInputID(r.state.RunCounter, msg.RequestID)
+		if !msg.Internal {
+			r.state.AfterRunCount = 0
+			r.state.OriginInputID = r.inputID
+		} else if msg.OriginInputID != "" {
+			r.state.OriginInputID = msg.OriginInputID
+		}
 		err = r.run(runCtx, msg)
+		r.deferringSteers = true
 		if runCtx.Err() != nil {
 			r.fail("aborted", runCtx.Err())
-		} else {
-			if err != nil && r.state.LastRunFailure == nil {
-				r.fail("interrupted", err)
-			}
-			// Canceled runs must not trigger after-run work.
-			if err = r.afterRun(runCtx); err != nil {
+		} else if err != nil && r.state.LastRunFailure == nil {
+			r.fail("interrupted", err)
+		}
+		// Failures never trigger afterRun. Late steers are now next-run user work.
+		if r.state.LastRunFailure == nil {
+			if err = r.afterRun(runCtx); err != nil && r.state.LastRunFailure == nil {
 				reason := "interrupted"
 				if runCtx.Err() != nil {
 					reason = "aborted"
@@ -66,17 +80,29 @@ func SessionWorkflow(ctx workflow.Context, input Input) error {
 				r.fail(reason, err)
 			}
 		}
+		if runCtx.Err() != nil {
+			r.fail("aborted", runCtx.Err())
+		}
 		cancel()
-		r.cancel = nil
+		// Keep cancel nonnil through settlement: Continue must reject this boundary.
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if r.state.LastRunFailure != nil {
+			r.state.QueuePaused = true
+			// Retained inputs become FIFO next-run work on resume, even if originally steers.
+			for i := range r.state.Inbox {
+				r.state.Inbox[i].WhenBusy = ""
+			}
+		}
+		r.pruneChildren()
 		r.settle(ctx)
+		r.cancel = nil
 	}
 }
 
 func (r *runtime) settle(ctx workflow.Context) {
-	status := "done" // Event wire status differs from authoritative State.Status.
+	status := "done"
 	r.state.Status = "settled"
 	if r.state.LastRunFailure != nil {
 		status = "failed"
@@ -90,12 +116,15 @@ func (r *runtime) settle(ctx workflow.Context) {
 		data.RunFailure = r.state.LastRunFailure.Reason
 		data.Reason = r.state.LastRunFailure.Reason
 	}
-	// Display failures must not make an otherwise durable session disappear.
 	if err := r.emit(ctx, events.AgentEnd, events.None, data); err != nil {
 		workflow.GetLogger(ctx).Warn("agent_end emission failed", "error", err)
 	}
-	if err := r.emit(ctx, events.AgentSettled, events.None, data); err != nil {
-		workflow.GetLogger(ctx).Warn("agent_settled emission failed", "error", err)
+	// A queued follow-up starts after agent_end. A failed queue is paused, not
+	// automatic work, and therefore does settle. Updates during agent_end count.
+	if !r.automaticWork() {
+		if err := r.emit(ctx, events.AgentSettled, events.None, data); err != nil {
+			workflow.GetLogger(ctx).Warn("agent_settled emission failed", "error", err)
+		}
 	}
 	r.state.Status = "idle"
 }

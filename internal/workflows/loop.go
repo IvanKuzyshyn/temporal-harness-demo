@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -14,8 +15,11 @@ func (r *runtime) run(ctx workflow.Context, msg MessageInput) error {
 	if err := r.emit(ctx, events.AgentStart, events.None, events.AgentData{InputID: r.inputID, Status: "working"}); err != nil {
 		return err
 	}
-	if err := r.appendMessages(ctx, r.inputID+"/user", llm.Message{Role: "user", Content: msg.Text}); err != nil {
-		return err
+	if !msg.ContextOnly {
+		if err := r.appendMessages(ctx, r.inputID+"/user", llm.Message{Role: "user", Content: msg.Text}); err != nil {
+			return err
+		}
+		r.state.HasUnansweredContext = true
 	}
 	if err := r.gatherContext(ctx); err != nil {
 		return err
@@ -48,11 +52,35 @@ func (r *runtime) run(ctx workflow.Context, msg MessageInput) error {
 			_ = r.emit(ctx, events.TurnEnd, events.None, events.TurnData{Turn: r.state.Turn})
 			return err
 		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		r.recordSeq(result.LastSeq)
 		if len(result.ToolCalls) == 0 {
+			// TurnEnd can yield to a steer Update, including on a final answer.
+			if err := r.emit(ctx, events.TurnEnd, events.None, events.TurnData{Turn: r.state.Turn}); err != nil {
+				return err
+			}
+			if r.hasSteers() {
+				continue
+			}
 			r.state.Answer = bounded(result.Summary, maxAnswerBytes)
-			return r.emit(ctx, events.TurnEnd, events.None, events.TurnData{Turn: r.state.Turn})
+			r.state.HasUnansweredContext = false
+			return nil
 		}
+		// Activities already enforce this, but guard the durable/public state
+		// at the workflow boundary as well (including restored/mocked results).
+		toolBytes := 0
+		for _, call := range result.ToolCalls {
+			toolBytes += len(call.ID) + len(call.Name) + len(call.Args)
+		}
+		_, encodeErr := json.Marshal(result.ToolCalls)
+		if encodeErr != nil || len(result.ToolCalls) > 32 || toolBytes > 64<<10 {
+			err := fmt.Errorf("model tool-call payload limit exceeded")
+			r.fail("model_error", err)
+			return err
+		}
+		r.pruneChildren()
 		r.state.ActiveTools = result.ToolCalls
 		batch, err := r.executeBatch(ctx, result.ToolCalls)
 		if err != nil {
@@ -67,6 +95,14 @@ func (r *runtime) run(ctx workflow.Context, msg MessageInput) error {
 			return err
 		}
 		r.state.ActiveTools = nil
+		r.pruneChildren()
+		for _, res := range batch.Results {
+			if res.Interrupted {
+				err := fmt.Errorf("tool %s interrupted", res.ToolCallID)
+				r.fail("interrupted", err)
+				return err
+			}
+		}
 		if err = r.emit(ctx, events.TurnEnd, events.None, events.TurnData{Turn: r.state.Turn}); err != nil {
 			return err
 		}

@@ -45,6 +45,17 @@ type MessageInput struct {
 	Text      string `json:"text"`
 	WhenBusy  string `json:"whenBusy"`
 	RequestID string `json:"requestId"`
+	// Internal metadata is for workflow-owned follow-ups only. Updates reject it.
+	Internal      bool   `json:"internal,omitempty"`
+	OriginInputID string `json:"originInputId,omitempty"`
+	ContextOnly   bool   `json:"contextOnly,omitempty"`
+}
+
+// RetainedReceipt is a bounded FIFO retry window, carried across Continue-As-New.
+type RetainedReceipt struct {
+	RequestID string         `json:"requestId"`
+	Digest    string         `json:"digest"`
+	Receipt   MessageReceipt `json:"receipt"`
 }
 type MessageReceipt struct {
 	Disposition string `json:"disposition"`
@@ -74,24 +85,29 @@ type ChildState struct {
 	SummaryRef string `json:"summaryRef,omitempty"`
 }
 type State struct {
-	Status          string           `json:"status"`
-	Turn            int              `json:"turn"`
-	MaxTurns        int              `json:"maxTurns"`
-	TranscriptRef   string           `json:"transcriptRef"`
-	Inbox           []MessageInput   `json:"inbox"`
-	PendingApproval *PendingApproval `json:"pendingApproval,omitempty"`
-	ActiveTools     []llm.ToolCall   `json:"activeTools"`
-	Children        []ChildState     `json:"children"`
-	LastRunFailure  *Failure         `json:"lastRunFailure,omitempty"`
-	LastSeq         uint64           `json:"lastSeq"`
-	Answer          string           `json:"answer,omitempty"` // Bounded authoritative final answer, not the transcript.
-	RunCounter      int              `json:"runCounter"`
-	ApprovalCounter int              `json:"approvalCounter"`
-	ChildCounter    int              `json:"childCounter"`
-	TotalTurns      int              `json:"totalTurns"`
-	AfterRunCount   int              `json:"afterRunCount"`
-	ContextGathered bool             `json:"contextGathered"`
-	WroteFile       bool             `json:"wroteFile"`
+	Status               string            `json:"status"`
+	Turn                 int               `json:"turn"`
+	MaxTurns             int               `json:"maxTurns"`
+	TranscriptRef        string            `json:"transcriptRef"`
+	Inbox                []MessageInput    `json:"inbox"`
+	PendingApproval      *PendingApproval  `json:"pendingApproval,omitempty"`
+	ActiveTools          []llm.ToolCall    `json:"activeTools"`
+	Children             []ChildState      `json:"children"`
+	LastRunFailure       *Failure          `json:"lastRunFailure,omitempty"`
+	LastSeq              uint64            `json:"lastSeq"`
+	Answer               string            `json:"answer,omitempty"` // Bounded authoritative final answer, not the transcript.
+	RunCounter           int               `json:"runCounter"`
+	ApprovalCounter      int               `json:"approvalCounter"`
+	ChildCounter         int               `json:"childCounter"`
+	TotalTurns           int               `json:"totalTurns"`
+	AfterRunCount        int               `json:"afterRunCount"`
+	ContextGathered      bool              `json:"contextGathered"`
+	WroteFile            bool              `json:"wroteFile"`
+	HasUnansweredContext bool              `json:"hasUnansweredContext"`
+	QueuePaused          bool              `json:"queuePaused"`
+	ContinueRequested    bool              `json:"continueRequested"`
+	OriginInputID        string            `json:"originInputId,omitempty"`
+	Receipts             []RetainedReceipt `json:"receipts,omitempty"`
 }
 type LLMInput struct {
 	// InputID is the stable logical run/input key, not an activity attempt ID.
