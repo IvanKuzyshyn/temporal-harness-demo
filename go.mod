@@ -3,7 +3,9 @@ module github.com/IvanKuzyshyn/temporal-harness-demo
 go 1.27.3
 
 require (
+	charm.land/bubbles/v2 v2.2.1 // indirect
 	charm.land/bubbletea/v2 v2.1.1 // indirect
+	charm.land/lipgloss/v2 v2.1.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
