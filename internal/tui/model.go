@@ -28,6 +28,8 @@ type Backend interface {
 // Options describes the initial session. Empty SessionID generates a new ID in
 // Init. Demo offers a banner; Autoplay explicitly submits the demo at startup.
 type Options struct {
+	// Context bounds the model lifetime; nil uses context.Background().
+	Context                   context.Context
 	SessionID, Model, DataDir string
 	Input                     workflows.Input
 	Demo, Autoplay            bool
@@ -52,6 +54,8 @@ type streamEntry struct{ label, text string }
 type Model struct {
 	backend                         Backend
 	opts                            Options
+	lifetime                        context.Context
+	close                           context.CancelFunc
 	ctx                             context.Context
 	cancel                          context.CancelFunc
 	epoch, queryID                  uint64
@@ -89,7 +93,12 @@ func New(backend Backend, opts Options) *Model {
 	}
 	opts.Input.Model = opts.Model
 	opts.Input.DataDir = opts.DataDir
-	ctx, cancel := context.WithCancel(context.Background())
+	parent := opts.Context
+	if parent == nil {
+		parent = context.Background()
+	}
+	lifetime, closeModel := context.WithCancel(parent)
+	ctx, cancel := context.WithCancel(lifetime)
 	p := textarea.New()
 	p.Prompt = "> "
 	p.Placeholder = "Message or /help"
@@ -103,10 +112,15 @@ func New(backend Backend, opts Options) *Model {
 	v := viewport.New()
 	v.SoftWrap = true
 	v.FillHeight = true
-	m := &Model{backend: backend, opts: opts, ctx: ctx, cancel: cancel, epoch: 1, reconnect: events.NewReconnect(), offsets: make(map[string]int64), prompt: p, viewport: v, spinner: spinner.New()}
+	m := &Model{backend: backend, opts: opts, lifetime: lifetime, close: closeModel, ctx: ctx, cancel: cancel, epoch: 1, reconnect: events.NewReconnect(), offsets: make(map[string]int64), prompt: p, viewport: v, spinner: spinner.New()}
 	m.resize(80, 24)
 	return m
 }
+
+// Close cancels all backend-operation contexts, including future sessions.
+// It is idempotent and safe to call concurrently with Update. It does not wait
+// for commands to return; backends must honor context cancellation.
+func (m *Model) Close() { m.close() }
 
 func (m *Model) Init() tea.Cmd {
 	if m.opts.SessionID == "" {
@@ -127,7 +141,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.Keystroke() {
 		case "ctrl+c":
 			m.quitting = true
-			m.cancel()
+			m.Close()
 			return m, tea.Quit
 		case "esc":
 			return m, m.actionCmd("stop")
@@ -337,7 +351,7 @@ func (m *Model) switchSession(id string) tea.Cmd {
 		m.sessionOrder = m.sessionOrder[1:]
 	}
 	m.cancel()
-	m.ctx, m.cancel = context.WithCancel(context.Background())
+	m.ctx, m.cancel = context.WithCancel(m.lifetime)
 	m.epoch++
 	m.opts.SessionID = id
 	m.offset = m.offsets[id]

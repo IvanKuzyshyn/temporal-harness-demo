@@ -69,9 +69,19 @@ func interactive(args []string, out io.Writer, demo bool) error {
 		return err
 	}
 	defer client.Close()
-	var backend tui.Backend = client
-	modelUI := tui.New(backend, tui.Options{SessionID: *session, Model: cfg.Model, DataDir: cfg.DataDir, Input: sessionInput(cfg), Demo: demo, Autoplay: *autoplay})
-	_, err = tea.NewProgram(modelUI, tea.WithContext(ctx), tea.WithOutput(out)).Run()
+	return runInteractiveUI(ctx, client, tui.Options{SessionID: *session, Model: cfg.Model, DataDir: cfg.DataDir, Input: sessionInput(cfg), Demo: demo, Autoplay: *autoplay}, func(modelUI *tui.Model) error {
+		_, err := tea.NewProgram(modelUI, tea.WithContext(ctx), tea.WithOutput(out)).Run()
+		return err
+	})
+}
+
+// Keep disposal inside the UI lifetime so it precedes the caller's client.Close
+// on every Run exit, including initialization errors and external cancellation.
+func runInteractiveUI(ctx context.Context, backend tui.Backend, opts tui.Options, run func(*tui.Model) error) error {
+	opts.Context = ctx
+	modelUI := tui.New(backend, opts)
+	defer modelUI.Close()
+	err := run(modelUI)
 	if errors.Is(err, tea.ErrProgramKilled) && ctx.Err() != nil {
 		return nil
 	}
