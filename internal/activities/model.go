@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -63,6 +64,14 @@ func (a *Activities) LLMStream(ctx context.Context, in workflows.LLMInput) (resu
 	}
 	var seq uint64
 	var displayMu sync.Mutex
+	var stop func()
+	defer func() {
+		// Partial Sync/Close runs first; heartbeat coverage includes finalization.
+		if stop != nil {
+			stop()
+		}
+		result.LastSeq = seq
+	}()
 	emit := func(typ events.Type, data any) error {
 		displayMu.Lock()
 		defer displayMu.Unlock()
@@ -92,14 +101,18 @@ func (a *Activities) LLMStream(ctx context.Context, in workflows.LLMInput) (resu
 			}
 		}()
 		var tokens atomic.Int64
-		stop := startStreamHeartbeats(ctx, func() {
+		stop = startStreamHeartbeats(ctx, func() {
 			progress := streamProgress{Tokens: int(tokens.Load()), PartialRef: partialRef}
 			if activity.IsActivity(ctx) {
 				activity.RecordHeartbeat(ctx, progress)
 			}
-			_ = emit(events.Heartbeat, progress)
+			// Never wait for a delta's display mutex on the heartbeat path.
+			// TryAppend also drops mirrors while the stream's flock is held.
+			if displayMu.TryLock() {
+				_ = a.emitDisplay(ctx, workflows.EmitInput{Scope: in.Scope, DataDir: in.DataDir, Type: events.Heartbeat, Pattern: events.LongRunning, Data: progress}, &seq)
+				displayMu.Unlock()
+			}
 		})
-		defer stop()
 		res, err := a.Model.Chat(ctx, llm.Request{Model: in.Model, Messages: messages, Tools: in.Tools, Scenario: in.Scenario, Turn: in.Turn}, func(d llm.Delta) error {
 			if _, err := partial.WriteString(d.Text); err != nil {
 				return err
@@ -121,7 +134,6 @@ func (a *Activities) LLMStream(ctx context.Context, in workflows.LLMInput) (resu
 		if err = ctx.Err(); err != nil {
 			return zero, err
 		}
-		stop()
 		if err := partial.Sync(); err != nil {
 			return zero, err
 		}
@@ -129,7 +141,12 @@ func (a *Activities) LLMStream(ctx context.Context, in workflows.LLMInput) (resu
 			return zero, fmt.Errorf("model tool-call limit exceeded")
 		}
 		totalArgs := 0
+		ids := make(map[string]bool, len(res.Message.ToolCalls))
 		for _, call := range res.Message.ToolCalls {
+			if strings.TrimSpace(call.ID) == "" || ids[call.ID] {
+				return zero, fmt.Errorf("model tool-call IDs must be nonempty and unique")
+			}
+			ids[call.ID] = true
 			totalArgs += len(call.Args) + len(call.ID) + len(call.Name)
 		}
 		if totalArgs > 64<<10 {
@@ -156,5 +173,5 @@ func (a *Activities) LLMStream(ctx context.Context, in workflows.LLMInput) (resu
 	if err != nil {
 		return zero, err
 	}
-	return workflows.LLMResult{MessageRef: ref, Summary: bounded(saved.Message.Content, MaxSummaryBytes), ToolCalls: saved.Message.ToolCalls, Tokens: saved.Tokens, LastSeq: seq}, nil
+	return workflows.LLMResult{MessageRef: ref, Summary: bounded(saved.Message.Content, MaxSummaryBytes), ToolCalls: saved.Message.ToolCalls, Tokens: saved.Tokens}, nil
 }
