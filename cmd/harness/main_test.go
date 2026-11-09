@@ -18,14 +18,34 @@ func TestHelpListsCommands(t *testing.T) {
 	}
 }
 func TestUnknownCommandFails(t *testing.T) {
-	if execute([]string{"unknown"}, &bytes.Buffer{}) == nil {
+	err := execute([]string{"not-a-command"}, &bytes.Buffer{})
+	if err == nil {
 		t.Fatal("unknown command accepted")
+	}
+	for _, fragment := range []string{"unknown command", "not-a-command"} {
+		if !strings.Contains(err.Error(), fragment) {
+			t.Errorf("error %q missing %q", err, fragment)
+		}
+	}
+	if strings.Contains(err.Error(), "not implemented") {
+		t.Errorf("unknown command treated as scaffold command: %v", err)
 	}
 }
 func TestUnimplementedCommandsFailHonestly(t *testing.T) {
 	for _, name := range []string{"demo", "tui", "worker", "run", "doctor", "session", "approve", "deny", "wait"} {
-		if execute([]string{name}, &bytes.Buffer{}) == nil {
-			t.Errorf("%s silently succeeded", name)
-		}
+		t.Run(name, func(t *testing.T) {
+			err := execute([]string{name}, &bytes.Buffer{})
+			if err == nil {
+				t.Fatal("command silently succeeded")
+			}
+			for _, fragment := range []string{name + ":", "not implemented", "scaffold"} {
+				if !strings.Contains(err.Error(), fragment) {
+					t.Errorf("error %q missing %q", err, fragment)
+				}
+			}
+			if strings.Contains(err.Error(), "unknown command") {
+				t.Errorf("recognized command rejected as unknown: %v", err)
+			}
+		})
 	}
 }
