@@ -61,7 +61,7 @@ func (m *Manager) Check(ctx context.Context, fix bool, progress io.Writer) error
 	var failures []error
 	temporalErr := m.temporalHealth(ctx)
 	if temporalErr != nil && fix {
-		if _, err := exec.LookPath("temporal"); err != nil {
+		if bin, err := config.ResolveTool(ctx, "temporal"); err != nil {
 			temporalErr = fmt.Errorf("install pinned Temporal CLI with mise install: %w", err)
 		} else if err := localAddress(m.cfg.TemporalAddress); err != nil {
 			temporalErr = err
@@ -70,7 +70,7 @@ func (m *Manager) Check(ctx context.Context, fix bool, progress io.Writer) error
 		} else {
 			host, port, _ := net.SplitHostPort(m.cfg.TemporalAddress)
 			args := []string{"server", "start-dev", "--db-filename", filepath.Join(m.cfg.DataDir, "temporal.db"), "--ui-port", "8233", "--log-level", "warn", "--ip", host, "--port", port}
-			temporalErr = m.start(ctx, "temporal", "temporal", args, nil)
+			temporalErr = m.start(ctx, "temporal", bin, args, nil)
 			if temporalErr == nil {
 				temporalErr = waitReady(ctx, func() error { return m.temporalHealth(ctx) })
 			}
@@ -81,7 +81,11 @@ func (m *Manager) Check(ctx context.Context, fix bool, progress io.Writer) error
 		failures = append(failures, temporalErr)
 	} else if fix {
 		c, cancel := context.WithTimeout(ctx, 10*time.Second)
-		out, err := exec.CommandContext(c, "temporal", "operator", "search-attribute", "create", "--address", m.cfg.TemporalAddress, "--name", "HarnessStatus", "--type", "Keyword").CombinedOutput()
+		bin, err := config.ResolveTool(c, "temporal")
+		var out []byte
+		if err == nil {
+			out, err = exec.CommandContext(c, bin, "operator", "search-attribute", "create", "--address", m.cfg.TemporalAddress, "--name", "HarnessStatus", "--type", "Keyword").CombinedOutput()
+		}
 		cancel()
 		if err != nil {
 			fmt.Fprintf(progress, "[WARN] HarnessStatus registration (best effort; may already exist): %v %s\n", err, strings.TrimSpace(string(out)))
@@ -99,12 +103,12 @@ func (m *Manager) Check(ctx context.Context, fix bool, progress io.Writer) error
 	if err != nil && fix {
 		// Never replace a reachable but unhealthy service or start against a remote host.
 		if isConnectionFailure(err) {
-			if _, e := exec.LookPath("ollama"); e != nil {
-				err = fmt.Errorf("Ollama missing: %s", ollamaInstall())
+			if bin, e := config.ResolveTool(ctx, "ollama"); e != nil {
+				err = fmt.Errorf("Ollama missing: %s: %w", ollamaInstall(), e)
 			} else if e := localAddress(strings.TrimPrefix(strings.TrimPrefix(m.baseURL(), "http://"), "https://")); e != nil {
 				err = e
 			} else {
-				err = m.start(ctx, "ollama", "ollama", []string{"serve"}, []string{"OLLAMA_HOST=" + m.cfg.OllamaHost})
+				err = m.start(ctx, "ollama", bin, []string{"serve"}, []string{"OLLAMA_HOST=" + m.cfg.OllamaHost})
 				if err == nil {
 					err = waitReady(ctx, func() error { var e error; present, e = m.modelPresent(ctx); return e })
 				}
@@ -175,7 +179,11 @@ func isConnectionFailure(err error) bool {
 func (m *Manager) temporalHealth(ctx context.Context) error {
 	c, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(c, "temporal", "operator", "cluster", "health", "--address", m.cfg.TemporalAddress).CombinedOutput()
+	bin, err := config.ResolveTool(c, "temporal")
+	if err != nil {
+		return fmt.Errorf("Temporal health: %w", err)
+	}
+	out, err := exec.CommandContext(c, bin, "operator", "cluster", "health", "--address", m.cfg.TemporalAddress).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("Temporal health: %w: %s", err, strings.TrimSpace(string(out)))
 	}
