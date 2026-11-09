@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -117,6 +119,55 @@ func TestRepairAndTail(t *testing.T) {
 		t.Fatal(e, err)
 	}
 }
+func TestCaseDistinctStreams(t *testing.T) {
+	s := NewStore(t.TempDir())
+	ids := []string{"Session-A", "session-a"}
+	paths := make([]string, len(ids))
+	for i, id := range ids {
+		var err error
+		paths[i], err = s.Path(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if strings.EqualFold(filepath.Base(paths[0]), filepath.Base(paths[1])) {
+		t.Fatal("distinct IDs have case-fold-equivalent filenames")
+	}
+	// Exercise actual storage too, including case-insensitive macOS volumes.
+	for _, id := range ids {
+		for n := 1; n <= 2; n++ {
+			e, err := s.Append(Scope{StreamID: id, WorkflowID: id}, Heartbeat, None, nil)
+			if err != nil || e.Seq != uint64(n) {
+				t.Fatalf("%s append %d: %+v, %v", id, n, e, err)
+			}
+		}
+	}
+	for i, path := range paths {
+		es, _, err := Tail(path, 0)
+		if err != nil || len(es) != 2 {
+			t.Fatalf("%s: %d records, %v", path, len(es), err)
+		}
+		for _, e := range es {
+			if e.WorkflowID != ids[i] {
+				t.Fatalf("cross-stream event: %+v", e)
+			}
+		}
+	}
+}
+
+func TestHexPathLength(t *testing.T) {
+	s := NewStore(t.TempDir())
+	for _, id := range []string{strings.Repeat("a", 124), strings.Repeat("é", 62)} {
+		path, err := s.Path(id)
+		if err != nil || len(filepath.Base(path)) != 254 {
+			t.Fatalf("maximum ID: %q, %v", path, err)
+		}
+		if _, err := s.Path(id + "a"); err == nil {
+			t.Fatal("accepted ID exceeding 124 bytes")
+		}
+	}
+}
+
 func TestInvalidAndPaths(t *testing.T) {
 	s := NewStore(t.TempDir())
 	for _, id := range []string{"", "../escape", "/absolute", "a/../b", "a\\b", "a\x00b"} {

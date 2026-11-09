@@ -2,12 +2,12 @@ package events
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,7 +27,9 @@ type Store struct{ dataDir string }
 
 func NewStore(dataDir string) *Store { return &Store{dataDir: dataDir} }
 
-// Path encodes slashes rather than creating workflow-controlled directories.
+// Path hex-encodes UTF-8 bytes to keep IDs distinct even on case-insensitive
+// filesystems, without creating workflow-controlled directories.
+// IDs are limited to 124 bytes (248 hex characters plus the .jsonl suffix).
 func (s *Store) Path(streamID string) (string, error) {
 	if streamID == "" || !utf8.ValidString(streamID) || strings.Contains(streamID, "\\") {
 		return "", fmt.Errorf("invalid stream ID")
@@ -42,7 +44,7 @@ func (s *Store) Path(streamID string) (string, error) {
 			return "", fmt.Errorf("invalid stream ID component")
 		}
 	}
-	name := url.PathEscape(streamID) + ".jsonl"
+	name := hex.EncodeToString([]byte(streamID)) + ".jsonl"
 	if len(name) > 255 {
 		return "", fmt.Errorf("encoded stream ID too long")
 	}
