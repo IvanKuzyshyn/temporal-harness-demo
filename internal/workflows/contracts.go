@@ -90,6 +90,7 @@ type State struct {
 	TotalTurns      int              `json:"totalTurns"`
 	AfterRunCount   int              `json:"afterRunCount"`
 	ContextGathered bool             `json:"contextGathered"`
+	WroteFile       bool             `json:"wroteFile"`
 }
 type LLMInput struct {
 	// InputID is the stable logical run/input key, not an activity attempt ID.
@@ -130,6 +131,8 @@ type AppendResult struct {
 	LastSeq       uint64
 }
 type ToolInput struct {
+	// InputID scopes model tool-call IDs to one logical run across activity retries.
+	InputID     string
 	Scope       events.Scope
 	DataDir     string
 	Workdir     string
