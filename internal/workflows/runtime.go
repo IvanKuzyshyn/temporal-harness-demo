@@ -120,8 +120,8 @@ func (r *runtime) queryState() State {
 	}
 	if s.PendingApproval != nil {
 		p := *s.PendingApproval
-		p.RequestID = bounded(p.RequestID, 256)
-		p.ActionHash = bounded(p.ActionHash, 256)
+		// Bindings are control data for Decide, not display text. Producer IDs
+		// are bounded by Temporal workflow IDs plus a counter; hashes are SHA-256.
 		p.Preview = bounded(p.Preview, 8192)
 		if b, err := json.Marshal(p.Call); err != nil || len(b) > 64<<10 {
 			p.Call.Args = nil
@@ -130,8 +130,6 @@ func (r *runtime) queryState() State {
 		p.Call.Name = bounded(p.Call.Name, 256)
 		if p.Decision != nil {
 			d := *p.Decision
-			d.RequestID = bounded(d.RequestID, 256)
-			d.ActionHash = bounded(d.ActionHash, 256)
 			d.User = bounded(d.User, 256)
 			d.Reason = bounded(d.Reason, 8192)
 			p.Decision = &d
@@ -165,7 +163,8 @@ func (r *runtime) queryState() State {
 		if s.PendingApproval != nil {
 			s.PendingApproval.Call.Args = nil
 			s.PendingApproval.Preview = ""
-			s.PendingApproval.Decision = nil
+			// Keep the recorded decision (including rejection) so clients cannot
+			// mistake a gate awaiting display for an undecided approval.
 		}
 	}
 	return s
