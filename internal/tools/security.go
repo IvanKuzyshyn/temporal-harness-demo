@@ -189,13 +189,54 @@ func decodeArgs(raw json.RawMessage, dst any, required ...string) error {
 	return d.Decode(dst)
 }
 
+// exactCallKeys prevents encoding/json's case-insensitive struct matching from
+// giving key order semantic meaning that canonical hashing would erase.
+// Unknown tool names retain structural-only hashing; ValidateCall rejects them.
+func exactCallKeys(name string, m map[string]any) error {
+	var allowed []string
+	switch name {
+	case "read_file", "list_dir":
+		allowed = []string{"path"}
+	case "write_file":
+		allowed = []string{"path", "content"}
+	case "grep":
+		allowed = []string{"path", "pattern"}
+	case "tree":
+		allowed = []string{"path", "depth"}
+	case "delegate":
+		allowed = []string{"path", "question"}
+	case "run_command":
+		allowed = []string{"cmd", "args", "workdir"}
+	default:
+		return nil
+	}
+	for key := range m {
+		found := false
+		for _, field := range allowed {
+			if key == field {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("unknown argument %q for %s", key, name)
+		}
+	}
+	return nil
+}
+
 // ActionHash excludes the call ID, hashing the name and recursively key-sorted JSON.
+// Known tools require exact schema keys; full value/path validation remains the
+// responsibility of ValidateCall.
 func ActionHash(call llm.ToolCall) (string, error) {
 	if call.Name == "" {
 		return "", errors.New("empty tool name")
 	}
 	m, err := canonicalObject(call.Args)
 	if err != nil {
+		return "", err
+	}
+	if err := exactCallKeys(call.Name, m); err != nil {
 		return "", err
 	}
 	b, err := json.Marshal(struct {
@@ -283,6 +324,13 @@ func ValidateCommand(root string, args CommandArgs) error {
 }
 
 func ValidateCall(root string, call llm.ToolCall) error {
+	m, err := canonicalObject(call.Args)
+	if err != nil {
+		return err
+	}
+	if err := exactCallKeys(call.Name, m); err != nil {
+		return err
+	}
 	switch call.Name {
 	case "read_file", "list_dir", "write_file":
 		var a FileArgs
