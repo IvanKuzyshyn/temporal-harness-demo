@@ -42,6 +42,6 @@ func (a *Activities) EmitEvent(ctx context.Context, in workflows.EmitInput) (uin
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
-	event, err := events.NewStore(in.DataDir).Append(in.Scope, in.Type, in.Pattern, in.Data)
+	event, err := events.NewStore(in.DataDir).TryAppend(in.Scope, in.Type, in.Pattern, in.Data)
 	return event.Seq, err
 }
