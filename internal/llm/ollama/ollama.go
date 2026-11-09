@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 
@@ -27,6 +28,36 @@ func (e *InvalidRequestError) Unwrap() error { return e.Err }
 
 type Model struct{ client *api.Client }
 
+// The pinned client's scanner checks HTTP status only when it reads a line.
+// Preserve empty-body failures as scanner errors without altering nonempty
+// responses or the upstream client's error decoding.
+type statusTransport struct{ base http.RoundTripper }
+
+func (t statusTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	res, err := t.base.RoundTrip(req)
+	if err == nil && res.StatusCode >= http.StatusBadRequest {
+		res.Body = &statusBody{ReadCloser: res.Body, status: api.StatusError{
+			StatusCode: res.StatusCode, Status: res.Status,
+		}}
+	}
+	return res, err
+}
+
+type statusBody struct {
+	io.ReadCloser
+	status api.StatusError
+	read   bool
+}
+
+func (b *statusBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	b.read = b.read || n > 0
+	if err == io.EOF && !b.read {
+		err = b.status
+	}
+	return n, err
+}
+
 // New requires an explicit HTTP(S) base URL; it does not read cloud credentials
 // or select a provider from the environment.
 func New(host string) (*Model, error) {
@@ -37,7 +68,13 @@ func New(host string) (*Model, error) {
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
 		return nil, fmt.Errorf("invalid Ollama host %q: expected HTTP(S) URL", host)
 	}
-	return &Model{client: api.NewClient(u, http.DefaultClient)}, nil
+	client := *http.DefaultClient
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	client.Transport = statusTransport{base: transport}
+	return &Model{client: api.NewClient(u, &client)}, nil
 }
 
 func (m *Model) Chat(ctx context.Context, req llm.Request, emit func(llm.Delta) error) (llm.Response, error) {
@@ -66,10 +103,12 @@ func (m *Model) Chat(ctx context.Context, req llm.Request, emit func(llm.Delta) 
 	}
 	res := llm.Response{Message: llm.Message{Role: "assistant"}}
 	var callbackErr error
+	var done bool
 	err := m.client.Chat(ctx, wire, func(chunk api.ChatResponse) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		done = chunk.Done
 		res.Message.Content += chunk.Message.Content
 		for _, call := range chunk.Message.ToolCalls {
 			args, err := json.Marshal(call.Function.Arguments)
@@ -116,6 +155,9 @@ func (m *Model) Chat(ctx context.Context, req llm.Request, emit func(llm.Delta) 
 	}
 	if err := ctx.Err(); err != nil {
 		return llm.Response{}, err
+	}
+	if !done {
+		return llm.Response{}, fmt.Errorf("ollama stream ended without completion: %w", io.ErrUnexpectedEOF)
 	}
 	return res, nil
 }

@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
+	"github.com/ollama/ollama/api"
 )
 
 func TestWire(t *testing.T) {
@@ -105,6 +108,44 @@ func TestStreamFailures(t *testing.T) {
 		})
 	}
 }
+func TestIncompleteStreams(t *testing.T) {
+	for _, body := range []string{"", `{"message":{"content":"partial","tool_calls":[{"function":{"name":"read_file","arguments":{"path":"calc/calc.go"}}}]}}` + "\n"} {
+		t.Run(body, func(t *testing.T) {
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprint(w, body)
+			}))
+			defer s.Close()
+			m, _ := New(s.URL)
+			res, err := m.Chat(context.Background(), llm.Request{}, nil)
+			if !errors.Is(err, io.ErrUnexpectedEOF) || !reflect.DeepEqual(res, llm.Response{}) {
+				t.Fatalf("response=%+v error=%v", res, err)
+			}
+		})
+	}
+}
+
+func TestEmptyHTTPFailures(t *testing.T) {
+	for _, code := range []int{400, 404, 422, 500} {
+		t.Run(fmt.Sprint(code), func(t *testing.T) {
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(code)
+			}))
+			defer s.Close()
+			m, _ := New(s.URL)
+			res, err := m.Chat(context.Background(), llm.Request{}, nil)
+			var status api.StatusError
+			var missing *ModelNotFoundError
+			var invalid *InvalidRequestError
+			if !errors.As(err, &status) || status.StatusCode != code ||
+				errors.As(err, &missing) != (code == 404) ||
+				errors.As(err, &invalid) != (code == 400 || code == 422) ||
+				!reflect.DeepEqual(res, llm.Response{}) {
+				t.Fatalf("response=%+v error=%T %v", res, err, err)
+			}
+		})
+	}
+}
+
 func TestValidation(t *testing.T) {
 	for _, host := range []string{"", ":bad", "ftp://localhost", "http://"} {
 		if _, err := New(host); err == nil {
