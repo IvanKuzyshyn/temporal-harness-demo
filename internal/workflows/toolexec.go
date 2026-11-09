@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -127,7 +128,11 @@ func (r *runtime) executeBatch(ctx workflow.Context, calls []llm.ToolCall) (Batc
 func (r *runtime) removeActiveTool(id string) {
 	for i, call := range r.state.ActiveTools {
 		if call.ID == id {
-			r.state.ActiveTools = append(r.state.ActiveTools[:i], r.state.ActiveTools[i+1:]...)
+			// ActiveTools aliases the parent's model calls and execution batch.
+			// Never shift that storage: allowed[i] must stay bound to calls[i].
+			remaining := make([]llm.ToolCall, 0, len(r.state.ActiveTools)-1)
+			remaining = append(remaining, r.state.ActiveTools[:i]...)
+			r.state.ActiveTools = append(remaining, r.state.ActiveTools[i+1:]...)
 			return
 		}
 	}
@@ -154,6 +159,14 @@ func (r *runtime) executeAllowed(ctx workflow.Context, in ToolInput, replay tool
 			_ = workflow.ExecuteActivity(activityContext(recoveryCtx), RecoverCommandActivity, in).Get(recoveryCtx, &command)
 			cancel()
 			command.Interrupted = true
+		} else if err != nil {
+			// Failed activities do not deliver their normal result. RunCommand
+			// preserves its tail/log reference in application-error details instead.
+			var appErr *temporal.ApplicationError
+			var details CommandResult
+			if errors.As(err, &appErr) && appErr.HasDetails() && appErr.Details(&details) == nil {
+				command = details
+			}
 		}
 		result.Output = command.Tail
 		result.Interrupted = command.Interrupted
