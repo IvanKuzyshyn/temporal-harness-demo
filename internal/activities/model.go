@@ -39,28 +39,28 @@ func (a *Activities) LLMStream(ctx context.Context, in workflows.LLMInput) (work
 		}
 		messages = append(messages, entries[i].Message)
 	}
-	emit := func(typ events.Type, data events.MessageData) (uint64, error) {
-		return a.EmitEvent(ctx, workflows.EmitInput{Scope: in.Scope, DataDir: in.DataDir, Type: typ, Pattern: events.None, Data: data})
+	var seq uint64
+	emit := func(typ events.Type, data events.MessageData) error {
+		return a.emitDisplay(ctx, workflows.EmitInput{Scope: in.Scope, DataDir: in.DataDir, Type: typ, Pattern: events.None, Data: data}, &seq)
 	}
 	ref := in.TranscriptRef + "#" + id
 	if saved == nil {
 		if a.Model == nil {
 			return zero, fmt.Errorf("model is not configured")
 		}
-		if _, err = emit(events.MessageStart, events.MessageData{Role: "assistant", MessageRef: ref}); err != nil {
+		if err = emit(events.MessageStart, events.MessageData{Role: "assistant", MessageRef: ref}); err != nil {
 			return zero, err
 		}
 		res, err := a.Model.Chat(ctx, llm.Request{Model: in.Model, Messages: messages, Tools: in.Tools, Scenario: in.Scenario, Turn: in.Turn}, func(d llm.Delta) error {
 			// Chunk unusually large provider deltas to stay below event record bounds.
 			for len(d.Text) > MaxSummaryBytes {
 				part := bounded(d.Text, MaxSummaryBytes)
-				if _, err := emit(events.MessageUpdate, events.MessageData{Role: "assistant", MessageRef: ref, Delta: part}); err != nil {
+				if err := emit(events.MessageUpdate, events.MessageData{Role: "assistant", MessageRef: ref, Delta: part}); err != nil {
 					return err
 				}
 				d.Text = d.Text[len(part):]
 			}
-			_, err := emit(events.MessageUpdate, events.MessageData{Role: "assistant", MessageRef: ref, Delta: d.Text, Tokens: d.Tokens})
-			return err
+			return emit(events.MessageUpdate, events.MessageData{Role: "assistant", MessageRef: ref, Delta: d.Text, Tokens: d.Tokens})
 		})
 		if err != nil {
 			return zero, err
@@ -95,7 +95,7 @@ func (a *Activities) LLMStream(ctx context.Context, in workflows.LLMInput) (work
 			return zero, err
 		}
 	}
-	seq, err := emit(events.MessageEnd, events.MessageData{Role: "assistant", MessageRef: ref, Tokens: saved.Tokens})
+	err = emit(events.MessageEnd, events.MessageData{Role: "assistant", MessageRef: ref, Tokens: saved.Tokens})
 	if err != nil {
 		return zero, err
 	}

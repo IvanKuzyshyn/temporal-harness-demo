@@ -1,7 +1,10 @@
 package workflows_test
 
 import (
+	"context"
 	"encoding/json"
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
+	"os"
 	"testing"
 	"time"
 
@@ -12,6 +15,37 @@ import (
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/testsuite"
 )
+
+type corruptingModel struct{ path string }
+
+func (m corruptingModel) Chat(context.Context, llm.Request, func(llm.Delta) error) (llm.Response, error) {
+	if err := os.WriteFile(m.path, []byte("invalid complete record\n"), 0600); err != nil {
+		return llm.Response{}, err
+	}
+	return llm.Response{Message: llm.Message{Content: "durable answer"}}, nil
+}
+
+func TestSessionSurvivesModelCompletionDisplayFailure(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	env.SetStartWorkflowOptions(client.StartWorkflowOptions{ID: "broken-display"})
+	dir := t.TempDir()
+	path, _ := events.NewStore(dir).Path("broken-display")
+	env.RegisterActivity(&activities.Activities{Model: corruptingModel{path: path}})
+	env.RegisterDelayedCallback(func() { env.UpdateWorkflowNoRejection(w.MessageUpdate, "input", t, w.MessageInput{Text: "hello"}) }, 0)
+	env.RegisterDelayedCallback(func() {
+		s := query(t, env)
+		if s.Status != "idle" || s.Answer != "durable answer" || s.LastRunFailure != nil {
+			t.Errorf("state=%+v", s)
+		}
+		messages, err := activities.ReadTranscript(dir, s.TranscriptRef)
+		if err != nil || len(messages) != 2 {
+			t.Errorf("messages=%v err=%v", messages, err)
+		}
+		env.CancelWorkflow()
+	}, time.Minute)
+	env.ExecuteWorkflow(w.SessionWorkflow, w.Input{DataDir: dir})
+}
 
 func TestSessionWithRealMockActivities(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite

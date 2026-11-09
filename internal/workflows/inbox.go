@@ -1,11 +1,16 @@
 package workflows
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"go.temporal.io/sdk/workflow"
 )
+
+// Leave at least 1 MiB of the normal 2 MiB payload limit for the rest of
+// State and converter metadata. Count actual JSON bytes, including escaping.
+const maxInboxJSONBytes = 1 << 20
 
 func runInputID(run int, requestID string) string {
 	return fmt.Sprintf("run/%d/input/%s", run, requestID)
@@ -34,6 +39,21 @@ func (r *runtime) validateMessage(msg MessageInput) error {
 	}
 	if len(r.state.Inbox) >= 64 {
 		return fmt.Errorf("inbox is full")
+	}
+	size := 2 // array delimiters
+	for _, queued := range r.state.Inbox {
+		b, err := json.Marshal(queued)
+		if err != nil {
+			return err
+		}
+		size += len(b) + 1 // comma before the candidate or next entry
+	}
+	b, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	if size+len(b) > maxInboxJSONBytes {
+		return fmt.Errorf("inbox serialized size limit exceeded")
 	}
 	return nil
 }

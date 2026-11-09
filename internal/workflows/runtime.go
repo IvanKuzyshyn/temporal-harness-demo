@@ -43,8 +43,18 @@ func activityContext(ctx workflow.Context) workflow.Context {
 func (r *runtime) emit(ctx workflow.Context, typ events.Type, pattern events.Pattern, data any) error {
 	var seq uint64
 	err := workflow.ExecuteActivity(activityContext(ctx), EmitActivity, EmitInput{Scope: r.scope, DataDir: r.cfg.DataDir, Type: typ, Pattern: pattern, Data: data}).Get(ctx, &seq)
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if temporal.IsCanceledError(err) {
+			return err
+		}
+		workflow.GetLogger(ctx).Warn("Display emission failed", "type", typ, "error", err)
+		return nil
+	}
 	r.recordSeq(seq)
-	return err
+	return nil
 }
 func (r *runtime) recordSeq(seq uint64) {
 	if seq > r.state.LastSeq {

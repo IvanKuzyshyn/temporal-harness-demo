@@ -200,5 +200,22 @@ func (a *Activities) AppendTranscript(ctx context.Context, in workflows.AppendIn
 		}
 		return nil
 	})
-	return workflows.AppendResult{TranscriptRef: ref}, err
+	if err != nil {
+		return workflows.AppendResult{}, err
+	}
+	result := workflows.AppendResult{TranscriptRef: ref}
+	// Lifecycle events may repeat on retry, but durable entries never do. Do not
+	// publish anything until the entire batch has committed successfully.
+	for i, m := range in.Messages {
+		if m.Role != "user" && m.Role != "tool" {
+			continue
+		}
+		id := entryKey(in.Scope, fmt.Sprintf("%s/%d/%s", key, i, m.Role))
+		for _, typ := range []events.Type{events.MessageStart, events.MessageEnd} {
+			if err := a.emitDisplay(ctx, workflows.EmitInput{Scope: in.Scope, DataDir: in.DataDir, Type: typ, Pattern: events.None, Data: events.MessageData{Role: m.Role, MessageRef: ref + "#" + id}}, &result.LastSeq); err != nil {
+				return result, err
+			}
+		}
+	}
+	return result, nil
 }

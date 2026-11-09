@@ -3,6 +3,7 @@ package activities
 
 import (
 	"context"
+	"log/slog"
 	"unicode/utf8"
 
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/events"
@@ -23,6 +24,18 @@ func bounded(s string, n int) string {
 		s = s[:len(s)-1]
 	}
 	return s
+}
+
+// emitDisplay preserves only successful sequence numbers. Stream failures never
+// affect durable work; cancellation still propagates to the caller.
+func (a *Activities) emitDisplay(ctx context.Context, in workflows.EmitInput, last *uint64) error {
+	seq, err := a.EmitEvent(ctx, in)
+	if err != nil {
+		slog.WarnContext(ctx, "Display emission failed", "type", in.Type, "error", err)
+	} else if seq > *last {
+		*last = seq
+	}
+	return ctx.Err()
 }
 
 func (a *Activities) EmitEvent(ctx context.Context, in workflows.EmitInput) (uint64, error) {
