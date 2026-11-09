@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/converter"
+	"go.temporal.io/sdk/interceptor"
+	"go.temporal.io/sdk/worker"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -88,6 +90,22 @@ func TestCommandProcessLifecycle(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			in := commandInput(t, "go", "test", "./...")
 			in.HangTimeout = 8 * time.Second
+			// Keep the display lock held through activity return, recovery and
+			// descendant checks; releasing it must not enable cleanup.
+			store := events.NewStore(in.DataDir)
+			if _, err := store.Append(in.Scope, events.Heartbeat, events.LongRunning, nil); err != nil {
+				t.Fatal(err)
+			}
+			stream, _ := store.Path(in.Scope.StreamID)
+			locked, err := os.OpenFile(stream, os.O_RDWR, 0600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer locked.Close()
+			if err := syscall.Flock(int(locked.Fd()), syscall.LOCK_EX); err != nil {
+				t.Fatal(err)
+			}
+			defer syscall.Flock(int(locked.Fd()), syscall.LOCK_UN)
 			os.WriteFile(filepath.Join(in.Workdir, "go.mod"), []byte("module commandfixture\n\ngo 1.24\n"), 0600)
 			body := `package fixture
 import("testing";"os";"os/exec";"fmt";"time")
@@ -99,7 +117,14 @@ func TestChild(t *testing.T){
  _=time.Second
  t.Fatal("intentional nonzero")
 }`
-			action := ""
+			// go test buffers child stdout. Also write directly to the command
+			// log to guarantee a live display attempt before silence/cancellation.
+			_, logPath, err := commandLog(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body = strings.Replace(body, " MODE", fmt.Sprintf(" f,_:=os.OpenFile(%q,os.O_WRONLY|os.O_APPEND,0600);f.WriteString(\"live output\\n\");f.Close()\n MODE", logPath), 1)
+			action := "time.Sleep(3*time.Second)"
 			if mode != "normal" {
 				action = "time.Sleep(60*time.Second)"
 			}
@@ -113,7 +138,8 @@ func TestChild(t *testing.T){
 			}
 			var suite testsuite.WorkflowTestSuite
 			env := suite.NewTestActivityEnvironment()
-			var beats atomic.Int32
+			var requests, beats atomic.Int32
+			env.SetWorkerOptions(worker.Options{Interceptors: []interceptor.WorkerInterceptor{&commandHeartbeatObserver{requests: &requests}}})
 			env.SetOnActivityHeartbeatListener(func(_ *activity.Info, v converter.EncodedValues) { beats.Add(1) })
 			run := func(ctx context.Context, input workflows.ToolInput) (workflows.CommandResult, error) {
 				if mode == "cancel" {
@@ -150,7 +176,7 @@ func TestChild(t *testing.T){
 			} else if e == nil {
 				t.Fatal("expected interruption")
 			}
-			if mode == "hung" && beats.Load() == 0 {
+			if mode != "cancel" && (requests.Load() < 2 || beats.Load() == 0) {
 				t.Fatal("missing heartbeat")
 			}
 			b, e := os.ReadFile(filepath.Join(in.Workdir, "child.pid"))

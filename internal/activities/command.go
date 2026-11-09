@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -157,7 +158,11 @@ func commandExec(ctx context.Context, root, wd string, args tools.CommandArgs) (
 	return cmd, nil
 }
 
-func (a *Activities) RunCommand(ctx context.Context, in workflows.ToolInput) (r workflows.CommandResult, err error) {
+func (a *Activities) RunCommand(ctx context.Context, in workflows.ToolInput) (workflows.CommandResult, error) {
+	return a.runCommand(ctx, in, a.emitDisplay)
+}
+
+func (a *Activities) runCommand(ctx context.Context, in workflows.ToolInput, emit func(context.Context, workflows.EmitInput, *uint64) error) (r workflows.CommandResult, err error) {
 	r.ExitCode = -1
 	fail := func(e error) (workflows.CommandResult, error) {
 		return r, temporal.NewNonRetryableApplicationError(e.Error(), "command", e, r)
@@ -223,8 +228,6 @@ func (a *Activities) RunCommand(ctx context.Context, in workflows.ToolInput) (r 
 	kill := func() { _ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	heartbeat := time.NewTicker(2 * time.Second)
-	defer heartbeat.Stop()
 	poll := time.NewTicker(50 * time.Millisecond)
 	defer poll.Stop()
 	timeout := in.HangTimeout
@@ -232,6 +235,30 @@ func (a *Activities) RunCommand(ctx context.Context, in workflows.ToolInput) (r 
 		timeout = 120 * time.Second
 	}
 	last := time.Now()
+	type progress struct {
+		PID          int       `json:"pid"`
+		LogOffset    int64     `json:"logOffset"`
+		LastOutputAt time.Time `json:"lastOutputAt"`
+	}
+	var snapshot atomic.Value
+	snapshot.Store(progress{cmd.Process.Pid, 0, last})
+	// No display or filesystem work on the heartbeat path. Join on every return,
+	// after final display, Sync and tail reads, so finalization remains covered.
+	stop, stopped := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			activity.RecordHeartbeat(ctx, snapshot.Load().(progress))
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	defer func() { close(stop); <-stopped }()
 	var offset, observedSize int64
 	var seq uint64
 	// Read a bounded chunk per tick; a noisy process cannot block cancellation.
@@ -243,6 +270,7 @@ func (a *Activities) RunCommand(ctx context.Context, in workflows.ToolInput) (r 
 		if st.Size() > observedSize {
 			last = time.Now()
 			observedSize = st.Size()
+			snapshot.Store(progress{cmd.Process.Pid, observedSize, last})
 		}
 		if st.Size() > offset {
 			rf, e := os.Open(path)
@@ -255,7 +283,7 @@ func (a *Activities) RunCommand(ctx context.Context, in workflows.ToolInput) (r 
 			if n > 0 {
 				old := offset
 				offset += int64(n)
-				_ = a.emitDisplay(ctx, workflows.EmitInput{Scope: in.Scope, DataDir: in.DataDir, Type: events.ToolUpdate, Pattern: events.LongRunning, Data: events.ToolData{ToolCallID: in.Call.ID, Chunk: strings.ToValidUTF8(string(b[:n]), "?"), Offset: old}}, &seq)
+				_ = emit(ctx, workflows.EmitInput{Scope: in.Scope, DataDir: in.DataDir, Type: events.ToolUpdate, Pattern: events.LongRunning, Data: events.ToolData{ToolCallID: in.Call.ID, Chunk: strings.ToValidUTF8(string(b[:n]), "?"), Offset: old}}, &seq)
 			}
 		}
 	}
@@ -263,6 +291,12 @@ func (a *Activities) RunCommand(ctx context.Context, in workflows.ToolInput) (r 
 	var hung bool
 loop:
 	for {
+		// Prefer reaping an already finished command over more display work.
+		select {
+		case waitErr = <-done:
+			break loop
+		default:
+		}
 		select {
 		case waitErr = <-done:
 			break loop
@@ -271,17 +305,6 @@ loop:
 			kill()
 			waitErr = <-done
 			break loop
-		case <-heartbeat.C:
-			st, _ := f.Stat()
-			var size int64
-			if st != nil {
-				size = st.Size()
-			}
-			activity.RecordHeartbeat(ctx, struct {
-				PID          int       `json:"pid"`
-				LogOffset    int64     `json:"logOffset"`
-				LastOutputAt time.Time `json:"lastOutputAt"`
-			}{cmd.Process.Pid, size, last})
 		case <-poll.C:
 			output()
 			if time.Since(last) >= timeout {
@@ -294,15 +317,11 @@ loop:
 	}
 	// Even a normally exiting leader may leave children holding output open.
 	kill()
-	// Flush the final snapshot as bounded display chunks, never in the result.
-	if st, statErr := f.Stat(); statErr == nil {
-		for offset < st.Size() && ctx.Err() == nil {
-			before := offset
-			output()
-			if offset == before {
-				break
-			}
-		}
+	// Display is lossy: spend at most one 4096-byte chunk on the final backlog.
+	// The authoritative full log and bounded result tail remain available even
+	// when a noisy command far outpaces display. Never spawn a detached emitter.
+	if ctx.Err() == nil {
+		output()
 	}
 	if e = f.Sync(); e != nil {
 		return fail(e)
