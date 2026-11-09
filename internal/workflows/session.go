@@ -51,12 +51,20 @@ func SessionWorkflow(ctx workflow.Context, input Input) error {
 		r.state.AfterRunCount = 0
 		r.inputID = runInputID(r.state.RunCounter, msg.RequestID)
 		err = r.run(runCtx, msg)
-		if err != nil && r.state.LastRunFailure == nil {
-			r.fail("interrupted", err)
-		}
-		// afterRun is part of working, not an already-settled background operation.
-		if err = r.afterRun(runCtx); err != nil {
-			r.fail("interrupted", err)
+		if runCtx.Err() != nil {
+			r.fail("aborted", runCtx.Err())
+		} else {
+			if err != nil && r.state.LastRunFailure == nil {
+				r.fail("interrupted", err)
+			}
+			// Canceled runs must not trigger after-run work.
+			if err = r.afterRun(runCtx); err != nil {
+				reason := "interrupted"
+				if runCtx.Err() != nil {
+					reason = "aborted"
+				}
+				r.fail(reason, err)
+			}
 		}
 		cancel()
 		r.cancel = nil

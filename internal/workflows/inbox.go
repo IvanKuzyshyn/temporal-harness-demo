@@ -82,7 +82,10 @@ func (r *runtime) nextInput(ctx workflow.Context) (MessageInput, error) {
 func (r *runtime) drainSteers(workflow.Context) error   { return nil }
 func (r *runtime) continueAsNew(workflow.Context) error { return nil }
 func (r *runtime) stop(workflow.Context) error {
-	return fmt.Errorf("stop is not supported in the basic session")
+	if r.cancel != nil {
+		r.cancel()
+	}
+	return nil
 }
 func (r *runtime) resume(workflow.Context) error {
 	return fmt.Errorf("continue is not supported in the basic session")

@@ -2,7 +2,14 @@ package activities
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
+
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm/ollama"
+	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/temporal"
 
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/events"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
@@ -11,8 +18,23 @@ import (
 
 // LLMStream streams display events, but persists the complete response before
 // returning. Retries reuse that response rather than appending another assistant
-// message. Heartbeats/partial-resume are deliberately a later implementation.
-func (a *Activities) LLMStream(ctx context.Context, in workflows.LLMInput) (workflows.LLMResult, error) {
+// message. Failed attempts restart the turn, never resume partial model state.
+func (a *Activities) LLMStream(ctx context.Context, in workflows.LLMInput) (result workflows.LLMResult, retErr error) {
+	defer func() {
+		if retErr == nil {
+			return
+		}
+		var missing *ollama.ModelNotFoundError
+		var invalid *ollama.InvalidRequestError
+		switch {
+		case errors.Is(retErr, context.Canceled) || errors.Is(ctx.Err(), context.Canceled):
+			retErr = temporal.NewCanceledError()
+		case errors.As(retErr, &missing):
+			retErr = temporal.NewNonRetryableApplicationError(retErr.Error(), "ModelNotFound", retErr)
+		case errors.As(retErr, &invalid):
+			retErr = temporal.NewNonRetryableApplicationError(retErr.Error(), "InvalidRequest", retErr)
+		}
+	}()
 	var zero workflows.LLMResult
 	if in.TranscriptRef != TranscriptRef(in.Scope.WorkflowID) {
 		return zero, fmt.Errorf("transcript identity mismatch")
@@ -40,8 +62,15 @@ func (a *Activities) LLMStream(ctx context.Context, in workflows.LLMInput) (work
 		messages = append(messages, entries[i].Message)
 	}
 	var seq uint64
-	emit := func(typ events.Type, data events.MessageData) error {
-		return a.emitDisplay(ctx, workflows.EmitInput{Scope: in.Scope, DataDir: in.DataDir, Type: typ, Pattern: events.None, Data: data}, &seq)
+	var displayMu sync.Mutex
+	emit := func(typ events.Type, data any) error {
+		displayMu.Lock()
+		defer displayMu.Unlock()
+		pattern := events.None
+		if typ == events.MessageUpdate || typ == events.Heartbeat {
+			pattern = events.LongRunning
+		}
+		return a.emitDisplay(ctx, workflows.EmitInput{Scope: in.Scope, DataDir: in.DataDir, Type: typ, Pattern: pattern, Data: data}, &seq)
 	}
 	ref := in.TranscriptRef + "#" + id
 	if saved == nil {
@@ -51,7 +80,31 @@ func (a *Activities) LLMStream(ctx context.Context, in workflows.LLMInput) (work
 		if err = emit(events.MessageStart, events.MessageData{Role: "assistant", MessageRef: ref}); err != nil {
 			return zero, err
 		}
+		partial, partialRef, err := openPartial(ctx, in, id)
+		if err != nil {
+			return zero, err
+		}
+		defer func() {
+			syncErr := partial.Sync()
+			closeErr := partial.Close()
+			if retErr == nil {
+				retErr = errors.Join(syncErr, closeErr)
+			}
+		}()
+		var tokens atomic.Int64
+		stop := startStreamHeartbeats(ctx, func() {
+			progress := streamProgress{Tokens: int(tokens.Load()), PartialRef: partialRef}
+			if activity.IsActivity(ctx) {
+				activity.RecordHeartbeat(ctx, progress)
+			}
+			_ = emit(events.Heartbeat, progress)
+		})
+		defer stop()
 		res, err := a.Model.Chat(ctx, llm.Request{Model: in.Model, Messages: messages, Tools: in.Tools, Scenario: in.Scenario, Turn: in.Turn}, func(d llm.Delta) error {
+			if _, err := partial.WriteString(d.Text); err != nil {
+				return err
+			}
+			tokens.Add(int64(d.Tokens))
 			// Chunk unusually large provider deltas to stay below event record bounds.
 			for len(d.Text) > MaxSummaryBytes {
 				part := bounded(d.Text, MaxSummaryBytes)
@@ -66,6 +119,10 @@ func (a *Activities) LLMStream(ctx context.Context, in workflows.LLMInput) (work
 			return zero, err
 		}
 		if err = ctx.Err(); err != nil {
+			return zero, err
+		}
+		stop()
+		if err := partial.Sync(); err != nil {
 			return zero, err
 		}
 		if len(res.Message.ToolCalls) > 32 {
