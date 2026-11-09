@@ -55,7 +55,7 @@ func (r *runtime) executeBatch(ctx workflow.Context, calls []llm.ToolCall) (Batc
 	ids := make([]string, len(calls))
 	var registry tools.LocalRegistry
 	input := func(call llm.ToolCall) ToolInput {
-		return ToolInput{InputID: r.inputID, Scope: r.scope, DataDir: r.cfg.DataDir, Workdir: r.cfg.Workdir, Call: call}
+		return ToolInput{InputID: r.inputID, Scope: r.scope, DataDir: r.cfg.DataDir, Workdir: r.cfg.Workdir, Call: call, HangTimeout: r.cfg.HangTimeout}
 	}
 	for i, call := range calls {
 		ids[i] = call.ID

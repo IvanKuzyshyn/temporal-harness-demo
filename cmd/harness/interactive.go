@@ -20,7 +20,7 @@ import (
 )
 
 func sessionInput(cfg config.Config) workflows.Input {
-	return workflows.Input{Model: cfg.Model, Workdir: cfg.Workdir, DataDir: cfg.DataDir, MaxTurns: cfg.MaxTurns, ApprovalTimeout: cfg.ApprovalTimeout, ContinueAfterTurns: 100}
+	return workflows.Input{Model: cfg.Model, Workdir: cfg.Workdir, DataDir: cfg.DataDir, MaxTurns: cfg.MaxTurns, ApprovalTimeout: cfg.ApprovalTimeout, HangTimeout: cfg.HangTimeout, ContinueAfterTurns: 100}
 }
 
 func interactive(args []string, out io.Writer, demo bool) error {
