@@ -18,6 +18,35 @@ import (
 	"go.temporal.io/sdk/workflow"
 )
 
+func TestDelegateCancellationWaitsForCleanup(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+	cleaned := false
+	env.RegisterActivityWithOptions(func(_ context.Context, in EmitInput) (uint64, error) {
+		if in.Type == events.ChildCompleted {
+			require.True(t, cleaned)
+		}
+		return 1, nil
+	}, activity.RegisterOptions{Name: EmitActivity})
+	env.RegisterWorkflowWithOptions(func(ctx workflow.Context, _ ExplorerInput) (ExplorerResult, error) {
+		_ = workflow.Sleep(ctx, time.Hour)
+		cleanup, _ := workflow.NewDisconnectedContext(ctx)
+		require.NoError(t, workflow.Sleep(cleanup, time.Second))
+		cleaned = true
+		return ExplorerResult{}, ctx.Err()
+	}, workflow.RegisterOptions{Name: ExplorerName})
+	env.ExecuteWorkflow(func(ctx workflow.Context) error {
+		r := runtime{scope: events.Scope{WorkflowID: "parent", StreamID: "parent"}}
+		childCtx, cancel := workflow.WithCancel(ctx)
+		workflow.Go(ctx, func(ctx workflow.Context) { _ = workflow.Sleep(ctx, time.Second); cancel() })
+		res := r.delegate(childCtx, llm.ToolCall{ID: "delegate", Args: json.RawMessage(`{"question":"inspect"}`)})
+		require.True(t, res.IsError)
+		require.True(t, cleaned)
+		return nil
+	})
+	require.NoError(t, env.GetWorkflowError())
+}
+
 func TestDelegate(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(fmt.Sprint(fail), func(t *testing.T) {
@@ -66,13 +95,21 @@ func TestDelegate(t *testing.T) {
 			require.Len(t, emitted, 2)
 			require.Equal(t, events.ChildStarted, emitted[0].Type)
 			require.Equal(t, events.ChildCompleted, emitted[1].Type)
+			require.Equal(t, "parent/explore-5", result.Details["childWorkflowId"])
 			for _, e := range emitted {
 				require.Equal(t, "parent", e.Scope.WorkflowID)
 				require.Equal(t, "stream", e.Scope.StreamID)
 				require.Equal(t, "parent-run", e.Scope.RunID)
 				raw, err := json.Marshal(e.Data)
 				require.NoError(t, err)
-				require.Contains(t, string(raw), `"childWorkflowId":"parent/explore-5"`)
+				var data events.ChildData
+				require.NoError(t, json.Unmarshal(raw, &data))
+				require.Equal(t, "parent/explore-5", data.ChildWorkflowID)
+				require.Equal(t, "question", data.Task)
+				if e.Type == events.ChildCompleted && !fail {
+					require.Equal(t, "child-ref", data.SummaryRef)
+				}
+				require.NotContains(t, string(raw), `"details"`)
 			}
 		})
 	}
@@ -93,7 +130,11 @@ func TestExplorerIsolation(t *testing.T) {
 				appended = append(appended, in.Messages...)
 				return AppendResult{TranscriptRef: "child-transcript"}, nil
 			}, activity.RegisterOptions{Name: TranscriptActivity})
-			env.RegisterActivityWithOptions(func(context.Context, EmitInput) (uint64, error) { return 1, nil }, activity.RegisterOptions{Name: EmitActivity})
+			var emitted []EmitInput
+			env.RegisterActivityWithOptions(func(_ context.Context, in EmitInput) (uint64, error) {
+				emitted = append(emitted, in)
+				return 1, nil
+			}, activity.RegisterOptions{Name: EmitActivity})
 			env.RegisterActivityWithOptions(func(_ context.Context, in ToolInput) (tools.Result, error) {
 				executions = append(executions, in.Call.Name)
 				if in.Call.ID == "initial-context" {
@@ -109,6 +150,7 @@ func TestExplorerIsolation(t *testing.T) {
 				require.Equal(t, LLMQueue, info.TaskQueue)
 				require.Equal(t, 15*time.Second, info.HeartbeatTimeout)
 				require.Equal(t, "child-transcript", in.TranscriptRef)
+				require.Equal(t, "explorer", in.Scenario)
 				require.Len(t, in.Tools, 4)
 				for _, d := range in.Tools {
 					require.Contains(t, []string{"read_file", "list_dir", "grep", "tree"}, d.Name)
@@ -132,7 +174,29 @@ func TestExplorerIsolation(t *testing.T) {
 			if strings.HasPrefix(mode, "default-") {
 				steps, tokens = 0, 0
 			}
-			env.ExecuteWorkflow(ExplorerWorkflow, ExplorerInput{ParentScope: events.Scope{StreamID: "parent", WorkflowID: "parent"}, Task: "inspect", Path: "../unsafe", MaxSteps: steps, TokenBudget: tokens})
+			env.ExecuteWorkflow(ExplorerWorkflow, ExplorerInput{ParentScope: events.Scope{StreamID: "parent", WorkflowID: "parent"}, Config: Input{Scenario: "demo"}, Task: "inspect", Path: "../unsafe", MaxSteps: steps, TokenBudget: tokens})
+			require.Equal(t, events.AgentStart, emitted[0].Type)
+			require.Equal(t, events.AgentEnd, emitted[len(emitted)-2].Type)
+			require.Equal(t, events.AgentSettled, emitted[len(emitted)-1].Type)
+			var settled events.AgentData
+			raw, err := json.Marshal(emitted[len(emitted)-1].Data)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(raw, &settled))
+			wantStatus := "failed"
+			if mode == "success" {
+				wantStatus = "done"
+			}
+			require.Equal(t, wantStatus, settled.Status)
+			counts := map[events.Type]int{}
+			for _, e := range emitted {
+				require.Equal(t, "parent", e.Scope.ParentWorkflowID)
+				require.Equal(t, "parent", e.Scope.StreamID)
+				require.NotEqual(t, "parent", e.Scope.WorkflowID)
+				counts[e.Type]++
+			}
+			require.Equal(t, counts[events.TurnStart], counts[events.TurnEnd])
+			require.Equal(t, counts[events.ToolStart], counts[events.ToolEnd])
+			require.Positive(t, counts[events.ToolStart])
 			if mode != "success" {
 				require.Error(t, env.GetWorkflowError())
 				if mode == "default-steps" {
