@@ -9,17 +9,19 @@ import (
 	"time"
 
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/activities"
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/events"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/tools"
 	w "github.com/IvanKuzyshyn/temporal-harness-demo/internal/workflows"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 )
 
 // Cross the real activity/filesystem boundary as well as spying on dispatch.
 // Neither invalid decisions nor denial/timeout/stop may touch the target file.
 func TestApprovalSessionRealWrite(t *testing.T) {
-	for _, mode := range []string{"approve", "deny", "timeout", "stop"} {
+	for _, mode := range []string{"approve", "deny", "timeout", "stop", "stop during resolution"} {
 		t.Run(mode, func(t *testing.T) {
 			var suite testsuite.WorkflowTestSuite
 			env := suite.NewTestWorkflowEnvironment()
@@ -39,7 +41,14 @@ func TestApprovalSessionRealWrite(t *testing.T) {
 				dispatched.Add(1)
 				return a.ExecuteTool(ctx, in)
 			}, activity.RegisterOptions{Name: w.ToolActivity})
-			env.RegisterActivityWithOptions(func(context.Context, w.EmitInput) (uint64, error) { return 0, nil }, activity.RegisterOptions{Name: w.EmitActivity})
+			resolutionToken := make(chan []byte, 1)
+			env.RegisterActivityWithOptions(func(ctx context.Context, in w.EmitInput) (uint64, error) {
+				if mode == "stop during resolution" && in.Type == events.ApprovalResolved {
+					resolutionToken <- activity.GetInfo(ctx).TaskToken
+					return 0, activity.ErrResultPending
+				}
+				return 0, nil
+			}, activity.RegisterOptions{Name: w.EmitActivity})
 			env.RegisterActivityWithOptions(func(context.Context, w.EmitInput) error { return nil }, activity.RegisterOptions{Name: w.NotifyActivity})
 			env.RegisterActivityWithOptions(func(context.Context, w.GatherInput) (w.AppendResult, error) {
 				return w.AppendResult{TranscriptRef: "ref"}, nil
@@ -84,19 +93,45 @@ func TestApprovalSessionRealWrite(t *testing.T) {
 					t.Fatal("missing pending request")
 				}
 				switch mode {
-				case "approve", "deny":
+				case "approve", "deny", "stop during resolution":
 					env.UpdateWorkflow(w.DecideUpdate, "valid", &testsuite.TestUpdateCallback{OnReject: func(err error) { t.Error(err) }, OnComplete: func(_ any, err error) {
 						if err != nil {
 							t.Error(err)
-						} else if mode == "approve" {
+						} else if mode != "deny" {
 							authorized.Store(true)
 						}
-					}}, w.DecisionInput{RequestID: p.RequestID, ActionHash: p.ActionHash, Approved: mode == "approve", User: "alice", Reason: "unsafe"})
+					}}, w.DecisionInput{RequestID: p.RequestID, ActionHash: p.ActionHash, Approved: mode != "deny", User: "alice", Reason: "unsafe"})
 				case "stop":
 					env.UpdateWorkflowNoRejection(w.StopUpdate, "stop", t)
 				}
 			}, 2*time.Second)
+			if mode == "stop during resolution" {
+				var token []byte
+				env.RegisterDelayedCallback(func() {
+					select {
+					case token = <-resolutionToken:
+					default:
+						t.Fatal("resolution activity was not reached")
+					}
+					p := query(t, env).PendingApproval
+					if p == nil || p.Decision == nil || !p.Decision.Approved {
+						t.Fatal("not resolving an approved request")
+					}
+					assertFile("original")
+					if dispatched.Load() != 0 {
+						t.Fatal("write dispatched before resolution completed")
+					}
+					env.UpdateWorkflowNoRejection(w.StopUpdate, "stop-resolving", t)
+				}, 3*time.Second)
+				env.RegisterDelayedCallback(func() {
+					if err := env.CompleteActivity(token, uint64(1), nil); err != nil {
+						t.Fatal(err)
+					}
+				}, 4*time.Second)
+			}
+			finalCallbackReached := false
 			env.RegisterDelayedCallback(func() {
+				finalCallbackReached = true
 				want := "original"
 				count := int32(0)
 				if mode == "approve" {
@@ -113,6 +148,12 @@ func TestApprovalSessionRealWrite(t *testing.T) {
 				env.CancelWorkflow()
 			}, 5*time.Second)
 			env.ExecuteWorkflow(w.SessionWorkflow, w.Input{Workdir: root, DataDir: t.TempDir(), ApprovalTimeout: 3 * time.Second})
+			if !finalCallbackReached {
+				t.Fatal("workflow ended before final file/dispatch/cleanup assertions")
+			}
+			if !env.IsWorkflowCompleted() || !temporal.IsCanceledError(env.GetWorkflowError()) {
+				t.Fatalf("expected final callback cancellation, completed=%v error=%v", env.IsWorkflowCompleted(), env.GetWorkflowError())
+			}
 		})
 	}
 }

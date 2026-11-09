@@ -223,6 +223,11 @@ func (m *Model) View() tea.View {
 	if m.width == 0 || m.height == 0 {
 		return tea.NewView("")
 	}
+	if m.state.PendingApproval != nil {
+		view := tea.NewView(m.approvalScreen())
+		view.AltScreen = true
+		return view
+	}
 	title := lipgloss.NewStyle().Bold(true)
 	panel := "Transcript (Tab: patterns)"
 	if m.showPatterns {
@@ -261,9 +266,6 @@ func (m *Model) View() tea.View {
 		banner = "Harness · /demo: guided demo · /help · Esc stop · Ctrl+C quit"
 	}
 	transcriptPane := m.viewport.View()
-	if m.state.PendingApproval != nil {
-		transcriptPane = lipgloss.NewStyle().Width(m.width).Height(m.viewport.Height()).MaxWidth(m.width).MaxHeight(m.viewport.Height()).Render(m.approvalOverlay())
-	}
 	content := strings.Join([]string{
 		title.Render(banner),
 		title.Render(panel), transcriptPane,

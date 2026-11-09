@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -9,12 +10,18 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/workflows"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type approvalModal struct {
 	requestID, hash, reason string
 	denying, pending, sent  bool
+	target                  string
+	argsTruncated           bool
+	previewTruncated        bool
+	offset                  int // Wrapped display rows, independent of the transcript.
 }
 type approvalMsg struct {
 	epoch           uint64
@@ -33,6 +40,27 @@ func (m *Model) syncApproval(p *workflows.PendingApproval) {
 	if p.Decision != nil {
 		m.approval.sent = true
 	}
+	// Parse the raw JSON before displayState bounds it: large write content
+	// commonly precedes the path, and truncated JSON cannot be decoded.
+	var args struct {
+		Path    string `json:"path"`
+		Cmd     string `json:"cmd"`
+		Workdir string `json:"workdir"`
+	}
+	target := "Target: see arguments"
+	if err := json.Unmarshal(p.Call.Args, &args); err != nil {
+		target = "Target: unavailable (invalid JSON)"
+	} else if args.Path != "" {
+		target = "Path: " + args.Path
+	} else if args.Cmd != "" {
+		target = "Command: " + args.Cmd
+		if args.Workdir != "" {
+			target += " · in " + args.Workdir
+		}
+	}
+	m.approval.target = approvalBound(singleLine(target), 512, "target")
+	m.approval.argsTruncated = len(safeText(string(p.Call.Args))) > maxText
+	m.approval.previewTruncated = len(safeText(p.Preview)) > maxText
 }
 
 func (m *Model) approvalView() string {
@@ -48,27 +76,115 @@ func (m *Model) approvalView() string {
 	return singleLine("Approval pending: " + p.RequestID + " · " + p.Call.Name + " · " + countdown)
 }
 
-// Overlay occupies the transcript region, not extra layout rows: footer and
-// Esc/Ctrl+C remain visible even with a multiline preview on small terminals.
+func approvalBound(s string, limit int, label string) string {
+	if len(s) > limit {
+		return bounded(s, limit) + "\n[" + label + " truncated]"
+	}
+	return s
+}
+
+// Only bounded, sanitized display data belongs in the pager. Decision identity
+// remains the raw snapshot captured by syncApproval, never this rendered text.
 func (m *Model) approvalOverlay() string {
 	p := m.state.PendingApproval
 	if p == nil {
 		return ""
 	}
-	controls := "a approve · d deny · Esc stop · Ctrl+C quit"
+	preview := safeText(p.Preview)
+	if preview == "" {
+		preview = "(no preview supplied)"
+	}
+	if m.approval.previewTruncated {
+		preview += "\n[preview truncated]"
+	}
+	args := safeText(string(p.Call.Args))
+	if m.approval.argsTruncated {
+		args += "\n[arguments truncated]"
+	}
+	body := "Action: " + singleLine(p.Call.Name) + "\n" + m.approval.target +
+		"\nRequest: " + singleLine(p.RequestID) + "\nPreview:\n" + preview + "\nArguments:\n" + args
 	if m.approval.denying {
-		controls = "Denial reason (Enter sends): " + m.approval.reason
+		body += "\nDenial reason:\n" + m.approval.reason
+	}
+	return body
+}
+
+// Use the whole screen while blocked, rather than the often tiny transcript
+// pane. Six fixed rows reserve status, navigation, decisions and stop/quit.
+func (m *Model) approvalPage() (lines []string, start, height int) {
+	lines = strings.Split(ansi.Hardwrap(m.approvalOverlay(), max(1, m.width), true), "\n")
+	height = max(1, m.height-6)
+	start = max(0, min(m.approval.offset, max(0, len(lines)-height)))
+	return
+}
+
+func (m *Model) approvalScreen() string {
+	lines, start, height := m.approvalPage()
+	end := min(len(lines), start+height)
+	body := append([]string(nil), lines[start:end]...)
+	for len(body) < height {
+		body = append(body, "")
+	}
+	remaining := "expired"
+	if d := time.Until(m.state.PendingApproval.ExpiresAt); d > 0 {
+		remaining = fmt.Sprintf("%ds remaining", int(d.Seconds())+1)
+	}
+	controls, status := "a approve · d deny", singleLine(m.notice)
+	if m.approval.denying {
+		controls = "Denial reason: Enter sends"
+		// Keep the input tail visible; the full bounded reason is also paged.
+		status = "> " + ansi.TruncateLeft(m.approval.reason, max(0, lipgloss.Width(m.approval.reason)-(m.width-4)), "…")
+		if strings.TrimSpace(m.approval.reason) == "" {
+			controls = "Denial reason required; Enter sends"
+		}
+		if m.notice != "" && m.notice != "A denial reason is required" {
+			status = singleLine(m.notice)
+		}
 	}
 	if m.approval.pending {
-		controls = "Recording decision… · Esc stop · Ctrl+C quit"
+		controls = "Recording decision…"
+	} else if m.approval.sent {
+		controls = "Decision recorded; waiting for state"
 	}
-	if m.approval.sent {
-		controls = "Decision recorded; waiting for authoritative state"
+	position := fmt.Sprintf("Lines %d-%d/%d", start+1, end, len(lines))
+	if start > 0 {
+		position += " · more above"
 	}
-	return m.approvalView() + "\n" + controls + "\n" + bounded(singleLine(p.Call.Name+" "+string(p.Call.Args)), maxText) + "\nPreview:\n" + bounded(safeText(p.Preview), maxText)
+	if end < len(lines) {
+		position += " · more below"
+	}
+	rows := append([]string{"Approval blocked · " + remaining}, body...)
+	rows = append(rows, position, "PgUp/PgDn Up/Down Home/End", controls, status, "Esc stop · Ctrl+C quit")
+	for i := range rows {
+		rows[i] = ansi.Truncate(rows[i], m.width, "…")
+	}
+	return lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(m.height).Render(strings.Join(rows, "\n"))
 }
 
 func (m *Model) approvalKey(key tea.KeyPressMsg) tea.Cmd {
+	// Navigation stays available during reason entry and in-flight/completed
+	// decisions. Esc/Ctrl+C are still handled first by Model.Update.
+	lines, start, height := m.approvalPage()
+	switch key.Keystroke() {
+	case "pgup":
+		m.approval.offset = max(0, start-height)
+	case "pgdown":
+		m.approval.offset = min(max(0, len(lines)-height), start+height)
+	case "up":
+		m.approval.offset = max(0, start-1)
+	case "down":
+		m.approval.offset = min(max(0, len(lines)-height), start+1)
+	case "home":
+		m.approval.offset = 0
+	case "end":
+		m.approval.offset = max(0, len(lines)-height)
+	default:
+		return m.approvalDecisionKey(key)
+	}
+	return nil
+}
+
+func (m *Model) approvalDecisionKey(key tea.KeyPressMsg) tea.Cmd {
 	if m.approval.pending || m.approval.sent {
 		return nil
 	}
