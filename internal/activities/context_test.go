@@ -96,6 +96,73 @@ func TestGatherGitIsScopedAndDisablesFSMonitor(t *testing.T) {
 	}
 }
 
+func TestGatherGitRefusesIndirectRepository(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	external := t.TempDir()
+	if out, err := exec.Command("git", "init", "-q", external).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %s %v", out, err)
+	}
+	if err := os.WriteFile(external+"/external-secret", []byte("private"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"symlink", "gitfile"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := t.TempDir()
+			var err error
+			if kind == "symlink" {
+				err = os.Symlink(external+"/.git", dir+"/.git")
+			} else {
+				err = os.WriteFile(dir+"/.git", []byte("gitdir: "+external+"/.git\n"), 0600)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out := gatherGit(context.Background(), dir); out != "Context unavailable: git directory must be a local directory" {
+				t.Fatalf("indirect repository accepted: %q", out)
+			}
+		})
+	}
+}
+
+func TestGatherGitPinsWorktreeAndIgnoresInheritedGitVariables(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git unavailable")
+	}
+	dir, external := t.TempDir(), t.TempDir()
+	for _, root := range []string{dir, external} {
+		if out, err := exec.Command("git", "init", "-q", root).CombinedOutput(); err != nil {
+			t.Fatalf("git init: %s %v", out, err)
+		}
+	}
+	if out, err := exec.Command("git", "-C", dir, "config", "core.worktree", external).CombinedOutput(); err != nil {
+		t.Fatalf("git config: %s %v", out, err)
+	}
+	for path, content := range map[string]string{dir + "/visible": "hello", external + "/external-secret": "private"} {
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(t *testing.T) {
+		t.Helper()
+		if out := gatherGit(context.Background(), dir); out != "?? visible\n" {
+			t.Fatalf("status escaped pinned root: %q", out)
+		}
+	}
+	t.Run("local config override", check)
+	t.Run("inherited overrides", func(t *testing.T) {
+		t.Setenv("GIT_DIR", external+"/.git")
+		t.Setenv("GIT_WORK_TREE", external)
+		t.Setenv("GIT_COMMON_DIR", external+"/.git")
+		t.Setenv("GIT_INDEX_FILE", external+"/.git/index")
+		t.Setenv("GIT_CONFIG_COUNT", "1")
+		t.Setenv("GIT_CONFIG_KEY_0", "core.worktree")
+		t.Setenv("GIT_CONFIG_VALUE_0", external)
+		check(t)
+	})
+}
+
 func TestGatherMissingContext(t *testing.T) {
 	a := &Activities{}
 	dir, data := t.TempDir(), t.TempDir()

@@ -123,13 +123,25 @@ func gatherGit(ctx context.Context, dir string) string {
 	if err != nil {
 		return "Context unavailable: " + err.Error()
 	}
-	// Do not discover a repository above the project root.
-	if _, err = os.Lstat(filepath.Join(root, ".git")); err != nil {
+	// Refuse discovery above root and indirection through gitfiles or symlinks.
+	gitdir := filepath.Join(root, ".git")
+	st, err := os.Lstat(gitdir)
+	if err != nil {
 		return "Context unavailable: not a git repository"
+	}
+	if !st.IsDir() || st.Mode()&os.ModeSymlink != 0 {
+		return "Context unavailable: git directory must be a local directory"
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "status", "--short", "--", ".", ":(exclude).data")
+	// Explicit paths override core.worktree; local config must not launch helpers
+	// or cause status to inspect submodule repositories outside the project.
+	cmd := exec.CommandContext(ctx, "git", "--no-pager", "--no-optional-locks",
+		"--git-dir="+gitdir, "--work-tree="+root,
+		"-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false",
+		"-c", "core.hooksPath=/dev/null", "-c", "core.pager=cat",
+		"-c", "diff.external=", "-c", "core.bare=false",
+		"status", "--short", "--ignore-submodules=all", "--", ".", ":(exclude).data")
 	cmd.Dir = root
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=/nonexistent", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "LC_ALL=C"}
 	cmd.WaitDelay = time.Second
