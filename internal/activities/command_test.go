@@ -167,7 +167,9 @@ func TestCommandProcessLifecycle(t *testing.T) {
 import("testing";"os";"os/exec";"fmt";"time")
 func TestChild(t *testing.T){
  c:=exec.Command("sleep","60");if err:=c.Start();err!=nil{t.Fatal(err)}
- os.WriteFile("child.pid",[]byte(fmt.Sprint(c.Process.Pid)),0600)
+ // Publish only a complete PID so cancellation cannot interrupt the write.
+ if err:=os.WriteFile("child.pid.tmp",[]byte(fmt.Sprint(c.Process.Pid)),0600);err!=nil{t.Fatal(err)}
+ if err:=os.Rename("child.pid.tmp","child.pid");err!=nil{t.Fatal(err)}
  fmt.Fprintln(os.Stdout,"stdout marker");fmt.Fprintln(os.Stderr,"stderr marker")
  MODE
  _=time.Second
@@ -208,9 +210,11 @@ func TestChild(t *testing.T){
 							case <-ctx.Done():
 								return
 							case <-time.After(10 * time.Millisecond):
-								if _, e := os.Stat(filepath.Join(in.Workdir, "child.pid")); e == nil {
-									cancel()
-									return
+								if b, e := os.ReadFile(filepath.Join(in.Workdir, "child.pid")); e == nil {
+									if pid, e := strconv.Atoi(string(b)); e == nil && pid > 0 {
+										cancel()
+										return
+									}
 								}
 							}
 						}
@@ -239,7 +243,10 @@ func TestChild(t *testing.T){
 			if e != nil {
 				t.Fatal(e)
 			}
-			pid, _ := strconv.Atoi(string(b))
+			pid, e := strconv.Atoi(string(b))
+			if e != nil || pid <= 0 {
+				t.Fatalf("invalid child PID %q: %v", b, e)
+			}
 			// macOS reaps orphaned descendants asynchronously.
 			deadline := time.Now().Add(3 * time.Second)
 			for syscall.Kill(pid, 0) == nil && time.Now().Before(deadline) {
