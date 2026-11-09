@@ -9,23 +9,25 @@ import (
 )
 
 const (
-	AgentsQueue        = "agents"
-	LLMQueue           = "llm"
-	SubagentsQueue     = "subagents"
-	StateQuery         = "state"
-	MessageUpdate      = "message"
-	StopUpdate         = "stop"
-	ContinueUpdate     = "continue"
-	DecideUpdate       = "decide"
-	SessionName        = "SessionWorkflow"
-	ExplorerName       = "ExplorerWorkflow"
-	LLMActivity        = "LLMStream"
-	ToolActivity       = "ExecuteTool"
-	EmitActivity       = "EmitEvent"
-	TranscriptActivity = "AppendTranscript"
-	GatherActivity     = "GatherContext"
-	NotifyActivity     = "NotifyApproval"
-	CommandActivity    = "RunCommand"
+	AgentsQueue            = "agents"
+	LLMQueue               = "llm"
+	SubagentsQueue         = "subagents"
+	StateQuery             = "state"
+	MessageUpdate          = "message"
+	StopUpdate             = "stop"
+	ContinueUpdate         = "continue"
+	DecideUpdate           = "decide"
+	SessionName            = "SessionWorkflow"
+	ExplorerName           = "ExplorerWorkflow"
+	LLMActivity            = "LLMStream"
+	ToolActivity           = "ExecuteTool"
+	EmitActivity           = "EmitEvent"
+	TranscriptActivity     = "AppendTranscript"
+	GatherActivity         = "GatherContext"
+	NotifyActivity         = "NotifyApproval"
+	CommandActivity        = "RunCommand"
+	PreflightActivity      = "PreflightTool"
+	RecoverCommandActivity = "RecoverCommand"
 )
 
 type Input struct {
@@ -90,6 +92,8 @@ type State struct {
 	ContextGathered bool             `json:"contextGathered"`
 }
 type LLMInput struct {
+	// InputID is the stable logical run/input key, not an activity attempt ID.
+	InputID       string
 	Scope         events.Scope
 	Model         string
 	DataDir       string
@@ -113,6 +117,9 @@ type EmitInput struct {
 	DataDir string
 }
 type AppendInput struct {
+	// EntryID identifies this batch across retries; message indexes and roles
+	// are included in the persisted entry keys.
+	EntryID       string
 	Scope         events.Scope
 	DataDir       string
 	TranscriptRef string
@@ -129,6 +136,16 @@ type ToolInput struct {
 	Call        llm.ToolCall
 	HangTimeout time.Duration
 }
+type PreflightResult struct {
+	Allowed          bool
+	Reason           string
+	RequiresApproval bool
+	Mode             tools.ExecutionMode
+	Replay           tools.Replay
+	ActionHash       string
+	Preview          string
+}
+
 type GatherInput struct {
 	Scope   events.Scope
 	DataDir string
