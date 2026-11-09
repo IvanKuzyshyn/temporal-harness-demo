@@ -72,6 +72,62 @@ func TestCommandLogAndRecovery(t *testing.T) {
 		t.Fatal("same intent executed twice")
 	}
 }
+func TestRunCommandMiseFallback(t *testing.T) {
+	in := commandInput(t, "go", "test", "./...")
+	originalArgs := string(in.Call.Args)
+	bin := t.TempDir()
+	fakeGo := filepath.Join(t.TempDir(), "go")
+	writeExecutable := func(path, body string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeExecutable(fakeGo, `printf 'cwd=%s\n' "$PWD"
+printf 'arg=%s\n' "$@"
+`)
+	mise := filepath.Join(bin, "mise")
+	writeExecutable(mise, "exit 1\n")
+	t.Setenv("PATH", bin) // Only mise is discoverable; Go is not on the parent PATH.
+	if _, err := executeCommand(t, in); err == nil {
+		t.Fatal("expected tool resolution failure")
+	}
+	_, logPath, err := commandLog(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Fatalf("resolution failure created intent log: %v", err)
+	}
+	t.Setenv("FAKE_GO", fakeGo)
+	writeExecutable(mise, `[ "$#" -eq 2 ] && [ "$1" = which ] && [ "$2" = go ] || exit 2
+printf '%s\n' "$FAKE_GO"
+`)
+	r, err := executeCommand(t, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wd, err := filepath.EvalSymlinks(in.Workdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "cwd=" + wd + "\narg=test\narg=./...\n"
+	if r.ExitCode != 0 || r.Tail != want || string(in.Call.Args) != originalArgs {
+		t.Fatalf("result=%+v args=%s; want output %q", r, in.Call.Args, want)
+	}
+	full, err := os.ReadFile(logPath)
+	if err != nil || string(full) != want {
+		t.Fatalf("log=%q err=%v", full, err)
+	}
+	if _, err := executeCommand(t, in); err == nil {
+		t.Fatal("same intent executed twice after mise resolution")
+	}
+	recovered, err := (&Activities{}).RecoverCommand(context.Background(), in)
+	if err != nil || !recovered.Interrupted || recovered.Tail != want || recovered.LogRef != r.LogRef {
+		t.Fatalf("recovery=%+v err=%v", recovered, err)
+	}
+}
+
 func TestCommandRejectsUnsafe(t *testing.T) {
 	for _, cmd := range []string{"sh", "echo"} {
 		in := commandInput(t, cmd, "hello")

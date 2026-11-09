@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/config"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/events"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/tools"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/workflows"
@@ -150,7 +151,13 @@ func commandExec(ctx context.Context, root, wd string, args tools.CommandArgs) (
 		argv = append(argv[:1], append([]string{"--ignore-submodules=all"}, argv[1:]...)...)
 		argv = append(prefix, argv...)
 	}
-	cmd := exec.CommandContext(ctx, args.Cmd, argv...)
+	// Resolve only the executable, leaving approved/canonical arguments intact.
+	// This runs before the exclusive intent log is created.
+	bin, err := config.ResolveTool(ctx, args.Cmd)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, bin, argv...)
 	cmd.Dir = wd
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
