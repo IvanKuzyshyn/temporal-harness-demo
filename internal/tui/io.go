@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -160,10 +161,21 @@ func compactEvent(e events.Event) events.Event {
 	e.Pattern = events.Pattern(bounded(safeText(string(e.Pattern)), 128))
 	var payload any
 	switch e.Type {
-	case events.MessageUpdate:
+	case events.MessageStart, events.MessageUpdate:
 		var d events.MessageData
 		if json.Unmarshal(e.Data, &d) == nil {
-			payload = events.MessageData{Delta: bounded(safeText(d.Delta), maxText)}
+			// References are opaque identities, never display text. Hash rather
+			// than truncate/sanitize so long refs with shared prefixes stay distinct.
+			ref := ""
+			if d.MessageRef != "" {
+				sum := sha256.Sum256([]byte(d.MessageRef))
+				ref = hex.EncodeToString(sum[:])
+			}
+			message := events.MessageData{Role: bounded(safeText(d.Role), 32), MessageRef: ref}
+			if e.Type == events.MessageUpdate {
+				message.Delta = bounded(safeText(d.Delta), maxText)
+			}
+			payload = message
 		}
 	case events.ToolStart, events.ToolUpdate, events.ToolEnd:
 		var d events.ToolData

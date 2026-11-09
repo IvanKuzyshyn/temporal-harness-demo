@@ -95,12 +95,51 @@ func (m *Model) applyEvent(e events.Event) {
 		m.patterns = appendBounded(m.patterns, fmt.Sprintf("%s#%d %s %s", prefix, e.Seq, e.Pattern, e.Type))
 	}
 	switch e.Type {
-	case events.MessageUpdate:
+	case events.MessageStart, events.MessageUpdate:
 		var d events.MessageData
-		if json.Unmarshal(e.Data, &d) != nil || d.Delta == "" {
+		if json.Unmarshal(e.Data, &d) != nil {
+			if e.Type == events.MessageStart {
+				m.newMessage = true
+			}
 			return
 		}
 		label := prefix + "Assistant: "
+		if d.MessageRef != "" && (d.Role == "assistant" || d.Role == "") {
+			// Identity lives on bounded entries, so snapshot reconstruction and
+			// session switches also reset all attempt-tracking state.
+			index := -1
+			for i := range m.stream {
+				entry := &m.stream[i]
+				if entry.messageRef == d.MessageRef && entry.workflowID == e.WorkflowID && entry.parentWorkflowID == e.ParentWorkflowID {
+					index = i
+					break
+				}
+			}
+			if index < 0 {
+				if len(m.stream) >= maxEntries {
+					copy(m.stream, m.stream[1:])
+					m.stream = m.stream[:maxEntries-1]
+				}
+				index = len(m.stream)
+				m.stream = append(m.stream, streamEntry{label: label, messageRef: d.MessageRef, workflowID: e.WorkflowID, parentWorkflowID: e.ParentWorkflowID})
+			}
+			entry := &m.stream[index]
+			if e.Type == events.MessageStart {
+				entry.text = ""
+			} else {
+				entry.text = bounded(entry.text+safeText(d.Delta), maxAnswer)
+			}
+			// A subsequent legacy delta must not join this referenced message.
+			m.newMessage = true
+			return
+		}
+		if e.Type == events.MessageStart {
+			m.newMessage = true
+			return
+		}
+		if d.Delta == "" {
+			return
+		}
 		if m.newMessage || len(m.stream) == 0 || m.stream[len(m.stream)-1].label != label {
 			if len(m.stream) >= maxEntries {
 				copy(m.stream, m.stream[1:])
@@ -111,8 +150,6 @@ func (m *Model) applyEvent(e events.Event) {
 		m.newMessage = false
 		last := &m.stream[len(m.stream)-1]
 		last.text = bounded(last.text+safeText(d.Delta), maxAnswer)
-	case events.MessageStart:
-		m.newMessage = true
 	case events.ToolStart, events.ToolUpdate, events.ToolEnd:
 		if !newLog {
 			return
