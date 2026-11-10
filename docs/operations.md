@@ -128,7 +128,7 @@ To repeat the trusted-fixture auto-approved CLI path, use a fresh temporary samp
 ./bin/harness run --model mock -p /demo --json --auto-approve --timeout 10m
 ```
 
-- Both model paths passed the live four-pattern CLI checks with three approvals and separate scripted/afterRun successes; the parent plan was harness-enforced. The mock 80×24 TUI smoke passed three keyboard `a` decisions and Ctrl+C detach with an external worker surviving. See [exact evidence boundaries](testing.md#live-checks-and-pending-final-evidence).
+- Both model paths passed the live four-pattern CLI checks with three approvals and separate scripted/afterRun successes; the parent plan was harness-enforced. The mock 80×24 TUI smoke passed three keyboard `a` decisions and Ctrl+C detach with an external worker surviving. See [exact evidence boundaries](testing.md#live-checks-and-evidence-limits).
 - For isolated genuine history capture and offline replay, use the [committed replay helper](../scripts/capture-replay/README.md) and [replay commands](testing.md#recorded-replay-integrated18). Its successor fixture is an open prefix, not a completed execution.
 
 Use the printed/queried request ID for each distinct approval, not a copied old ID. After all sessions using the temporary project are stopped, discard that copy. If the repository fixture was changed accidentally, inspect `git diff -- examples/sample-project/calc/calc.go`, save any wanted edits, then use `git restore --source=HEAD -- examples/sample-project/calc/calc.go` **only if discarding that file's changes is intended**. Do not use `git reset --hard` or reset unrelated work.
@@ -158,7 +158,7 @@ Leave that server in its own terminal. In additional terminals, export the **sam
 
 Submit a message or `/demo`, quit the TUI, stop only your worker with Ctrl+C, restart it with the same command, and reconnect with the same session ID. The separate server/database and artifacts survive client/worker exit. Use the manually chosen UI at `http://127.0.0.1:18233`. Shut down only your owned terminals/processes when finished.
 
-Hard SIGKILL is a different failure mode: an unsafe command is never automatically retried, and recovery can report an interrupted result with retained log tail. It **cannot certify exit or kill a preexisting orphan group**. Do not SIGKILL during arbitrary project commands as a casual cleanup technique. Captured replay is available, but final reviewed/integrated hard-loss automation evidence remains pending the orchestrator's final patch in [testing](testing.md). Replay does not establish orphan termination.
+Hard SIGKILL is a different failure mode: an unsafe command is never automatically retried, and recovery can report an interrupted result with retained log tail. It **cannot certify exit or kill a preexisting orphan group**. Do not SIGKILL during arbitrary project commands as a casual cleanup technique. The reviewed [opt-in live suite](../internal/integration/README.md) exercises hard loss on its own private server and generated fixture, with explicit orphan cleanup. Its normal and race evidence is recorded in [testing](testing.md). Captured replay is a different proof and does not establish orphan termination.
 
 ## Security and durability limits
 

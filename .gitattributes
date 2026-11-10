@@ -1,0 +1,4 @@
+# Captured service histories; review the visible manifest and capture/replay code.
+internal/workflows/testdata/replay/*-can.json linguist-generated=true
+internal/workflows/testdata/replay/explorer.json linguist-generated=true
+internal/workflows/testdata/replay/successor.json linguist-generated=true

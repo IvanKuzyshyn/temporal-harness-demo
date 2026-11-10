@@ -22,6 +22,11 @@ jobs:
           ollama --version
       - run: go build ./...
       - run: go vet ./...
-      - run: go test -race ./...
+      # Bound process-heavy fixture concurrency on small runners.
+      - run: go test -race -p 1 ./...
+      - name: Live isolated Temporal durability (mock)
+        run: scripts/test-integration.sh
+      - name: Live isolated Temporal durability (race)
+        run: scripts/test-integration.sh -race
       - name: Check formatting
-        run: test -z "$(gofmt -l cmd internal 2>/dev/null)"
+        run: test -z "$(gofmt -l cmd internal scripts 2>/dev/null)"

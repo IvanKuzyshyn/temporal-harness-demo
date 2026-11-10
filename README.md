@@ -2,7 +2,7 @@
 
 A local Go + Bubble Tea + Ollama teaching harness for four Temporal patterns: long-running activities, parallel tool execution, child workflows, and recorded human approval. Temporal owns session state; activities do I/O; streamed text is a display aid, not proof of success.
 
-Implemented here: durable sessions, CLI/TUI, guarded tools, approval, a fixture-only guided demo, and approval-gated post-write verification with at most two automatic repair runs. Live mock and local Gemma CLI demos passed all four patterns; a mock TUI keyboard smoke and recorded-history replay also passed. These are scoped proofs, not native model action-selection evidence. Final reviewed/integrated hard-worker-loss evidence remains **pending**; see [testing and evidence](docs/testing.md). The [original implementation plan](docs/superpowers/plans/2026-11-09-harness.md) is an execution ledger, not a claim that all 18 steps are complete.
+Implemented here: durable sessions, CLI/TUI, guarded tools, approval, a fixture-only guided demo, and approval-gated post-write verification with at most two automatic repair runs. Live mock and local Gemma CLI demos passed all four patterns; a mock TUI keyboard smoke and recorded-history replay also passed. These are scoped proofs, not native model action-selection evidence. Reviewed isolated worker-loss, approval-restart and Stop/Continue tests also pass with mock; they explicitly demonstrate that hard worker loss can leave an orphan requiring separate cleanup. See [testing and evidence](docs/testing.md) and the [original implementation plan](docs/superpowers/plans/2026-11-09-harness.md).
 
 ## Quickstart
 
@@ -73,7 +73,8 @@ Pins: Go **1.27.3**, Temporal CLI **1.10.0**, Ollama **0.40.15**. Exact SDK/Char
 
 - [Architecture, Mermaid diagrams, and source map](docs/architecture.md)
 - [Operations: commands, TUI keys, isolation, troubleshooting](docs/operations.md)
-- [Testing, evidence boundaries, and pending integration checks](docs/testing.md)
+- [Testing and evidence boundaries](docs/testing.md)
+- [18-position draft PR stack table (CSV)](docs/pr-stack.csv) — bases, scope, validation focus, and live check links
 - [Event protocol](docs/events.md)
 
 ## Trust boundary

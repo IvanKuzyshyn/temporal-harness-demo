@@ -12,13 +12,14 @@ nothing. Trust this worktree's `mise.toml` yourself if mise requires it.
 
 This macOS/Linux helper creates its own loopback Temporal dev server, ephemeral
 non-default gRPC and UI ports, process group, temporary SQLite database, project
-copy and artifact directory. It never dials 7233/8233, reuses an existing server,
-or stops another worker. The hard-coded workflow queue names exist only inside
+copy and artifact directory. It excludes 7233/8233 and has no fallback that
+intentionally reuses an existing server or stops another worker. The hard-coded workflow queue names exist only inside
 this separate server. Ctrl-C/SIGTERM and a four-minute deadline cancel the
 capture; cleanup joins workers and terminates only the owned server process
 group (TERM, then KILL after five seconds). Do not use SIGKILL on the helper.
-There is a small normal free-port selection/bind race; a bind failure is not a
-reason to reuse another server. The model is always mock; activities, filesystem
+There is a free-port selection/bind race: ports are not atomically reserved and
+listener ownership is not authenticated against an adversarial takeover. A bind
+failure is not a reason to reuse another server. The model is always mock; activities, filesystem
 writes and both approved `go test ./...` commands are real. No Ollama or cloud
 model is used.
 

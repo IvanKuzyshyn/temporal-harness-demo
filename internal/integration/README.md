@@ -8,7 +8,8 @@ workflow/activity implementation is used.
 
 ## Run
 
-From the repository root, with Go and Temporal CLI already installed:
+From the repository root, with Go and Temporal CLI already installed, plus Bash
+and `ps` (procps on Linux). Race runs also require a compatible C toolchain:
 
 ```sh
 scripts/test-integration.sh

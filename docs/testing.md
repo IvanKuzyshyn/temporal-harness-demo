@@ -2,7 +2,7 @@
 
 [Quickstart](../README.md) · [Operations](operations.md) · [Architecture](architecture.md)
 
-Distinguish unit/test-environment results, live Temporal tests, real provider calls, replay, and hard-worker-loss exercises. Passing one does not establish the others. The original plan's 18-item ledger is not an all-complete claim.
+Distinguish unit/test-environment results, live Temporal tests, real provider calls, replay, and hard-worker-loss exercises. Passing one does not establish the others. The original 18-item plan is a design/execution reference; the evidence below states what was actually verified.
 
 ## Root gates (no live services required)
 
@@ -67,7 +67,7 @@ Coverage worth reading:
 - [TUI approval paging](../internal/tui/approval_paging_test.go) tests 80×24 and 40×14 with long content, truncation, reason entry, and scrolling. [Render bounds](../internal/tui/model_test.go) include tiny sizes without claiming usability there. [Reconnect tests](../internal/tui/reconnect_test.go) use fake backends, not terminal automation.
 - [CLI regressions](../cmd/harness/cli_regression_test.go), [CLI inbox behavior](../cmd/harness/cli_inbox_test.go), and [session listing](../cmd/harness/session_test.go) test Query-derived settlement, JSONL, cancellation, and unavailable-history handling.
 
-## Live checks and pending final evidence
+## Live checks and evidence limits
 
 Orchestrator live evidence on integrated17 (`c75db0e`, 2026-11-10), reviewed for this follow-up on integrated18 replay commit `89338c0`:
 
@@ -100,9 +100,24 @@ go run ./scripts/capture-replay -capture -out /tmp/new-replay-capture
 - Capture uses an owned loopback server with non-default gRPC/UI ports, temporary database/project/artifacts, and real activities/commands; it installs no tools. Independent normal and SIGTERM cleanup checks passed. Free-port selection has a bind race, not an atomic listener-ownership guarantee. Do not SIGKILL the helper; crash-orphan cleanup is not established.
 - Independent review's initial default-concurrency full suite hit an unchanged resolver-test timeout; serialized full suite and focused race gates passed. This follow-up reran the two offline commands above, not the live capture or the full suite.
 
-**Pending orchestrator final patch — do not treat as passed:**
+### Isolated worker-loss and approval durability
 
-- Durability work reported complete by its agent (`9eae`), but final reviewed/integrated hard-worker-loss evidence is still pending. Actual automation paths, isolated settings, interruption/recovery results, and review verdict must be supplied by the orchestrator. The [manual restart procedure](operations.md#external-worker-restart-exercise-isolated-server) is not that result, and neither live demos nor replay prove orphan termination.
+The integrated [live suite](../internal/integration/README.md) uses a real private Temporal server, production workers/activities/shared client/CLI, temporary projects, and an explicitly mock LLM. Both normal and race runs passed on macOS arm64; independent review and re-review approved the functional checks and subprocess/cleanup gate. Ubuntu CI runs both commands below rather than inferring Linux behavior from macOS results:
+
+```sh
+mise exec -- scripts/test-integration.sh
+mise exec -- scripts/test-integration.sh -race
+```
+
+- Four private loopback ports (gRPC/UI/HTTP/metrics), a temporary SQLite DB, and a random namespace ownership sentinel isolate each invocation. Default services on 7233/8233 are not used.
+- Approval survives worker replacement with the exact request/hash/expiry/preview and unchanged file. Invalid/stale/duplicate decisions reject; valid approval permits the write and a distinct afterRun test gate.
+- After an owned worker is SIGKILLed during an approved command, real heartbeat timeout/recovery yields a paused interrupted result. History, invocation marker and intent log show one unsafe schedule/start/attempt/execution, with a paired persisted tool tail.
+- The orphan descendant was observed alive after worker loss and after recovery. The test explicitly kills its captured group: **recovery does not certify exit or kill an orphan**.
+- Cooperative Stop cancels and joins the command/test/descendant before cleanup. Retained input stays paused; explicit Continue resumes paired context and queued work without rerunning the unsafe command.
+- Fresh clients and built `harness wait` recover authoritative state even after the owned display JSONL is deleted. This is separate from the mock PTY smoke, not an interactive TUI restart test.
+- Every worker exit gates the parent. Bounded head/tail output capture scans every byte for race diagnostics, including intentionally killed helpers and markers outside excerpts. Controlled subprocess regressions prove actual race reports and unexpected exits fail the parent; injected ESRCH/EPERM cannot skip orphan cleanup.
+
+Live runs take roughly 25–45 seconds with warm build caches. They require installed Go/Temporal, Bash, `ps`, and a race-capable C toolchain for `-race`; they do not install tools or call Ollama. Ordinary root tests skip the live server suite but run owned test-process regressions. Whole-runner/machine forced death cannot guarantee cleanup. Server restart, power loss, remote filesystem durability and real-model quality are not established by this suite. The [manual graceful restart procedure](operations.md#external-worker-restart-exercise-isolated-server) remains a separate exercise.
 
 Replay fixtures prove current code against those captured histories only. They do not promise workflow-code upgrades across intermediate draft histories. Prefer fresh IDs after code changes; `query/unavailable` for old histories must not be called success or closure.
 

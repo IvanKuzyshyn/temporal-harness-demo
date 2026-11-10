@@ -1,4 +1,4 @@
-# Basic TUI
+# Terminal UI
 
 ```go
 model := tui.New(backend, tui.Options{
@@ -7,6 +7,7 @@ model := tui.New(backend, tui.Options{
     DataDir:   dataDir,
     Input:     input,
 }) // *tui.Model implements charm.land/bubbletea/v2.Model
+defer model.Close() // Cancel outstanding commands when the caller exits.
 ```
 
 The caller runs the model with Bubble Tea. This package does not start a terminal,
@@ -27,7 +28,8 @@ calls have a ten-second timeout. Ctrl+C cancels the session context.
 - `/continue`, `/new [id]`, `/sessions [id]`, `/help` are local commands.
   `/sessions <id>` reconnects to that session. `/new` generates a crypto-random ID.
 - `/explore ...` and `/run ...` are submitted unchanged for workflow handling.
-- `/demo` sends the guided demo prompt with `Input.Scenario = "demo"`.
+- `/demo` sends the recognized guided prompt; workflow routing applies per logical
+  run, including an already-open session.
   `Options.Demo` only offers the demo banner. Startup never submits by default;
   `Options.Autoplay: true` explicitly submits the demo once after starting the tail.
 
@@ -59,10 +61,15 @@ Display payloads are compacted before buffering, and C0/C1/escape and Unicode
 format controls are removed from untrusted display text. Rendering is clipped to
 the terminal dimensions; extremely small terminals necessarily hide some panes.
 
-## Intentional seams/limits
+## Approval and limits
 
-- `modal.go` displays snapshot `PendingApproval`; interactive decisions are for
-  PR14. No approval or rejection is sent implicitly.
+- `modal.go` displays authoritative `PendingApproval`. `a` approves; `d` opens
+  denial-reason entry; Enter submits a nonempty reason. PgUp/PgDn scroll the
+  bounded preview/arguments. Decisions retain the exact request/hash binding;
+  no approval or rejection is sent implicitly.
+- Approval layout is tested at 80×24 and 40×14. Extremely small terminals can hide
+  details or controls: enlarge the terminal before deciding. This is not a
+  minimum-size safety interlock.
 - The Commands pane shows the last two output lines, not a full terminal emulator.
 - The transcript combines local messages, the latest bounded snapshot answer,
   and newer streamed content; it does not load the full `TranscriptRef` file.
