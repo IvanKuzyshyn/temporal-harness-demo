@@ -75,7 +75,7 @@ func listSessions(ctx context.Context, b cliBackend, out io.Writer, asJSON bool)
 			if item.Failure != nil {
 				failure = " failure=" + item.Failure.Reason
 			}
-			_, err = fmt.Fprintf(out, "%s\t%s\tturn=%d%s\n", id, item.Status, item.Turn, failure)
+			_, err = fmt.Fprintf(out, "%s\t%s\tturn=%d%s\n", terminalText(id), terminalText(item.Status), item.Turn, terminalText(failure))
 		}
 		if err != nil {
 			return err

@@ -9,8 +9,10 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	hc "github.com/IvanKuzyshyn/temporal-harness-demo/internal/client"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/config"
@@ -79,9 +81,9 @@ func sessionSettled(s workflows.State) bool {
 	if s.RunCounter < 1 || s.PendingApproval != nil || len(s.ActiveTools) > 0 {
 		return false
 	}
-	// Failed/aborted runs explicitly pause retained inputs until new input or
-	// continue. An idle failed queue is held, not automatically runnable.
-	if len(s.Inbox) > 0 && !sessionFailed(s) {
+	// Match the workflow's automatic-work contract. Failure metadata survives
+	// settlement yields, during which genuine new input can resume the queue.
+	if !s.QueuePaused && (s.ContinueRequested || len(s.Inbox) > 0) {
 		return false
 	}
 	return s.Status == "idle" || s.Status == "settled" || s.Status == "failed"
@@ -91,7 +93,7 @@ func sessionFailed(s workflows.State) bool {
 }
 
 // Inbox entries can be steers consumed by the current run, not new runs.
-// Success needs at least baseline+1 and an empty, authoritative idle queue.
+// Success needs at least baseline+1 and authoritative quiescence.
 func runSettled(s, baseline workflows.State) bool {
 	if !sessionSettled(s) || s.RunCounter < baseline.RunCounter {
 		return false
@@ -112,7 +114,7 @@ func runSettled(s, baseline workflows.State) bool {
 }
 func settlementError(s workflows.State) error {
 	if s.LastRunFailure != nil {
-		return fmt.Errorf("session failed: %s: %s", s.LastRunFailure.Reason, s.LastRunFailure.Detail)
+		return fmt.Errorf("session failed: %s: %s", terminalText(s.LastRunFailure.Reason), terminalText(s.LastRunFailure.Detail))
 	}
 	if s.Status == "failed" {
 		return fmt.Errorf("session failed")
@@ -143,12 +145,25 @@ type cliSummary struct {
 func summary(id string, s workflows.State) cliSummary {
 	return cliSummary{Type: "session_state", ID: id, Status: s.Status, Turn: s.Turn, Failure: s.LastRunFailure, Answer: s.Answer}
 }
+
+// terminalText removes terminal control introducers (including C1), not just
+// complete escape sequences: split streamed sequences must be harmless too.
+// Preserve ordinary multiline/tabbed model and tool text. JSON uses its encoder.
+func terminalText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
+			return -1
+		}
+		return r
+	}, s)
+}
+
 func printFinal(out io.Writer, id string, s workflows.State, asJSON bool) error {
 	if asJSON {
 		return json.NewEncoder(out).Encode(summary(id, s))
 	}
 	if s.Answer != "" {
-		_, err := fmt.Fprintln(out, s.Answer)
+		_, err := fmt.Fprintln(out, terminalText(s.Answer))
 		return err
 	}
 	return nil

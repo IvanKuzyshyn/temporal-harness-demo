@@ -146,7 +146,7 @@ func runSession(ctx context.Context, b cliBackend, cfg config.Config, o runOptio
 				} else if event.Type == events.MessageUpdate && event.WorkflowID == o.session && event.ParentWorkflowID == "" {
 					var message events.MessageData
 					if json.Unmarshal(event.Data, &message) == nil && message.Delta != "" {
-						if _, err := io.WriteString(out, message.Delta); err != nil {
+						if _, err := io.WriteString(out, terminalText(message.Delta)); err != nil {
 							return err
 						}
 						plainStreamed = true

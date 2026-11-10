@@ -39,6 +39,18 @@ func TestRunInboxLifecycle(t *testing.T) {
 			{Status: "working", RunCounter: 6},
 			{Status: "idle", RunCounter: 6, Answer: "new answer"},
 		}, false},
+		// Faithful query snapshots: genuine input accepted during the yielding
+		// AgentEnd emission clears QueuePaused before failure metadata is cleared.
+		{"new input during failure settlement resumes retained followup", []workflows.State{
+			{Status: "working", RunCounter: 4},
+			{Status: "working", RunCounter: 4, Inbox: []workflows.MessageInput{own}},
+			{Status: "failed", RunCounter: 4, LastRunFailure: failure, Inbox: []workflows.MessageInput{own, follow}},
+			{Status: "idle", RunCounter: 4, LastRunFailure: failure, Inbox: []workflows.MessageInput{own, follow}},
+			{Status: "working", RunCounter: 5, Inbox: []workflows.MessageInput{follow}},
+			{Status: "settled", RunCounter: 5, Inbox: []workflows.MessageInput{follow}},
+			{Status: "working", RunCounter: 6},
+			{Status: "idle", RunCounter: 6, Answer: "new answer"},
+		}, false},
 		{"old idle settlement cannot finish submit", []workflows.State{
 			{Status: "idle", RunCounter: 4, Answer: "old answer"},
 			{Status: "idle", RunCounter: 4, Answer: "old answer"},
@@ -61,20 +73,20 @@ func TestRunInboxLifecycle(t *testing.T) {
 		{"new run fails holding own followup", []workflows.State{
 			{Status: "idle", RunCounter: 4, LastRunFailure: failure, Inbox: []workflows.MessageInput{follow}},
 			{Status: "working", RunCounter: 5, Inbox: []workflows.MessageInput{own}},
-			{Status: "idle", RunCounter: 5, LastRunFailure: failure, Inbox: []workflows.MessageInput{own}},
+			{Status: "idle", RunCounter: 5, QueuePaused: true, LastRunFailure: failure, Inbox: []workflows.MessageInput{own}},
 		}, true},
 		{"baseline active run fails without counter increment", []workflows.State{
 			{Status: "working", RunCounter: 4},
 			{Status: "working", RunCounter: 4, Inbox: []workflows.MessageInput{own}},
-			{Status: "idle", RunCounter: 4, LastRunFailure: failure, Inbox: []workflows.MessageInput{own}},
+			{Status: "idle", RunCounter: 4, QueuePaused: true, LastRunFailure: failure, Inbox: []workflows.MessageInput{own}},
 		}, true},
 		{"baseline active run finishes recording its failure", []workflows.State{
 			{Status: "working", RunCounter: 4, LastRunFailure: failure},
-			{Status: "idle", RunCounter: 4, LastRunFailure: failure, Inbox: []workflows.MessageInput{own}},
+			{Status: "idle", RunCounter: 4, QueuePaused: true, LastRunFailure: failure, Inbox: []workflows.MessageInput{own}},
 		}, true},
 		{"baseline blocked run aborts holding own followup", []workflows.State{
 			{Status: "blocked", RunCounter: 4, PendingApproval: &workflows.PendingApproval{RequestID: "approval"}},
-			{Status: "idle", RunCounter: 4, LastRunFailure: &workflows.Failure{Reason: "aborted"}, Inbox: []workflows.MessageInput{own}},
+			{Status: "idle", RunCounter: 4, QueuePaused: true, LastRunFailure: &workflows.Failure{Reason: "aborted"}, Inbox: []workflows.MessageInput{own}},
 		}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -123,7 +135,7 @@ func TestWaitRetainedFailureQueue(t *testing.T) {
 	for _, reason := range []string{"model_error", "aborted"} {
 		for _, status := range []string{"idle", "failed"} {
 			t.Run(status+"/"+reason, func(t *testing.T) {
-				state := workflows.State{Status: status, RunCounter: 4, LastRunFailure: &workflows.Failure{Reason: reason}, Inbox: []workflows.MessageInput{{RequestID: "held"}}}
+				state := workflows.State{Status: status, RunCounter: 4, QueuePaused: true, LastRunFailure: &workflows.Failure{Reason: reason}, Inbox: []workflows.MessageInput{{RequestID: "held"}}}
 				f := &cliFake{states: []workflows.State{state}}
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				defer cancel()
