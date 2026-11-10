@@ -189,6 +189,11 @@ func (r *runtime) executeAllowed(ctx workflow.Context, in ToolInput, replay tool
 		result.Interrupted = command.Interrupted
 		result.IsError = command.ExitCode != 0 || command.Interrupted
 		result.Details = map[string]string{"exitCode": fmt.Sprint(command.ExitCode), "logRef": command.LogRef, "truncated": fmt.Sprint(command.Truncated)}
+		if err != nil {
+			// Recovery and error details can retain a positive process exit even
+			// though the activity failed (for example, during final log sync).
+			result.Details["executionError"] = "true"
+		}
 	} else {
 		err = workflow.ExecuteActivity(workflow.WithActivityOptions(ctx, opts), ToolActivity, in).Get(ctx, &result)
 	}
