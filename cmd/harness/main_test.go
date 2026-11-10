@@ -78,8 +78,23 @@ func TestInteractiveFlags(t *testing.T) {
 	}
 }
 
+func TestApprovalDispatcherFlags(t *testing.T) {
+	for _, name := range []string{"approve", "deny"} {
+		var out bytes.Buffer
+		if err := execute([]string{name, "--help"}, &out); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(out.String(), name) || !strings.Contains(out.String(), "session") {
+			t.Fatalf("missing approval usage: %q", out.String())
+		}
+		if err := execute([]string{name}, &out); err == nil || strings.Contains(err.Error(), "not implemented") {
+			t.Fatalf("expected argument validation, got %v", err)
+		}
+	}
+}
+
 func TestUnimplementedCommandsFailHonestly(t *testing.T) {
-	for _, name := range []string{"run", "session", "approve", "deny", "wait"} {
+	for _, name := range []string{"run", "session", "wait"} {
 		t.Run(name, func(t *testing.T) {
 			err := execute([]string{name}, &bytes.Buffer{})
 			if err == nil {
