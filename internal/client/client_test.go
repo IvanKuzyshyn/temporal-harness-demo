@@ -9,6 +9,7 @@ import (
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/workflows"
 	commonpb "go.temporal.io/api/common/v1"
 	enumspb "go.temporal.io/api/enums/v1"
+	"go.temporal.io/api/serviceerror"
 	workflowpb "go.temporal.io/api/workflow/v1"
 	"go.temporal.io/api/workflowservice/v1"
 	temporalclient "go.temporal.io/sdk/client"
@@ -105,6 +106,9 @@ func TestSubmitUsesPinnedUpdateWithStartAndRequestID(t *testing.T) {
 	if f.start.ID != "session" || f.start.TaskQueue != workflows.AgentsQueue || f.start.WorkflowIDConflictPolicy != enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING || f.startName != workflows.SessionName {
 		t.Fatalf("start=%+v name=%v", f.start, f.startName)
 	}
+	if f.start.WorkflowIDReusePolicy != enumspb.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE {
+		t.Fatalf("closed session IDs must not start fresh executions: start=%+v", f.start)
+	}
 	u := f.update.UpdateOptions
 	if u.UpdateID != msg.RequestID || u.RunID != "" || u.WaitForStage != temporalclient.WorkflowUpdateStageCompleted || u.UpdateName != workflows.MessageUpdate || !reflect.DeepEqual(u.Args, []any{msg}) {
 		t.Fatalf("update=%+v", u)
@@ -131,6 +135,22 @@ func TestSubmitUsesPinnedUpdateWithStartAndRequestID(t *testing.T) {
 		t.Fatal(f.closed)
 	}
 }
+func TestSubmitPropagatesClosedSessionReuseError(t *testing.T) {
+	want := serviceerror.NewWorkflowExecutionAlreadyStarted("closed session ID cannot be reused", "start-request", "closed-run")
+	f := &sdkFake{err: want}
+	receipt, err := New(f).Submit(context.Background(), "closed-session", workflows.Input{}, workflows.MessageInput{Text: "hi", RequestID: "stable-request"})
+	var alreadyStarted *serviceerror.WorkflowExecutionAlreadyStarted
+	if !errors.As(err, &alreadyStarted) || err != want {
+		t.Fatalf("expected original typed reuse error %v, got %v", want, err)
+	}
+	if !reflect.DeepEqual(receipt, workflows.MessageReceipt{}) {
+		t.Fatalf("rejected submission returned a receipt: %+v", receipt)
+	}
+	if f.start.WorkflowIDConflictPolicy != enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING || f.start.WorkflowIDReusePolicy != enumspb.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE {
+		t.Fatalf("start=%+v", f.start)
+	}
+}
+
 func TestClientPropagatesErrors(t *testing.T) {
 	want := errors.New("offline")
 	c := New(&sdkFake{err: want})
