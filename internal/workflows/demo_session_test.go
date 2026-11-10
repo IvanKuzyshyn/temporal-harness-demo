@@ -168,7 +168,7 @@ func TestDemoSessionActualActivities(t *testing.T) {
 						}
 						if phase == 0 { // Demo starts in an already-open ordinary-chat session.
 							phase = 1
-							env.UpdateWorkflowNoRejection(w.MessageUpdate, "demo-one", t, w.MessageInput{Text: "Find what's broken in the sample project and verify the fix"})
+							env.UpdateWorkflowNoRejection(w.MessageUpdate, "demo-one", t, w.MessageInput{Text: "/demo"})
 							return
 						}
 						if phase == 1 || phase == 2 {

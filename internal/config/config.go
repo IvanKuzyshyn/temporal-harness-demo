@@ -21,10 +21,17 @@ type Config struct {
 	MaxTurns        int
 }
 
-func Load() (Config, error) {
+func Load() (Config, error) { return LoadWithWorkdir("") }
+
+// LoadWithWorkdir resolves flag > environment > invocation directory, without I/O
+// beyond obtaining the current directory. It does not create or copy a project.
+func LoadWithWorkdir(workdir string) (Config, error) {
 	c := Config{Model: env("HARNESS_MODEL", "gemma4:e4b"), TemporalAddress: env("TEMPORAL_ADDRESS", "localhost:7233"), OllamaHost: env("OLLAMA_HOST", "127.0.0.1:11434")}
 	var err error
-	if c.Workdir, err = filepath.Abs(env("HARNESS_WORKDIR", "examples/sample-project")); err != nil {
+	if workdir == "" {
+		workdir = env("HARNESS_WORKDIR", ".")
+	}
+	if c.Workdir, err = filepath.Abs(workdir); err != nil {
 		return c, fmt.Errorf("workdir: %w", err)
 	}
 	if c.DataDir, err = filepath.Abs(env("HARNESS_DATA_DIR", ".data")); err != nil {

@@ -14,18 +14,23 @@ import (
 )
 
 // scenarioForRun never mutates the session configuration: UpdateWithStart does
-// not replace it in an existing session. Legacy demo configuration applies only
-// to the first logical run, including across Continue-As-New via RunCounter.
-func scenarioForRun(configured string, run int, msg MessageInput) string {
+// not replace it in an existing session. Explicit initial demo configuration
+// applies only to the first logical run, including across Continue-As-New.
+// Natural-language aliases are retained solely for histories predating the gate.
+func scenarioForRun(configured string, run int, msg MessageInput, legacy bool) string {
 	if !msg.Internal && !msg.ContextOnly {
 		text := strings.ToLower(strings.TrimSpace(msg.Text))
-		text = strings.ReplaceAll(text, "’", "'")
-		text = strings.TrimRight(text, ".!?")
-		switch text {
-		case "/demo",
-			"find what is broken in the sample project and verify the fix",
-			"find what's broken in the sample project and verify the fix",
-			"inspect calc and its tests, delegate a read-only review, propose correcting add with approval, then run go test ./... and summarize the result":
+		if legacy {
+			text = strings.ReplaceAll(text, "’", "'")
+			text = strings.TrimRight(text, ".!?")
+			switch text {
+			case "find what is broken in the sample project and verify the fix",
+				"find what's broken in the sample project and verify the fix",
+				"inspect calc and its tests, delegate a read-only review, propose correcting add with approval, then run go test ./... and summarize the result":
+				return "demo"
+			}
+		}
+		if text == "/demo" {
 			return "demo"
 		}
 		if strings.EqualFold(configured, "demo") && run == 1 {
@@ -62,7 +67,8 @@ func toolMessageContent(name string, res tools.Result) string {
 }
 
 func (r *runtime) run(ctx workflow.Context, msg MessageInput) error {
-	scenario := scenarioForRun(r.cfg.Scenario, r.state.RunCounter, msg)
+	legacyDemo := workflow.GetVersion(ctx, "explicit-demo-routing", workflow.DefaultVersion, 1) == workflow.DefaultVersion
+	scenario := scenarioForRun(r.cfg.Scenario, r.state.RunCounter, msg, legacyDemo)
 	if err := r.emit(ctx, events.AgentStart, events.None, events.AgentData{InputID: r.inputID, Status: "working"}); err != nil {
 		return err
 	}

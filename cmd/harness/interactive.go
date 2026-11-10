@@ -32,6 +32,7 @@ func interactive(args []string, out io.Writer, demo bool) error {
 	flags.SetOutput(out)
 	session := flags.String("session", "", "reattach to an existing session")
 	model := flags.String("model", "", "override HARNESS_MODEL")
+	workdir := flags.String("workdir", "", "project root (overrides HARNESS_WORKDIR; default: current directory)")
 	autoplay := flags.Bool("autoplay", false, "start guided scenario automatically (approvals remain manual)")
 	external := flags.Bool("external-worker", false, "use a separate harness worker, for durability demonstrations")
 	if err := flags.Parse(args); err != nil {
@@ -43,7 +44,7 @@ func interactive(args []string, out io.Writer, demo bool) error {
 	if flags.NArg() != 0 {
 		return fmt.Errorf("%s: unexpected arguments", name)
 	}
-	cfg, err := config.Load()
+	cfg, err := config.LoadWithWorkdir(*workdir)
 	if err != nil {
 		return err
 	}

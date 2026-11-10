@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/config"
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm/ollama"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/workflows"
 	temporalclient "go.temporal.io/sdk/client"
 	temporalworker "go.temporal.io/sdk/worker"
@@ -135,14 +137,20 @@ func TestCancellationDuringWorkerStart(t *testing.T) {
 
 func TestModelSelectionAndHostNormalization(t *testing.T) {
 	for _, host := range []string{"127.0.0.1:11434", "http://localhost:11434", "https://localhost:11434", ""} {
-		if _, err := selectModel(config.Config{Model: "gemma4:e4b", OllamaHost: host}); err != nil {
-			t.Fatal(host, err)
+		model := newRequestModel(config.Config{Model: "mock", OllamaHost: host}, &recordingModel{}, func(normalized string) (llm.Model, error) {
+			if _, err := ollama.New(normalized); err != nil {
+				t.Fatal(host, err)
+			}
+			return &recordingModel{}, nil
+		})
+		if _, err := model.Chat(context.Background(), llm.Request{Model: "gemma4:e4b"}, func(llm.Delta) error { return nil }); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if _, err := selectModel(config.Config{Model: "mock", OllamaHost: ":bad"}); err != nil {
+	if _, err := selectModel(config.Config{Model: "client-real", OllamaHost: ":bad"}).Chat(context.Background(), llm.Request{Model: "mock"}, func(llm.Delta) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := selectModel(config.Config{OllamaHost: "ftp://localhost"}); err == nil {
+	if _, err := selectModel(config.Config{Model: "mock", OllamaHost: "ftp://localhost"}).Chat(context.Background(), llm.Request{Model: "original-real"}, nil); err == nil {
 		t.Fatal("accepted invalid scheme")
 	}
 }

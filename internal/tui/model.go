@@ -74,6 +74,7 @@ type Model struct {
 	offsets                         map[string]int64
 	sessionOrder                    []string
 	state                           workflows.State
+	configMismatch                  bool
 	approval                        approvalModal
 	transcript, patterns, commands  []string
 	stream                          []streamEntry
@@ -243,6 +244,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = ""
 		}
 		m.syncApproval(msg.state.PendingApproval)
+		m.configMismatch = m.sessionMismatch(msg.state.Session)
 		m.state = displayState(msg.state)
 		m.lastSeq = msg.state.LastSeq
 		m.stream = nil
@@ -392,6 +394,7 @@ func (m *Model) switchSession(id string) tea.Cmd {
 	m.pending = nil
 	m.newMessage = false
 	m.state = workflows.State{}
+	m.configMismatch = false
 	m.approval = approvalModal{}
 	m.started = false
 	m.queryPending = false

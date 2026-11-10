@@ -11,14 +11,15 @@ Run examples from the repository root. Services and projects must be trusted. Us
 - `HARNESS_MODEL`: `gemma4:e4b`. Literal `mock` selects the deterministic mock provider and skips Ollama setup. Optional `gemma4:26b` is not hardware-verified here.
 - `TEMPORAL_ADDRESS`: `localhost:7233`; default namespace. No CLI namespace or task-queue override is exposed.
 - `OLLAMA_HOST`: `127.0.0.1:11434`; the worker accepts a host:port or HTTP(S) URL. Use local endpoints; there is no cloud-provider selection.
-- `HARNESS_WORKDIR`: `examples/sample-project` relative to the invoking directory in code; under mise, the default is the repository's absolute sample path.
+- `HARNESS_WORKDIR`: project root; unset/empty defaults to the invocation's current directory, including through `mise exec --`. `run`, `tui`, and `demo` accept `--workdir`: nonempty flag > nonempty environment > current directory. Relative selections resolve against that current directory; `Config.Workdir` is absolute. Mise tasks may change directory to their task root: prefer `mise exec -- /absolute/path/to/bin/harness tui` from your project, or an explicit `--workdir`. No automatic fixture copy or project write occurs on startup.
+- Session configuration is fixed by the original workflow input. Queries expose optional `session: {model, workdir, dataDir, scenario}`; restoration recomputes it from that input, not Carry or reconnecting client flags, without activities. The TUI retains this metadata through snapshots, shows original model/root and warns on selection mismatch; legacy missing metadata is explicitly unknown. `run` prints sanitized original configuration and mismatch diagnostics to stderr before submitting to an existing session, or after its first successful query for a new one. Missing legacy metadata is explicitly unknown. JSONL stdout remains pure, and the final `run --json` summary also preserves `session`. Start a new session to change roots/models; reconnecting is not reconfiguration.
 - `HARNESS_DATA_DIR`: `.data` relative to the invoking directory. Artifacts, event streams, logs, and managed Temporal database live here.
 - `HARNESS_APPROVAL_TIMEOUT`: `5m`; `HARNESS_HANG_TIMEOUT`: `120s`; both must be positive Go durations.
 - `HARNESS_MAX_TURNS`: `12`, a positive integer. The CLI supplies a Continue-As-New threshold of 100 turns; there is no flag for it.
 
 Supported `--model` flags override the environment; nonempty environment values override code defaults. Mise's environment templates preserve caller overrides. Workdir/data paths become absolute on load. Tool lookup prefers the caller's `PATH`, then bounded `mise which`; it does not silently install tools. Use `mise exec -- ...` for pinned tool selection.
 
-The initial workflow input fixes model, workdir, data directory, budgets, and timeouts for that session. Reattaching/submitting later with different client flags does **not** change them (even the TUI's model label reflects client options, not a reconfiguration). For external workers, use the same mock-versus-Ollama provider configuration and accessible paths as the client. Mixing mock and real workers on the fixed queues is unsupported for these examples.
+The initial workflow input fixes model, workdir, data directory, budgets, and timeouts for that session. Reattaching/submitting later with different client flags does **not** change them; the TUI labels the original queried model/root. Each worker dispatches by the activity request's original model, not the launching client's selection: exactly `mock` uses mock; all other model strings go unchanged to the explicitly configured local Ollama endpoint. Provider/endpoint errors are reported, never replaced with another provider. Ollama construction is lazy, so mock-only processing requires no valid/running Ollama setup. Reconnecting with `--model mock` does not provision Ollama for an original real-model session: its endpoint/model must still be available. Workers sharing queues must have compatible local endpoint and filesystem access; this does not provide remote workspace transport.
 
 ## Services and ownership
 
@@ -28,7 +29,7 @@ mise install
 mise run setup                  # build + doctor --fix
 ./bin/harness doctor            # health/model checks only
 ./bin/harness doctor --fix      # start missing local services / pull selected model
-mise run demo                   # same as ./bin/harness demo
+mise run demo -- --workdir "$sample" # explicitly select a disposable fixture copy
 ```
 
 - Setup's successful standalone `doctor --fix` intentionally leaves newly started services alive. It reuses healthy existing services without taking ownership; it refuses to replace a listening unhealthy Temporal endpoint or auto-start against a non-loopback address.
@@ -90,7 +91,7 @@ Bindings: [model](../internal/tui/model.go), [commands](../internal/tui/commands
 - **Tab**: transcript/pattern log; **PgUp/PgDn**: scroll selected panel; **Ctrl+T**: collapse/expand Commands pane.
 - `/help`: show controls; `/continue`: resume retained work/unanswered context; `/new`: generate a new session ID.
 - `/new ID` or `/sessions ID`: select/reconnect to that ID; `/sessions`: list known session IDs. Selecting a missing ID does not create the workflow until a message is submitted.
-- `/demo`: guided scenario. `/explore TASK` and `/run COMMAND` are forwarded unchanged to workflow/model handling; they are not direct shell execution shortcuts.
+- `/demo`: explicit guided-scenario token, also submitted by autoplay (including on existing sessions). New workflow runs do not infer this mode from natural-language fixture prompts; explicit initial `Scenario=demo` applies to the first logical run only. The Temporal `explicit-demo-routing` gate preserves the old aliases only on its `DefaultVersion` branch for existing recorded histories. An unspecified client scenario is not a conflicting configuration selection. `/explore TASK` and `/run COMMAND` are forwarded unchanged to workflow/model handling; they are not direct shell execution shortcuts.
 - Approval screen: **a** approve; **d** enter denial mode; type a nonblank reason then **Enter** to deny. **Backspace** edits the reason; bracketed paste is supported. **PgUp/PgDn**, **Up/Down**, **Home/End** scroll action/preview/arguments even during reason entry or an in-flight decision. Esc still means Stop, not “dismiss this approval.”
 
 Use **80×24** or larger for normal viewing. Approval paging is tested at **80×24 and 40×14**, including truncation markers and denial entry. General rendering is bounds-tested down to 0×0/1×1; that is clipping evidence, not a claim those sizes are usable. Preview/arguments are bounded and can be truncated. The Commands pane shows only the latest two output lines; the TUI shows a bounded recent transcript plus Query answer, not the full transcript file.
