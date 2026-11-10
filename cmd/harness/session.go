@@ -61,10 +61,17 @@ func listSessions(ctx context.Context, b cliBackend, out io.Writer, asJSON bool)
 		if err != nil {
 			var missing *serviceerror.NotFound
 			var closed *serviceerror.FailedPrecondition
-			if !errors.As(err, &missing) && !errors.As(err, &closed) {
+			var queryFailed *serviceerror.QueryFailed
+			switch {
+			case errors.As(err, &queryFailed):
+				// Query failure (including replay failure) says nothing about
+				// whether the execution is closed or completed successfully.
+				state = workflows.State{Status: "query/unavailable"}
+			case errors.As(err, &missing), errors.As(err, &closed):
+				state = workflows.State{Status: "closed/unavailable"}
+			default:
 				return fmt.Errorf("query session %s: %w", id, err)
 			}
-			state = workflows.State{Status: "closed/unavailable"}
 		}
 		item := summary(id, state)
 		item.Answer = ""
