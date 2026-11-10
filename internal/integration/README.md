@@ -31,8 +31,11 @@ Only macOS/Linux are supported (the production command implementation uses Unix
 process groups). Typical duration is 25–40 seconds after the Go build cache is
 warm. Every query/update/startup/child wait is bounded; the outer command has a
 six-minute limit. Logs identify the real server address, PID, temporary DB and
-fixture PIDs. On failure, bounded server/worker log tails are printed before temp
-files are removed. Keep stdout/stderr externally if evidence is needed.
+fixture PIDs. Server/worker output capture retains bounded 16 KB heads and tails;
+all output bytes are inspected for race diagnostics, including markers outside
+those retained excerpts or split across writes. On failure the excerpts are
+printed before temp files are removed. Keep stdout/stderr externally if evidence
+is needed.
 
 ## Isolation and ownership
 
@@ -46,6 +49,13 @@ files are removed. Keep stdout/stderr externally if evidence is needed.
   reuses the test binary under an explicit env guard and signals readiness only
   after `worker.Start` completes. Fresh clients retry transient startup Query
   failures; an empty/error Query is never treated as settled.
+- Every worker shutdown, including replacement and Stop workers, gates the parent:
+  normal shutdown requires exit 0; only an explicitly requested, successfully sent
+  SIGKILL permits a SIGKILL exit. Other failures/signals and shutdown timeouts fail
+  the test. Race diagnostics fail the parent **even for the intentionally killed
+  worker**, independently of exit status. Child `GORACE` is deliberately fixed to
+  `log_path=stderr exitcode=66 halt_on_error=0`; inherited `log_path`/exit overrides
+  cannot silently redirect or hide worker findings.
 - The bundled sample is copied to a temp project. Blocked commands run in a
   separate generated Go module. Neither uses the repository as its workdir.
   Every session has its own temp artifact/data directory.
@@ -58,7 +68,10 @@ files are removed. Keep stdout/stderr externally if evidence is needed.
 - Cleanup is registered **before approval**, stops the worker before recovering
   final PID ownership, kills only the captured owned command group, joins owned
   server/worker processes, terminates the owned session before another subtest
-  can resume it, and removes temp files on normal test failure too.
+  can resume it, and removes temp files on normal test failure too. Worker-stop
+  errors are reported non-fatally and never skip the separate orphan-group
+  cleanup. ESRCH during signaling still joins the waiter (it can race reaping);
+  graceful and fallback joins remain bounded to 10 and 5 seconds.
   Like other Go tests, cleanup cannot be guaranteed if the entire test runner or
   machine is forcibly killed; do not externally SIGKILL the runner.
 - Ephemeral listener reservations must be closed before the CLI binds (the CLI
@@ -94,6 +107,23 @@ files are removed. Keep stdout/stderr externally if evidence is needed.
    worker is stopped, proving recovery does not require old display events.
    This is not a PTY/interactive Bubble Tea restart test; interactive rendering,
    terminal keystrokes and real-model smoke remain outside this suite.
+
+## Harness regressions (no Temporal required)
+
+```sh
+go test -count=1 -p=1 -run 'TestProcess' ./internal/integration
+go test -race -count=1 -p=1 -run 'TestProcess' ./internal/integration
+```
+
+Owned test-binary subprocesses verify that early/shutdown failures, unexpected
+signals, and race-reporting helpers cannot produce a passing parent, while normal
+exit and intentional SIGKILL do pass. Synthetic race markers are placed outside
+both retained excerpts; race builds also execute an actual data race in a
+**grandchild**, including the intentional-kill path. The caller supplies hostile
+`GORACE` overrides to prove they cannot hide child reports. Injected signal errors
+and the ESRCH/reap window verify waiter joining, failure reporting, and completion
+of remaining owned-orphan cleanup. These regressions run in ordinary root tests;
+the live suite still requires explicit opt-in and installed Temporal.
 
 Replay-history capture and Continue-As-New coverage are maintained separately;
 this suite inspects live history but does not commit replay captures. Root build,

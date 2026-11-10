@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -76,10 +77,7 @@ func (s *liveServer) approvalRestart(t *testing.T) {
 	if got := string(readFile(t, path)); got != original {
 		t.Fatal("file changed without approval")
 	}
-	w.stop(t, syscall.SIGTERM)
-	if w.err != nil {
-		t.Fatalf("graceful worker shutdown: %v", w.err)
-	}
+	must(t, w.stop(syscall.SIGTERM))
 	// Drop the display history while no worker can write it. Query/transcript,
 	// not the lossy JSONL, must recover the original pending request.
 	display, err := events.NewStore(in.DataDir).Path(id)
@@ -211,30 +209,33 @@ func (s *liveServer) ownCommand(t *testing.T, id string, in workflows.Input, w *
 	// Register BEFORE approval: an accepted Update may outlive a client timeout.
 	t.Cleanup(func() {
 		// Prevent new command starts before recovering any final ownership data.
-		w.stop(t, syscall.SIGTERM)
-		if b, err := os.ReadFile(filepath.Join(in.Workdir, "pids.json")); err == nil {
-			if err := json.Unmarshal(b, owned); err != nil {
-				t.Errorf("read owned fixture PIDs: %v", err)
+		stopThenCleanup(t, w, func() {
+			if b, err := os.ReadFile(filepath.Join(in.Workdir, "pids.json")); err == nil {
+				if err := json.Unmarshal(b, owned); err != nil {
+					t.Errorf("read owned fixture PIDs: %v", err)
+				}
 			}
-		}
-		if owned.Group == 0 {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-			if desc, err := s.sdk.DescribeWorkflowExecution(ctx, id, ""); err == nil {
-				for _, a := range desc.PendingActivities {
-					if a.ActivityType.GetName() == workflows.CommandActivity && a.HeartbeatDetails != nil {
-						var hb heartbeat
-						if converter.GetDefaultDataConverter().FromPayloads(a.HeartbeatDetails, &hb) == nil {
-							owned.Group = hb.PID
+			if owned.Group == 0 {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				if desc, err := s.sdk.DescribeWorkflowExecution(ctx, id, ""); err == nil {
+					for _, a := range desc.PendingActivities {
+						if a.ActivityType.GetName() == workflows.CommandActivity && a.HeartbeatDetails != nil {
+							var hb heartbeat
+							if converter.GetDefaultDataConverter().FromPayloads(a.HeartbeatDetails, &hb) == nil {
+								owned.Group = hb.PID
+							}
 						}
 					}
 				}
 			}
-		}
-		if owned.Group > 1 {
-			_ = syscall.Kill(-owned.Group, syscall.SIGKILL)
-			assertDead(t, *owned)
-		}
+			if owned.Group > 1 {
+				if err := syscall.Kill(-owned.Group, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+					t.Errorf("kill owned orphan group %d: %v", owned.Group, err)
+				}
+				assertDead(t, *owned)
+			}
+		})
 	})
 	return owned
 }
@@ -311,10 +312,7 @@ func (s *liveServer) beginCommand(t *testing.T, id string) (workflows.Input, *ow
 func (s *liveServer) workerLoss(t *testing.T) {
 	const id = "durability-worker-loss"
 	in, w, pids := s.beginCommand(t, id)
-	w.stop(t, syscall.SIGKILL)
-	if w.err == nil {
-		t.Fatal("expected killed worker exit status")
-	}
+	must(t, w.stop(syscall.SIGKILL))
 	orphanAlive := processAlive(pids.Child)
 	s.reconnect(t)
 	s.startWorker(t)

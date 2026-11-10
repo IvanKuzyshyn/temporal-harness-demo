@@ -5,6 +5,7 @@
 package integration
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -57,61 +59,146 @@ func TestWorkerHelper(t *testing.T) {
 	<-ctx.Done()
 }
 
+// Keep bounded diagnostics while inspecting EVERY byte, not just the final tail.
+// A killed race-instrumented worker cannot report a race via its exit status.
+const captureLimit = 16000
+
+var raceMarker = []byte("WARNING: DATA RACE")
+
+type processOutput struct {
+	mu                  sync.Mutex
+	head, tail, overlap []byte
+	race                bool
+}
+
+func (o *processOutput) Write(b []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	n := len(b)
+	probe := append(o.overlap, b[:min(len(b), len(raceMarker)-1)]...)
+	o.race = o.race || bytes.Contains(probe, raceMarker) || bytes.Contains(b, raceMarker)
+	if len(b) >= len(raceMarker)-1 {
+		o.overlap = append([]byte(nil), b[len(b)-len(raceMarker)+1:]...)
+	} else {
+		o.overlap = append([]byte(nil), probe[max(0, len(probe)-len(raceMarker)+1):]...)
+	}
+	if len(o.head) < captureLimit {
+		o.head = append(o.head, b[:min(len(b), captureLimit-len(o.head))]...)
+	}
+	if len(b) >= captureLimit {
+		o.tail = append(o.tail[:0], b[len(b)-captureLimit:]...)
+	} else {
+		o.tail = append(o.tail, b...)
+		o.tail = o.tail[max(0, len(o.tail)-captureLimit):]
+	}
+	return n, nil
+}
+
+func (o *processOutput) snapshot() (string, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return string(o.head) + "\n[bounded head / tail; race marker latched independently]\n" + string(o.tail), o.race
+}
+
 type ownedProcess struct {
-	cmd  *exec.Cmd
-	done chan struct{}
-	err  error // read only after done is closed
-	log  string
+	cmd             *exec.Cmd
+	done            chan struct{}
+	err             error // read only after done is closed
+	logErr          error // likewise; never mask a capture persistence error with expected SIGKILL
+	log             string
+	output          *processOutput
+	signal          func(int, syscall.Signal) error
+	grace, join     time.Duration
+	intentionalKill bool // only a successfully sent, explicitly requested SIGKILL
 }
 
 func startProcess(t *testing.T, cmd *exec.Cmd, log string) *ownedProcess {
 	t.Helper()
-	f, err := os.Create(log)
-	must(t, err)
-	cmd.Stdout, cmd.Stderr = f, f
+	output := new(processOutput)
+	cmd.Stdout, cmd.Stderr = output, output
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
-		f.Close()
 		t.Fatal(err)
 	}
-	p := &ownedProcess{cmd: cmd, done: make(chan struct{}), log: log}
+	p := &ownedProcess{cmd: cmd, done: make(chan struct{}), log: log, output: output,
+		signal: syscall.Kill, grace: 10 * time.Second, join: 5 * time.Second}
 	go func() {
 		p.err = cmd.Wait()
-		_ = f.Close()
+		b, _ := output.snapshot()
+		p.logErr = os.WriteFile(log, []byte(b), 0600)
 		close(p.done)
 	}()
 	t.Cleanup(func() {
-		p.stop(t, syscall.SIGTERM)
+		if err := p.stop(syscall.SIGTERM); err != nil {
+			t.Errorf("owned process cleanup: %v", err)
+		}
 		if t.Failed() {
-			b, _ := os.ReadFile(log)
-			if len(b) > 16000 {
-				b = b[len(b)-16000:]
-			}
+			b, _ := output.snapshot()
 			t.Logf("owned process log %s:\n%s", log, b)
 		}
 	})
 	return p
 }
 
-func (p *ownedProcess) stop(t *testing.T, sig syscall.Signal) {
-	t.Helper()
+// stop never calls Fatal: callers must still recover and kill separate orphan
+// command groups after ANY stop error. ESRCH may mean Wait reaped the child just
+// before closing done; it is not permission to skip joining that waiter.
+func (p *ownedProcess) stop(sig syscall.Signal) error {
+	var stopErr error
 	select {
 	case <-p.done:
-		return
+		return p.outcome(sig)
 	default:
 	}
 	// This process group was created by startProcess, never discovered by name.
-	must(t, syscall.Kill(-p.cmd.Process.Pid, sig))
+	err := p.signal(-p.cmd.Process.Pid, sig)
+	if err == nil && sig == syscall.SIGKILL {
+		p.intentionalKill = true
+	}
+	if err != nil && !errors.Is(err, syscall.ESRCH) {
+		stopErr = fmt.Errorf("signal owned process %d: %w", p.cmd.Process.Pid, err)
+	}
+	timer := time.NewTimer(p.grace)
+	defer timer.Stop()
 	select {
 	case <-p.done:
-	case <-time.After(10 * time.Second):
-		_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGKILL)
-		select {
-		case <-p.done:
-		case <-time.After(5 * time.Second):
-			t.Errorf("owned process %d did not join", p.cmd.Process.Pid)
+		return errors.Join(stopErr, p.outcome(sig))
+	case <-timer.C:
+		stopErr = errors.Join(stopErr, fmt.Errorf("owned process %d exceeded shutdown bound", p.cmd.Process.Pid))
+		if err := p.signal(-p.cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			stopErr = errors.Join(stopErr, fmt.Errorf("fallback kill: %w", err))
 		}
 	}
+	select {
+	case <-p.done:
+		return errors.Join(stopErr, p.outcome(sig))
+	case <-time.After(p.join):
+		return errors.Join(stopErr, fmt.Errorf("owned process %d did not join", p.cmd.Process.Pid))
+	}
+}
+
+func (p *ownedProcess) outcome(requested syscall.Signal) error {
+	var err error
+	if p.intentionalKill {
+		var exit *exec.ExitError
+		if !errors.As(p.err, &exit) || !exit.ProcessState.Sys().(syscall.WaitStatus).Signaled() || exit.ProcessState.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
+			err = fmt.Errorf("expected intentional SIGKILL, got %v", p.err)
+		}
+	} else if p.err != nil || requested == syscall.SIGKILL {
+		err = fmt.Errorf("unexpected process exit (normal shutdown requires exit 0): %v", p.err)
+	}
+	if _, race := p.output.snapshot(); race {
+		err = errors.Join(err, errors.New("worker race diagnostic: WARNING: DATA RACE (including intentionally killed workers)"))
+	}
+	return errors.Join(err, p.logErr)
+}
+
+func stopThenCleanup(t *testing.T, p *ownedProcess, cleanup func()) {
+	t.Helper()
+	if err := p.stop(syscall.SIGTERM); err != nil {
+		t.Errorf("stop before orphan cleanup: %v", err)
+	}
+	cleanup() // unconditional, even after signal, join, exit-status or race errors
 }
 
 type liveServer struct {
@@ -223,7 +310,7 @@ func (s *liveServer) startWorker(t *testing.T) *ownedProcess {
 	bin, err := os.Executable()
 	must(t, err)
 	cmd := exec.Command(bin, "-test.run=^TestWorkerHelper$", "-test.timeout=5m")
-	cmd.Env = withEnv(os.Environ(), map[string]string{helperGuard: "1", "TEMPORAL_ADDRESS": s.address, "HARNESS_MODEL": "mock", "HARNESS_DURABILITY_READY": ready, "GOTOOLCHAIN": "local", "GOWORK": "off", "GOFLAGS": ""})
+	cmd.Env = withEnv(os.Environ(), map[string]string{helperGuard: "1", "TEMPORAL_ADDRESS": s.address, "HARNESS_MODEL": "mock", "HARNESS_DURABILITY_READY": ready, "GOTOOLCHAIN": "local", "GOWORK": "off", "GOFLAGS": "", "GORACE": workerGORACE()})
 	p := startProcess(t, cmd, filepath.Join(dir, "worker.log"))
 	eventually(t, 35*time.Second, "production worker startup", func() (bool, string) {
 		select {
@@ -236,6 +323,10 @@ func (s *liveServer) startWorker(t *testing.T) *ownedProcess {
 	})
 	return p
 }
+
+// Do not inherit log_path (or exitcode/halt overrides) from the caller: all
+// worker race reports must reach the bounded streaming capture, even on SIGKILL.
+func workerGORACE() string { return "log_path=stderr exitcode=66 halt_on_error=0" }
 
 func (s *liveServer) state(t *testing.T, id string, predicate func(workflows.State) bool) workflows.State {
 	t.Helper()
