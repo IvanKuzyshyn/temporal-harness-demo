@@ -78,7 +78,23 @@ and the immediately preceding assistant message's scope; user/system/new assista
 records reset that scope. Reused call IDs in later runs remain distinct. Live
 assistant `MessageRef`s reconcile with the workflow artifact plus message ID,
 using the same hashed opaque reference as the bounded event cache. Identical
-content under different IDs remains separate conversation.
+content under different IDs remains separate conversation. Matching live entries
+are retired when accepting a page, and incoming matching events are suppressed.
+A FIFO retains up to **512 completed MessageRef hashes** independently of the
+current page and Query snapshot, so evicting a durable row cannot immediately
+resurrect its completed stream on replay. This is a bounded identity horizon,
+not an all-session historical index: references older than that horizon require
+the corresponding durable page for reconciliation. Retirement resets with the
+session or original DataDir; directory changes also discard old-root live entries.
+
+Workflow/parent IDs use separate **64-character SHA-256 keys** over their original
+bytes (empty stays empty), never sanitized labels for identity comparisons.
+The TUI-only event projection retains labels of at most **256 bytes** alongside
+those keys. Parent classification compares the session ID in the same hashed
+domain. Distinct IDs that render alike remain distinct through retry and
+reconnect, including legacy unreferenced segments. The shared event protocol is
+unchanged; reconnect validates sequence-only events while the bounded TUI pending
+buffer retains the complete display projection.
 
 Live tool/child events are explicitly best-effort and unverified. They never
 rewrite or certify a persisted tool result based on a reused call ID. Durable
@@ -121,6 +137,21 @@ success; prose and live ToolEnd events do not verify commands. Legacy/unstructur
 results have unknown outcomes. Successful `read_file` content historically has no
 separate envelope, so even JSON-shaped file data is treated as captured content,
 not trusted outcome metadata.
+
+Outcome decoding selects two separate writer schemas: an ordinary `tools.Result`
+requires a nonempty matching `toolCallId`, string `output`, boolean `isError`,
+well-typed optional `interrupted` and a completely valid string-valued `details`
+map. Command exit evidence comes only from `details.exitCode`; optional
+`details.executionError` must be `"true"` or `"false"`. Verification uses the
+identity-less `workflows.verificationResult` shape: `exitCode` (integer or null),
+`isError`, `interrupted`, `executionError`, `logRef`, `tail`, and `truncated`.
+All seven fields must be present and correctly typed, with a nonblank log ref.
+A present identity, even null/malformed/mismatched, cannot fall back to verification.
+Mixed ordinary/top-level verification evidence, malformed/null discriminators,
+partial maps, and malformed explicit exit codes cannot certify success. Failure
+and interruption override zero exit; missing/null exit never means zero. Captured
+output, details and log references remain visible even when the outcome is
+unavailable. No workflow writer or artifact schema is changed.
 
 Task 4 still owns the visual redesign, phase styling, pinned-prompt layout,
 follow/unread presentation, stable record-level scroll anchoring, mouse scrolling,

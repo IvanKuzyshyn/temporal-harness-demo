@@ -7,10 +7,133 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/activities"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/events"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/workflows"
 )
+
+func TestJournalCompletedStreamDoesNotResurrect(t *testing.T) {
+	dir := t.TempDir()
+	records := durableRecords(64)
+	records[0].Message = llm.Message{Role: "assistant", Content: "OLD_COMPLETED_SENTINEL"}
+	saveHistory(t, dir, "s", records)
+	m := New(nil, Options{SessionID: "s"})
+	defer m.Close()
+	ref := activities.TranscriptRef("s") + "#" + records[0].ID
+	m.applyEvent(retryEvent(1, events.MessageUpdate, "s", "", ref, records[0].Message.Content))
+	m.Update(m.syncHistory(&workflows.SessionInfo{DataDir: dir}, m.queryID)())
+	if strings.Count(m.viewport.GetContent(), "OLD_COMPLETED_SENTINEL") != 1 {
+		t.Fatal("initial reconciliation failed")
+	}
+	records = append(records, durableRecords(65)[64])
+	saveHistory(t, dir, "s", records)
+	m.Update(m.loadHistory(0)())
+	if m.history.page.Before != 1 || strings.Contains(m.viewport.GetContent(), "OLD_COMPLETED_SENTINEL") {
+		t.Fatal("completed record resurrected after page eviction")
+	}
+	m.Update(m.loadHistory(m.history.page.Before)())
+	m.Update(m.loadHistory(0)())
+	// No successful Query has cleared the stream. Retry/reconnect replay must
+	// not undo reconciliation, even after older -> latest navigation.
+	m.applyEvent(retryEvent(2, events.MessageStart, "s", "", ref, ""))
+	m.applyEvent(retryEvent(3, events.MessageUpdate, "s", "", ref, "OLD_COMPLETED_SENTINEL"))
+	m.refreshViewport(false)
+	if strings.Contains(m.viewport.GetContent(), "OLD_COMPLETED_SENTINEL") {
+		t.Fatal("replayed completed reference resurrected")
+	}
+	m.applyEvent(retryEvent(4, events.MessageUpdate, "s", "", "distinct", "OLD_COMPLETED_SENTINEL"))
+	m.refreshViewport(false)
+	if strings.Count(m.viewport.GetContent(), "OLD_COMPLETED_SENTINEL") != 1 {
+		t.Fatal("distinct current message suppressed by text")
+	}
+	// A new authoritative directory and a new session both reset retirement.
+	other := t.TempDir()
+	saveHistory(t, other, "s", nil)
+	m.Update(m.syncHistory(&workflows.SessionInfo{DataDir: other}, m.queryID)())
+	if len(m.stream) != 0 {
+		t.Fatal("old-directory live entries retained")
+	}
+	m.applyEvent(retryEvent(5, events.MessageUpdate, "s", "", ref, "new root"))
+	m.refreshViewport(false)
+	if !strings.Contains(m.viewport.GetContent(), "new root") {
+		t.Fatal("retirement leaked across directories")
+	}
+	m.switchSession("other")
+	m.applyEvent(retryEvent(1, events.MessageUpdate, "other", "", ref, "new session"))
+	m.refreshViewport(false)
+	if !strings.Contains(m.viewport.GetContent(), "new session") {
+		t.Fatal("retirement leaked across sessions")
+	}
+}
+
+func TestJournalOpaqueWorkflowIdentity(t *testing.T) {
+	id := "session\u200dname"
+	dir := t.TempDir()
+	if _, err := events.NewStore(dir).Path(id); err != nil {
+		t.Fatalf("unsupported fixture identity: %v", err)
+	}
+	records := durableRecords(1)
+	records[0].Message = llm.Message{Role: "assistant", Content: "IDENTITY_SENTINEL"}
+	saveHistory(t, dir, id, records)
+	m := New(nil, Options{SessionID: id})
+	defer m.Close()
+	historySnapshot(t, m, dir)
+	ref := activities.TranscriptRef(id) + "#" + records[0].ID
+	m.applyEvent(retryEvent(1, events.MessageUpdate, id, "", ref, "IDENTITY_SENTINEL"))
+	m.refreshViewport(false)
+	if strings.Count(m.viewport.GetContent(), "IDENTITY_SENTINEL") != 1 {
+		t.Fatalf("opaque parent failed reconciliation: %s", m.viewport.GetContent())
+	}
+	m.applyEvent(retryEvent(2, events.MessageUpdate, id, "", "current", "parent draft"))
+	// These raw IDs have exactly the same sanitized display label. Neither
+	// other-workflow nor child messages may be suppressed by the parent's ref.
+	m.applyEvent(retryEvent(3, events.MessageUpdate, "sessionname", "", ref, "other draft"))
+	m.applyEvent(retryEvent(4, events.MessageUpdate, "sessionname", id, ref, "child draft"))
+	m.applyEvent(retryEvent(5, events.MessageUpdate, "sessionname", "sessionname", ref, "other parent draft"))
+	m.applyEvent(retryEvent(6, events.MessageStart, "sessionname", id, ref, ""))
+	m.applyEvent(retryEvent(7, events.MessageUpdate, "sessionname", id, ref, "child replacement"))
+	m.refreshViewport(false)
+	view := m.viewport.GetContent()
+	for _, want := range []string{"parent draft", "child sessionname: Assistant (stream draft, best-effort): other draft", "child replacement", "other parent draft"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("lost distinct identity %q: %s", want, view)
+		}
+	}
+	if strings.Contains(m.stream[0].label, "child") || len(m.stream) != 4 || strings.Contains(view, "child draft") {
+		t.Fatalf("parent/child/retry identities aliased: %+v", m.stream)
+	}
+	// The same opaque keys must survive the pending Query replay path.
+	m.reconnect = nil
+	m.beginQuery()
+	_, cmd := m.Update(snapshotMsg{epoch: m.epoch, query: m.queryID, state: workflows.State{Session: &workflows.SessionInfo{DataDir: dir}}})
+	if cmd != nil {
+		m.Update(cmd())
+	}
+	if m.viewport.GetContent() != view {
+		t.Fatalf("reconnect lost opaque keys: %s", m.viewport.GetContent())
+	}
+}
+
+func TestJournalRetirementBoundAndSnapshotLifetime(t *testing.T) {
+	m := New(nil, Options{SessionID: "s"})
+	defer m.Close()
+	for i := 0; i < maxReplayEvents*2; i++ {
+		m.retireStream(messageRefIdentity(fmt.Sprint(i)))
+	}
+	if len(m.history.retired) != maxReplayEvents {
+		t.Fatal("retirement cache is not bounded")
+	}
+	last := m.history.retired[len(m.history.retired)-1]
+	m.Update(snapshotMsg{epoch: m.epoch, query: m.queryID})
+	if !m.persistedStream(streamEntry{messageRef: last, workflowKey: optionalIdentity("s")}) {
+		t.Fatal("snapshot cleared retirement")
+	}
+	m.switchSession("other")
+	if len(m.history.retired) != 0 {
+		t.Fatal("session retained retirement cache")
+	}
+}
 
 func TestJournalDetailsBoundsAndLatestControls(t *testing.T) {
 	dir := t.TempDir()
@@ -75,6 +198,58 @@ func TestJournalDetailsBoundsAndLatestControls(t *testing.T) {
 		t.Fatal("unreconcilable optimistic row")
 	}
 }
+func TestJournalOutcomeSchemasFailClosed(t *testing.T) {
+	cases := []struct{ name, content, status string }{
+		{"review identity contradiction", `{"toolCallId":"other","tail":"","logRef":"logs/x","exitCode":0,"isError":false}`, "unavailable"},
+		{"review execution failure", `{"tail":"","logRef":"logs/x","exitCode":0,"isError":false,"executionError":true}`, "unavailable"},
+		{"review partial map", `{"toolCallId":"call","isError":false,"details":{"exitCode":"0","executionError":true}}`, "unavailable"},
+		{"review malformed explicit exit", `{"toolCallId":"call","isError":false,"exitCode":"invalid","details":{"exitCode":"0"}}`, "unavailable"},
+		{"ordinary zero", `{"toolCallId":"call","output":"CAPTURE","isError":false,"details":{"exitCode":"0","logRef":"logs/x"}}`, "succeeded"},
+		{"ordinary malformed explicit exit with full envelope", `{"toolCallId":"call","output":"CAPTURE","isError":false,"exitCode":"invalid","details":{"exitCode":"0"}}`, "unavailable"},
+		{"ordinary partial details with full envelope", `{"toolCallId":"call","output":"CAPTURE","isError":false,"details":{"exitCode":"0","executionError":true}}`, "unavailable"},
+		{"ordinary denied", `{"toolCallId":"call","output":"CAPTURE","isError":true}`, "failed/denied"},
+		{"ordinary nonzero", `{"toolCallId":"call","output":"CAPTURE","isError":false,"details":{"exitCode":"2"}}`, "failed"},
+		{"ordinary failure", `{"toolCallId":"call","output":"CAPTURE","isError":false,"details":{"exitCode":"0","executionError":"true"}}`, "failed"},
+		{"ordinary interrupted", `{"toolCallId":"call","output":"CAPTURE","isError":false,"interrupted":true,"details":{"exitCode":"0"}}`, "interrupted"},
+		{"ordinary missing exit", `{"toolCallId":"call","output":"CAPTURE","isError":false}`, "unavailable"},
+		{"ordinary null exit", `{"toolCallId":"call","output":"CAPTURE","isError":false,"details":{"exitCode":null}}`, "unavailable"},
+		{"ordinary bad discriminator", `{"toolCallId":"call","output":"CAPTURE","isError":false,"details":{"exitCode":"0","executionError":"invalid"}}`, "unavailable"},
+		{"ordinary null discriminator", `{"toolCallId":"call","output":"CAPTURE","isError":false,"interrupted":null,"details":{"exitCode":"0"}}`, "unavailable"},
+	}
+	verification := `{"tail":"CAPTURE","logRef":"logs/x","exitCode":0,"isError":false,"executionError":false,"interrupted":false,"truncated":false}`
+	cases = append(cases, struct{ name, content, status string }{"verification zero", verification, "succeeded"})
+	for _, change := range []struct{ name, from, to, status string }{
+		{"nonzero", `"exitCode":0`, `"exitCode":2`, "failed"},
+		{"null exit", `"exitCode":0`, `"exitCode":null`, "unavailable"},
+		{"missing exit", `"exitCode":0,`, ``, "unavailable"},
+		{"execution failure", `"executionError":false`, `"executionError":true`, "failed"},
+		{"isError failure", `"isError":false`, `"isError":true`, "failed/denied"},
+		{"malformed exit", `"exitCode":0`, `"exitCode":"0"`, "unavailable"},
+		{"interrupted", `"interrupted":false`, `"interrupted":true`, "interrupted"},
+		{"null isError", `"isError":false`, `"isError":null`, "unavailable"},
+		{"malformed executionError", `"executionError":false`, `"executionError":"false"`, "unavailable"},
+		{"contradictory identity", `"tail":`, `"toolCallId":"other","tail":`, "unavailable"},
+		{"null identity", `"tail":`, `"toolCallId":null,"tail":`, "unavailable"},
+		{"malformed identity", `"tail":`, `"toolCallId":123,"tail":`, "unavailable"},
+		{"empty identity", `"tail":`, `"toolCallId":"","tail":`, "unavailable"},
+	} {
+		cases = append(cases, struct{ name, content, status string }{"verification " + change.name, strings.Replace(verification, change.from, change.to, 1), change.status})
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := durableToolText("run_command", "call", tc.content)
+			if !strings.Contains(got, tc.status) || (tc.status != "succeeded" && strings.Contains(got, "[succeeded]")) {
+				t.Fatalf("want %s, got %s", tc.status, got)
+			}
+			for _, capture := range []string{"CAPTURE", "logs/x", "executionError", "exitCode"} {
+				if strings.Contains(tc.content, capture) && !strings.Contains(got, capture) {
+					t.Fatalf("lost captured %s: %s", capture, got)
+				}
+			}
+		})
+	}
+}
+
 func TestJournalNeverCertifiesOutcomeFromProseOrUnstructuredRead(t *testing.T) {
 	cases := []struct{ name, id, content, forbidden string }{
 		{"read_file", "call", `{"toolCallId":"call","isError":false,"output":"tests passed"}`, "[succeeded]"},

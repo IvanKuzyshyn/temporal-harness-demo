@@ -54,9 +54,9 @@ func runCommand(t *testing.T, m *Model, text string, mod tea.KeyMod) tea.Msg {
 	}
 	return cmd()
 }
-func delta(seq uint64, text string) events.Event {
+func delta(seq uint64, text string) streamEvent {
 	b, _ := json.Marshal(events.MessageData{Role: "assistant", Delta: text})
-	return events.Event{Seq: seq, WorkflowID: "one", Type: events.MessageUpdate, Data: b}
+	return compactEvent(events.Event{Seq: seq, WorkflowID: "one", Type: events.MessageUpdate, Data: b})
 }
 
 func TestTailStartsBeforeSnapshotAndFiltersStale(t *testing.T) {
@@ -91,7 +91,7 @@ func TestGapForcesQuery(t *testing.T) {
 	m.started = true
 	m.reconnect = nil
 	m.lastSeq = 4
-	m.Update(tailMsg{epoch: m.epoch, events: []events.Event{delta(6, "gap")}, offset: 50, at: time.Now()})
+	m.Update(tailMsg{epoch: m.epoch, events: []streamEvent{delta(6, "gap")}, offset: 50, at: time.Now()})
 	if m.reconnect == nil || !m.queryPending {
 		t.Fatal("gap did not initiate snapshot")
 	}
@@ -163,7 +163,7 @@ func TestSwitchIgnoresStaleInflightResults(t *testing.T) {
 	m.offset = 42
 	m.switchSession("two")
 	m.Update(snapshotMsg{epoch: old, query: m.queryID, state: workflows.State{Answer: "wrong", LastSeq: 999}})
-	m.Update(tailMsg{epoch: old, events: []events.Event{delta(1, "wrong")}, offset: 999})
+	m.Update(tailMsg{epoch: old, events: []streamEvent{delta(1, "wrong")}, offset: 999})
 	m.Update(operationMsg{epoch: old, label: "wrong", err: errors.New("wrong")})
 	m.Update(newSessionMsg{epoch: old, id: "wrong"})
 	if m.lastSeq != 0 || m.offset != 0 || strings.Contains(m.View().Content, "wrong") || m.opts.SessionID != "two" {

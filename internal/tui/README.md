@@ -61,10 +61,15 @@ JSONL cannot erase the persisted conversation.
 The UI retains one contiguous page of up to 64 complete durable records (from a
 32MiB-bounded artifact), plus 128 entries each for local notices, pattern log, and
 command events (4KiB per entry), 128 live segments (64KiB assistant / 4KiB tool),
-and 512 compact replay events. The journal overview limits durable record text
+and 512 compact replay events. A separate FIFO of up to 512 completed MessageRef
+hashes retires matching live entries across page eviction and snapshot replay;
+this bounded replay horizon resets on session/original-directory changes.
+Workflow and parent keys are SHA-256 identities separate from sanitized display
+labels, including in pending reconnect events. The journal overview limits durable record text
 to 4KiB each; selected detail permits 504KiB. Aggregate journal viewport text is
 bounded to 512KiB, with explicit truncation labels. Pending reconnect buffers use the events package's 4096-event cap,
-with a same-sized recovery copy. Prompt input has a hard aggregate 16,384-rune
+with a same-sized TUI projection buffer; the events-package copy validates only
+sequence numbers. Prompt input has a hard aggregate 16,384-rune
 bound (at most 64KiB UTF-8), independent of display width; all keyboard and paste
 insertions share sanitization and the retained-rune budget.
 Display payloads are compacted before buffering, and C0/C1/escape and Unicode

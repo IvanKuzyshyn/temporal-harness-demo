@@ -20,7 +20,8 @@ type historyState struct {
 	jumpLatest             bool
 	page                   activities.TranscriptPage
 	err                    string
-	detailID               string // selection follows durable identity, not a row offset
+	detailID               string   // selection follows durable identity, not a row offset
+	retired                []string // bounded completed MessageRef identities, independent of page
 }
 type historyMsg struct {
 	epoch, generation, query uint64
@@ -41,6 +42,10 @@ func (m *Model) syncHistory(session *workflows.SessionInfo, query uint64) tea.Cm
 		}
 		if dir != previousDir {
 			m.offset = 0
+			if previousDir != "" {
+				m.stream = nil
+				m.newMessage = true
+			}
 			m.pending = nil
 			m.recent = nil
 			if m.reconnect != nil {
@@ -100,6 +105,7 @@ func (m *Model) acceptHistory(msg historyMsg) {
 	} else {
 		changedWindow := m.history.older != (msg.before > 0) || (msg.before > 0 && m.history.page.Before != msg.page.Before)
 		m.history.page = msg.page
+		m.reconcileStreams()
 		if changedWindow {
 			m.history.detailID = ""
 		}

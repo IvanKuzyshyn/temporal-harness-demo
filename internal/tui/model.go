@@ -48,9 +48,9 @@ const (
 )
 
 type streamEntry struct {
-	tool                                     bool
-	label, text                              string
-	messageRef, workflowID, parentWorkflowID string
+	tool                               bool
+	label, text                        string
+	messageRef, workflowKey, parentKey string
 }
 
 // Model implements tea.Model using pointer semantics. Do not copy a Model or
@@ -65,11 +65,11 @@ type Model struct {
 	epoch, queryID                  uint64
 	started, queryPending, quitting bool
 	reconnect                       *events.Reconnect
-	pending                         []events.Event
+	pending                         []streamEvent
 	lastSnapshot                    time.Time
 	lastSeq                         uint64
 	displaySeq                      uint64
-	recent                          []events.Event
+	recent                          []streamEvent
 	newMessage                      bool
 	offset                          int64
 	offsets                         map[string]int64
@@ -261,18 +261,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recent = nil
 		m.newMessage = false
 		if m.reconnect != nil {
-			pending, err := m.reconnect.Resolve(m.lastSeq)
+			_, err := m.reconnect.Resolve(m.lastSeq)
 			m.reconnect = nil
 			if err != nil {
 				m.reconnect = events.NewReconnect()
-				_ = m.reconnect.Buffer(m.pending)
+				_ = m.reconnect.Buffer(sequenceEvents(m.pending))
 				m.notice = "Stream gap; refreshing snapshot"
 				m.refreshViewport(false)
 				return m, tea.Batch(m.beginQuery(), historyCmd)
 			}
+			pending := m.pending
 			m.pending = nil
 			for _, e := range pending {
-				m.applyEvent(e)
+				if e.Seq > msg.state.LastSeq {
+					m.applyEvent(e)
+				}
 			}
 		}
 		m.refreshViewport(false)

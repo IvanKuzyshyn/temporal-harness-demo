@@ -102,7 +102,7 @@ func displayState(s workflows.State) workflows.State {
 	return out
 }
 
-func (m *Model) applyEvent(e events.Event) {
+func (m *Model) applyEvent(e streamEvent) {
 	m.lastSeq = e.Seq
 	if len(m.recent) >= maxReplayEvents {
 		copy(m.recent, m.recent[1:])
@@ -114,7 +114,7 @@ func (m *Model) applyEvent(e events.Event) {
 	newLog := e.Seq > m.displaySeq
 	m.displaySeq = max(m.displaySeq, e.Seq)
 	prefix := ""
-	if e.ParentWorkflowID != "" || (e.WorkflowID != "" && e.WorkflowID != m.opts.SessionID) {
+	if e.parentKey != "" || (e.workflowKey != "" && e.workflowKey != optionalIdentity(m.opts.SessionID)) {
 		prefix = "  child " + bounded(safeText(e.WorkflowID), 128) + ": "
 	}
 	if newLog && (e.Pattern != "" && e.Pattern != events.None || e.Type == events.ChildStarted || e.Type == events.ChildCompleted) {
@@ -131,12 +131,18 @@ func (m *Model) applyEvent(e events.Event) {
 		}
 		label := prefix + "Assistant (stream draft, best-effort): "
 		if d.MessageRef != "" && (d.Role == "assistant" || d.Role == "") {
-			// Identity lives on bounded entries, so snapshot reconstruction and
-			// session switches also reset all attempt-tracking state.
+			candidate := streamEntry{messageRef: d.MessageRef, workflowKey: e.workflowKey, parentKey: e.parentKey}
+			if m.persistedStream(candidate) {
+				m.retireStream(d.MessageRef)
+				m.newMessage = true
+				return
+			}
+			// Attempt identity lives on bounded entries; completed identities have
+			// a separate bounded replay horizon that survives page replacement.
 			index := -1
 			for i := range m.stream {
 				entry := &m.stream[i]
-				if entry.messageRef == d.MessageRef && entry.workflowID == e.WorkflowID && entry.parentWorkflowID == e.ParentWorkflowID {
+				if entry.messageRef == d.MessageRef && entry.workflowKey == e.workflowKey && entry.parentKey == e.parentKey {
 					index = i
 					break
 				}
@@ -147,7 +153,7 @@ func (m *Model) applyEvent(e events.Event) {
 					m.stream = m.stream[:maxEntries-1]
 				}
 				index = len(m.stream)
-				m.stream = append(m.stream, streamEntry{label: label, messageRef: d.MessageRef, workflowID: e.WorkflowID, parentWorkflowID: e.ParentWorkflowID})
+				m.stream = append(m.stream, streamEntry{label: label, messageRef: d.MessageRef, workflowKey: e.workflowKey, parentKey: e.parentKey})
 			}
 			entry := &m.stream[index]
 			if e.Type == events.MessageStart {
@@ -166,12 +172,13 @@ func (m *Model) applyEvent(e events.Event) {
 		if d.Delta == "" {
 			return
 		}
-		if m.newMessage || len(m.stream) == 0 || m.stream[len(m.stream)-1].label != label {
+		if m.newMessage || len(m.stream) == 0 || m.stream[len(m.stream)-1].label != label ||
+			m.stream[len(m.stream)-1].workflowKey != e.workflowKey || m.stream[len(m.stream)-1].parentKey != e.parentKey {
 			if len(m.stream) >= maxEntries {
 				copy(m.stream, m.stream[1:])
 				m.stream = m.stream[:maxEntries-1]
 			}
-			m.stream = append(m.stream, streamEntry{label: label})
+			m.stream = append(m.stream, streamEntry{label: label, workflowKey: e.workflowKey, parentKey: e.parentKey})
 		}
 		m.newMessage = false
 		last := &m.stream[len(m.stream)-1]

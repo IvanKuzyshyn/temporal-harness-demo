@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/activities"
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/tools"
 )
 
 const maxJournalText = 512 << 10
@@ -59,8 +60,13 @@ func (m *Model) appendLiveEntry(entry streamEntry) {
 	m.newMessage = true
 }
 func (m *Model) persistedStream(entry streamEntry) bool {
-	if entry.messageRef == "" || entry.parentWorkflowID != "" || (entry.workflowID != "" && entry.workflowID != m.opts.SessionID) {
+	if entry.messageRef == "" || entry.parentKey != "" || (entry.workflowKey != "" && entry.workflowKey != optionalIdentity(m.opts.SessionID)) {
 		return false
+	}
+	for _, ref := range m.history.retired {
+		if entry.messageRef == ref {
+			return true
+		}
 	}
 	ref := activities.TranscriptRef(m.opts.SessionID)
 	for _, r := range m.history.page.Entries {
@@ -70,6 +76,35 @@ func (m *Model) persistedStream(entry streamEntry) bool {
 	}
 	return false
 }
+
+// Retirement outlives page replacement and successful snapshots. Keep a bounded
+// replay horizon, not an ever-growing index of every historical message.
+func (m *Model) retireStream(ref string) {
+	for _, old := range m.history.retired {
+		if old == ref {
+			return
+		}
+	}
+	if len(m.history.retired) == maxReplayEvents {
+		copy(m.history.retired, m.history.retired[1:])
+		m.history.retired = m.history.retired[:maxReplayEvents-1]
+	}
+	m.history.retired = append(m.history.retired, ref)
+}
+
+func (m *Model) reconcileStreams() {
+	kept := m.stream[:0]
+	for _, entry := range m.stream {
+		if m.persistedStream(entry) {
+			m.retireStream(entry.messageRef)
+		} else {
+			kept = append(kept, entry)
+		}
+	}
+	clear(m.stream[len(kept):])
+	m.stream = kept
+}
+
 func journalText(s string, limit int) string {
 	s = safeText(s)
 	if len(s) > limit {
@@ -153,55 +188,14 @@ func durableToolText(name, callID, content string) string {
 		return content
 	}
 	// Successful read_file content is raw file data, not a result envelope.
-	// Never certify an outcome from JSON-shaped repository text.
-	var identity string
-	_ = json.Unmarshal(fields["toolCallId"], &identity)
-	envelope := identity != "" && identity == callID && name != "read_file"
-	if name == "run_command" && fields["tail"] != nil && fields["logRef"] != nil && fields["exitCode"] != nil {
-		envelope = true // durable after-run verification result schema
-	}
-	if !envelope {
+	if name == "read_file" {
 		return "[captured content; outcome metadata unavailable]\n" + content
 	}
-	status := "outcome unavailable"
-	var failed, interrupted bool
-	if raw, ok := fields["isError"]; ok && string(raw) != "null" && json.Unmarshal(raw, &failed) == nil {
-		if failed {
-			status = "failed/denied (see captured result)"
-		} else {
-			status = "succeeded"
-		}
-	}
-	if name == "run_command" && status == "succeeded" {
-		// isError=false alone is not execution evidence. Require an actual
-		// captured exit code, including the after-run verification schema.
-		var code *int
-		if err := json.Unmarshal(fields["exitCode"], &code); err != nil {
-			code = nil
-		}
-		var details map[string]string
-		_ = json.Unmarshal(fields["details"], &details)
-		if code == nil {
-			if n, err := strconv.Atoi(details["exitCode"]); err == nil {
-				code = &n
-			}
-		}
-		switch {
-		case details["executionError"] == "true":
-			status = "failed"
-		case code == nil:
-			status = "outcome unavailable (no captured exit code)"
-		case *code != 0:
-			status = "failed"
-		}
-	}
-	if json.Unmarshal(fields["interrupted"], &interrupted) == nil && interrupted {
-		status = "interrupted"
-	}
+	status := toolOutcome(name, callID, content, fields)
 	var output string
 	for _, key := range []string{"output", "tail"} {
 		var text string
-		if json.Unmarshal(fields[key], &text) == nil {
+		if strictField(fields[key], &text) {
 			output += text
 			delete(fields, key)
 		}
@@ -209,6 +203,90 @@ func durableToolText(name, callID, content string) string {
 	metadata, _ := json.MarshalIndent(fields, "", "  ")
 	return fmt.Sprintf("[%s]\n%s\n%s", status, output, metadata)
 }
+
+// JSON null is not a scalar zero value. In particular it must not certify a
+// false failure flag or turn an invalid exit code into absent fallback evidence.
+func strictField(raw json.RawMessage, into any) bool {
+	return len(raw) != 0 && string(raw) != "null" && json.Unmarshal(raw, into) == nil
+}
+
+func toolOutcome(name, callID, content string, fields map[string]json.RawMessage) string {
+	const unavailable = "outcome unavailable"
+	var failed, interrupted, executionError bool
+	var code *int
+	if _, present := fields["toolCallId"]; present {
+		// Ordinary tools.Result: identity selects this schema even if malformed.
+		// Never reinterpret a contradictory identity as identity-less verification.
+		var result tools.Result
+		if json.Unmarshal([]byte(content), &result) != nil || result.ToolCallID == "" || result.ToolCallID != callID ||
+			!strictField(fields["toolCallId"], &result.ToolCallID) || !strictField(fields["isError"], &result.IsError) ||
+			!strictField(fields["output"], &result.Output) {
+			return unavailable
+		}
+		for _, key := range []string{"exitCode", "executionError", "tail", "logRef", "truncated"} {
+			if _, present := fields[key]; present {
+				return unavailable // mixed schemas, not alternate exit evidence
+			}
+		}
+		if raw, ok := fields["interrupted"]; ok && !strictField(raw, &result.Interrupted) {
+			return unavailable
+		}
+		if raw, ok := fields["details"]; ok {
+			var details map[string]json.RawMessage
+			if !strictField(raw, &details) {
+				return unavailable
+			}
+			for _, value := range details {
+				var text string
+				if !strictField(value, &text) {
+					return unavailable // no partially decoded maps (including null values)
+				}
+			}
+		}
+		if value, ok := result.Details["executionError"]; ok {
+			if value != "true" && value != "false" {
+				return unavailable
+			}
+			executionError = value == "true"
+		}
+		if value, ok := result.Details["exitCode"]; ok {
+			n, err := strconv.Atoi(value)
+			if err != nil {
+				return unavailable
+			}
+			code = &n
+		}
+		failed, interrupted = result.IsError, result.Interrupted
+	} else {
+		// workflows.verificationResult has no identity; all seven fields are
+		// emitted (exitCode may be null). Keep this local read-only projection
+		// separate from tools.Result; workflows must not depend on the TUI.
+		var tail, logRef string
+		var truncated bool
+		if name != "run_command" || !strictField(fields["tail"], &tail) || !strictField(fields["logRef"], &logRef) ||
+			!strictField(fields["isError"], &failed) || !strictField(fields["interrupted"], &interrupted) ||
+			!strictField(fields["executionError"], &executionError) || !strictField(fields["truncated"], &truncated) ||
+			json.Unmarshal(fields["exitCode"], &code) != nil {
+			return unavailable
+		}
+		if strings.TrimSpace(logRef) == "" {
+			return unavailable
+		}
+	}
+	switch {
+	case interrupted:
+		return "interrupted"
+	case failed || executionError:
+		return "failed/denied (see captured result)"
+	case name == "run_command" && code == nil:
+		return "outcome unavailable (no captured exit code)"
+	case name == "run_command" && *code != 0:
+		return "failed"
+	default:
+		return "succeeded"
+	}
+}
+
 func boundedJournal(lines []string) string {
 	var b strings.Builder
 	for _, line := range lines {

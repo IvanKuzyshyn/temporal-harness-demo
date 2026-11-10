@@ -153,8 +153,8 @@ func TestStreamBecomesDurableWithoutDuplicateFinalAnswer(t *testing.T) {
 	// it or matching answer text, must remove the duplicate projection.
 	cmd := m.syncHistory(&workflows.SessionInfo{DataDir: dir}, m.queryID)
 	m.Update(cmd())
-	if len(m.stream) != 1 || strings.Count(m.viewport.GetContent(), "completed answer") != 1 {
-		t.Fatal("live to durable transition duplicated final answer")
+	if len(m.stream) != 0 || len(m.history.retired) != 1 || strings.Count(m.viewport.GetContent(), "completed answer") != 1 {
+		t.Fatal("live to durable transition did not retire the stream exactly once")
 	}
 	m.queryID++
 	_, cmd = m.Update(snapshotMsg{epoch: m.epoch, query: m.queryID, state: workflows.State{LastSeq: 2, Answer: "completed answer", Session: &workflows.SessionInfo{DataDir: dir}}})
