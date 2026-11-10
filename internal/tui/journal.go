@@ -5,11 +5,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/activities"
-	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/tools"
 )
 
 const maxJournalText = 512 << 10
@@ -183,15 +183,21 @@ func (m *Model) journalLines() []string {
 // as scrollable text. No live ToolEnd is allowed to alter this durable record.
 // Unknown/legacy payloads are shown as captured content, never inferred success.
 func durableToolText(name, callID, content string) string {
-	var fields map[string]json.RawMessage
-	if json.Unmarshal([]byte(content), &fields) != nil || fields == nil {
-		return content
-	}
 	// Successful read_file content is raw file data, not a result envelope.
 	if name == "read_file" {
 		return "[captured content; outcome metadata unavailable]\n" + content
 	}
-	status := toolOutcome(name, callID, content, fields)
+	fields, ok := strictObject(content, "toolCallId", "output", "structured", "details", "isError", "interrupted",
+		"exitCode", "executionError", "tail", "logRef", "truncated")
+	if !ok {
+		return "[outcome unavailable]\n" + content
+	}
+	status := toolOutcome(name, callID, fields)
+	if strings.HasPrefix(status, "outcome unavailable") {
+		// Do not reserialize refused evidence: duplicate members, malformed/null
+		// output and alias contradictions must remain visible, not last-key-wins.
+		return "[" + status + "]\n" + content
+	}
 	var output string
 	for _, key := range []string{"output", "tail"} {
 		var text string
@@ -204,23 +210,60 @@ func durableToolText(name, callID, content string) string {
 	return fmt.Sprintf("[%s]\n%s\n%s", status, output, metadata)
 }
 
+// strictObject preserves exact member names and refuses duplicate names (also
+// JSON-escaped equivalents) and case-fold aliases of recognized fields. Unknown
+// extension values remain opaque; they cannot contribute execution evidence.
+func strictObject(content string, recognized ...string) (map[string]json.RawMessage, bool) {
+	dec := json.NewDecoder(strings.NewReader(content))
+	if token, err := dec.Token(); err != nil || token != json.Delim('{') {
+		return nil, false
+	}
+	fields := make(map[string]json.RawMessage)
+	for dec.More() {
+		token, err := dec.Token()
+		key, ok := token.(string)
+		if err != nil || !ok {
+			return nil, false
+		}
+		if _, duplicate := fields[key]; duplicate {
+			return nil, false
+		}
+		for _, canonical := range recognized {
+			if key != canonical && strings.EqualFold(key, canonical) {
+				return nil, false
+			}
+		}
+		var value json.RawMessage
+		if dec.Decode(&value) != nil {
+			return nil, false
+		}
+		fields[key] = value
+	}
+	if token, err := dec.Token(); err != nil || token != json.Delim('}') {
+		return nil, false
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, false
+	}
+	return fields, true
+}
+
 // JSON null is not a scalar zero value. In particular it must not certify a
 // false failure flag or turn an invalid exit code into absent fallback evidence.
 func strictField(raw json.RawMessage, into any) bool {
-	return len(raw) != 0 && string(raw) != "null" && json.Unmarshal(raw, into) == nil
+	return len(raw) != 0 && strings.TrimSpace(string(raw)) != "null" && json.Unmarshal(raw, into) == nil
 }
 
-func toolOutcome(name, callID, content string, fields map[string]json.RawMessage) string {
+func toolOutcome(name, callID string, fields map[string]json.RawMessage) string {
 	const unavailable = "outcome unavailable"
 	var failed, interrupted, executionError bool
 	var code *int
 	if _, present := fields["toolCallId"]; present {
 		// Ordinary tools.Result: identity selects this schema even if malformed.
 		// Never reinterpret a contradictory identity as identity-less verification.
-		var result tools.Result
-		if json.Unmarshal([]byte(content), &result) != nil || result.ToolCallID == "" || result.ToolCallID != callID ||
-			!strictField(fields["toolCallId"], &result.ToolCallID) || !strictField(fields["isError"], &result.IsError) ||
-			!strictField(fields["output"], &result.Output) {
+		var identity, output string
+		if !strictField(fields["toolCallId"], &identity) || identity == "" || identity != callID ||
+			!strictField(fields["isError"], &failed) || !strictField(fields["output"], &output) {
 			return unavailable
 		}
 		for _, key := range []string{"exitCode", "executionError", "tail", "logRef", "truncated"} {
@@ -228,36 +271,42 @@ func toolOutcome(name, callID, content string, fields map[string]json.RawMessage
 				return unavailable // mixed schemas, not alternate exit evidence
 			}
 		}
-		if raw, ok := fields["interrupted"]; ok && !strictField(raw, &result.Interrupted) {
+		if raw, ok := fields["interrupted"]; ok && !strictField(raw, &interrupted) {
 			return unavailable
 		}
+		details := make(map[string]string)
 		if raw, ok := fields["details"]; ok {
-			var details map[string]json.RawMessage
-			if !strictField(raw, &details) {
+			members, valid := strictObject(string(raw), "exitCode", "executionError", "logRef", "truncated")
+			if !valid {
 				return unavailable
 			}
-			for _, value := range details {
+			for key, value := range members {
 				var text string
 				if !strictField(value, &text) {
 					return unavailable // no partially decoded maps (including null values)
 				}
+				details[key] = text
 			}
 		}
-		if value, ok := result.Details["executionError"]; ok {
+		if value, ok := details["executionError"]; ok {
 			if value != "true" && value != "false" {
 				return unavailable
 			}
 			executionError = value == "true"
 		}
-		if value, ok := result.Details["exitCode"]; ok {
+		if value, ok := details["exitCode"]; ok {
 			n, err := strconv.Atoi(value)
 			if err != nil {
 				return unavailable
 			}
 			code = &n
 		}
-		failed, interrupted = result.IsError, result.Interrupted
 	} else {
+		for _, key := range []string{"output", "structured", "details"} {
+			if _, present := fields[key]; present {
+				return unavailable // ordinary fields cannot supplement verification
+			}
+		}
 		// workflows.verificationResult has no identity; all seven fields are
 		// emitted (exitCode may be null). Keep this local read-only projection
 		// separate from tools.Result; workflows must not depend on the TUI.

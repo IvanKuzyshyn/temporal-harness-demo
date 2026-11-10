@@ -147,11 +147,21 @@ identity-less `workflows.verificationResult` shape: `exitCode` (integer or null)
 `isError`, `interrupted`, `executionError`, `logRef`, `tail`, and `truncated`.
 All seven fields must be present and correctly typed, with a nonblank log ref.
 A present identity, even null/malformed/mismatched, cannot fall back to verification.
-Mixed ordinary/top-level verification evidence, malformed/null discriminators,
-partial maps, and malformed explicit exit codes cannot certify success. Failure
-and interruption override zero exit; missing/null exit never means zero. Captured
-output, details and log references remain visible even when the outcome is
-unavailable. No workflow writer or artifact schema is changed.
+Both schemas use exact canonical keys, not case-insensitive struct decoding.
+Duplicate member names (including JSON-escaped equivalents) in the envelope or
+ordinary details, and case-fold aliases of recognized envelope/detail fields, are
+refused. Identity is checked after canonical decoding; exit/failure interpretation
+uses the same completely validated details map. Unrelated extension values are
+opaque and never supply execution evidence.
+
+Mixed ordinary/top-level verification evidence, malformed/null discriminators
+(including whitespace-wrapped null), partial maps, and malformed explicit exit
+codes cannot certify success. Failure and interruption override zero exit;
+missing/null exit never means zero. When certification is unavailable, the original
+content is retained rather than reserialized, preserving contradictory duplicate
+values, malformed/null output, details and log references (subject to the normal
+terminal sanitization/display bounds). No workflow writer or artifact schema is
+changed.
 
 Task 4 still owns the visual redesign, phase styling, pinned-prompt layout,
 follow/unread presentation, stable record-level scroll anchoring, mouse scrolling,
