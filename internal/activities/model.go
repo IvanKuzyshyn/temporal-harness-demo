@@ -118,7 +118,7 @@ func (a *Activities) LLMStream(ctx context.Context, in workflows.LLMInput) (resu
 				return zero, err
 			}
 		}
-		res, err := a.Model.Chat(ctx, llm.Request{Model: in.Model, Messages: messages, Tools: in.Tools, Scenario: in.Scenario, Turn: in.Turn}, func(d llm.Delta) error {
+		res, err := a.Model.Chat(ctx, llm.Request{Model: in.Model, Messages: agentMessages(messages, in.Workdir), Tools: in.Tools, Scenario: in.Scenario, Turn: in.Turn}, func(d llm.Delta) error {
 			if _, err := partial.WriteString(d.Text); err != nil {
 				return err
 			}

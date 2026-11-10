@@ -277,6 +277,8 @@ func TestCommandApplicationErrorDetails(t *testing.T) {
 func TestGatherContextFutures(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
+	// Preserve the legacy four-way schedule and one-time gathering branch.
+	env.OnGetVersion("project-context-refresh/0", workflow.DefaultVersion, workflow.Version(1)).Return(workflow.DefaultVersion)
 	env.RegisterActivityWithOptions(func(context.Context, EmitInput) (uint64, error) { return 1, nil }, activity.RegisterOptions{Name: EmitActivity})
 	var mu sync.Mutex
 	active, peak, count := 0, 0, 0

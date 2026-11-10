@@ -151,6 +151,7 @@ func TestExplorerIsolation(t *testing.T) {
 				require.Equal(t, 15*time.Second, info.HeartbeatTimeout)
 				require.Equal(t, "child-transcript", in.TranscriptRef)
 				require.Equal(t, "explorer", in.Scenario)
+				require.Equal(t, "/selected/explorer", in.Workdir)
 				require.Len(t, in.Tools, 4)
 				for _, d := range in.Tools {
 					require.Contains(t, []string{"read_file", "list_dir", "grep", "tree"}, d.Name)
@@ -174,7 +175,7 @@ func TestExplorerIsolation(t *testing.T) {
 			if strings.HasPrefix(mode, "default-") {
 				steps, tokens = 0, 0
 			}
-			env.ExecuteWorkflow(ExplorerWorkflow, ExplorerInput{ParentScope: events.Scope{StreamID: "parent", WorkflowID: "parent"}, Config: Input{Scenario: "demo"}, Task: "inspect", Path: "../unsafe", MaxSteps: steps, TokenBudget: tokens})
+			env.ExecuteWorkflow(ExplorerWorkflow, ExplorerInput{ParentScope: events.Scope{StreamID: "parent", WorkflowID: "parent"}, Config: Input{Scenario: "demo", Workdir: "/selected/explorer"}, Task: "inspect", Path: "../unsafe", MaxSteps: steps, TokenBudget: tokens})
 			require.Equal(t, events.AgentStart, emitted[0].Type)
 			require.Equal(t, events.AgentEnd, emitted[len(emitted)-2].Type)
 			require.Equal(t, events.AgentSettled, emitted[len(emitted)-1].Type)

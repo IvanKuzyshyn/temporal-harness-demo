@@ -212,14 +212,22 @@ func (r *runtime) executeAllowed(ctx workflow.Context, in ToolInput, replay tool
 }
 
 func (r *runtime) gatherContext(ctx workflow.Context) error {
-	if r.state.ContextGathered {
+	// Scope the marker by logical run: replayed old runs retain their original
+	// scheduling, but a future run in an upgraded open session can refresh.
+	fresh := workflow.GetVersion(ctx, fmt.Sprintf("project-context-refresh/%d", r.state.RunCounter), workflow.DefaultVersion, 1) != workflow.DefaultVersion
+	if !fresh && r.state.ContextGathered {
 		return nil
 	}
 	kinds := []string{"git", "tree", "readme", "todo"}
+	inputID := ""
+	if fresh {
+		kinds = []string{"evidence"}
+		inputID = r.inputID
+	}
 	futures := make([]workflow.Future, len(kinds))
-	_ = r.emit(ctx, events.ParallelStart, events.Parallel, events.ParallelData{ToolCallIDs: kinds, Concurrency: 4})
+	_ = r.emit(ctx, events.ParallelStart, events.Parallel, events.ParallelData{ToolCallIDs: kinds, Concurrency: len(kinds)})
 	for i, kind := range kinds {
-		futures[i] = workflow.ExecuteActivity(activityContext(ctx), GatherActivity, GatherInput{Scope: r.scope, DataDir: r.cfg.DataDir, Workdir: r.cfg.Workdir, Kind: kind})
+		futures[i] = workflow.ExecuteActivity(activityContext(ctx), GatherActivity, GatherInput{Scope: r.scope, DataDir: r.cfg.DataDir, Workdir: r.cfg.Workdir, Kind: kind, InputID: inputID})
 	}
 	var firstErr error
 	for _, future := range futures {

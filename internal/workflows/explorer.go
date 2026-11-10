@@ -91,7 +91,7 @@ func ExplorerWorkflow(ctx workflow.Context, in ExplorerInput) (out ExplorerResul
 		}
 		modelCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{WaitForCancellation: true, TaskQueue: LLMQueue, StartToCloseTimeout: 10 * time.Minute, HeartbeatTimeout: 15 * time.Second, RetryPolicy: &temporal.RetryPolicy{MaximumAttempts: 2}})
 		var res LLMResult
-		if err := workflow.ExecuteActivity(modelCtx, LLMActivity, LLMInput{InputID: r.inputID, Scope: r.scope, Model: r.cfg.Model, DataDir: r.cfg.DataDir, TranscriptRef: r.state.TranscriptRef, Turn: turn, Tools: defs, Scenario: r.cfg.Scenario}).Get(cleanup, &res); err != nil {
+		if err := workflow.ExecuteActivity(modelCtx, LLMActivity, LLMInput{InputID: r.inputID, Scope: r.scope, Model: r.cfg.Model, Workdir: r.cfg.Workdir, DataDir: r.cfg.DataDir, TranscriptRef: r.state.TranscriptRef, Turn: turn, Tools: defs, Scenario: r.cfg.Scenario}).Get(cleanup, &res); err != nil {
 			return ExplorerResult{}, err
 		}
 		if ctx.Err() != nil {

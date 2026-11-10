@@ -41,6 +41,9 @@ func TestSessionChatReceiptAndReconnect(t *testing.T) {
 			t.Error("model invoked before Update receipt")
 		}
 		calls++
+		if in.Workdir != "/selected/parent" {
+			t.Errorf("model workdir=%q", in.Workdir)
+		}
 		if in.Turn != 0 {
 			t.Errorf("turn=%d", in.Turn)
 		}
@@ -80,10 +83,10 @@ func TestSessionChatReceiptAndReconnect(t *testing.T) {
 		}
 		env.CancelWorkflow()
 	}, 3*time.Second)
-	env.ExecuteWorkflow(w.SessionWorkflow, w.Input{})
+	env.ExecuteWorkflow(w.SessionWorkflow, w.Input{Workdir: "/selected/parent"})
 	want := []events.Type{
 		events.AgentStart, events.ParallelStart, events.ParallelEnd, events.TurnStart, events.TurnEnd, events.AgentEnd, events.AgentSettled,
-		events.AgentStart, events.TurnStart, events.TurnEnd, events.AgentEnd, events.AgentSettled,
+		events.AgentStart, events.ParallelStart, events.ParallelEnd, events.TurnStart, events.TurnEnd, events.AgentEnd, events.AgentSettled,
 	}
 	if len(emitted) != len(want) {
 		t.Fatalf("events=%v", emitted)

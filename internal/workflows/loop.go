@@ -99,7 +99,7 @@ func (r *runtime) run(ctx workflow.Context, msg MessageInput) error {
 		var result LLMResult
 		// A canceled run must still join activity cleanup before the next run.
 		waitCtx, _ := workflow.NewDisconnectedContext(ctx)
-		err := workflow.ExecuteActivity(llmCtx, LLMActivity, LLMInput{Scope: r.scope, Model: r.cfg.Model, DataDir: r.cfg.DataDir, TranscriptRef: r.state.TranscriptRef, Turn: turn, Scenario: scenario, InputID: r.inputID, Tools: r.modelTools()}).Get(waitCtx, &result)
+		err := workflow.ExecuteActivity(llmCtx, LLMActivity, LLMInput{Scope: r.scope, Model: r.cfg.Model, Workdir: r.cfg.Workdir, DataDir: r.cfg.DataDir, TranscriptRef: r.state.TranscriptRef, Turn: turn, Scenario: scenario, InputID: r.inputID, Tools: r.modelTools()}).Get(waitCtx, &result)
 		if err != nil {
 			reason := "model_error"
 			if temporal.IsCanceledError(err) || ctx.Err() != nil {

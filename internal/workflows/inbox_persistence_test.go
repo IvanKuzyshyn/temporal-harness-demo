@@ -48,6 +48,19 @@ func (m *inboxRecordingModel) messages() [][]llm.Message {
 	return append([][]llm.Message(nil), m.requests...)
 }
 
+// Provider policy and quoted snapshots are request-only; compare the complete
+// conversational spine to prove assistant/tool pairing and retained input.
+func conversationMessages(messages []llm.Message) []llm.Message {
+	var out []llm.Message
+	for _, m := range messages {
+		if m.Role == "system" || strings.HasPrefix(m.Content, "Supplemental project DATA") {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
 func requireInboxCanceled(t *testing.T, env *testsuite.TestWorkflowEnvironment, checkpoints ...bool) {
 	t.Helper()
 	for i, reached := range checkpoints {
@@ -141,7 +154,7 @@ func TestInboxStopToolsContinueRealPersistence(t *testing.T) {
 				if len(modelMessages) != 2 || toolCalls != 1 {
 					t.Errorf("model calls=%d tool calls=%d", len(modelMessages), toolCalls)
 				}
-				if len(modelMessages) == 2 && !reflect.DeepEqual(modelMessages[1], durableAtStop) {
+				if len(modelMessages) == 2 && !reflect.DeepEqual(conversationMessages(modelMessages[1]), conversationMessages(durableAtStop)) {
 					t.Errorf("resumed request differs from finalized transcript: %+v; durable=%+v", modelMessages[1], durableAtStop)
 				}
 				if len(resultTail) == 1 {
@@ -158,7 +171,7 @@ func TestInboxStopToolsContinueRealPersistence(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if len(messages) != len(durableAtStop)+1 || messages[len(messages)-1].Content != "final answer" || s.HasUnansweredContext || s.LastRunFailure != nil {
+				if len(messages) != len(durableAtStop)+2 || messages[len(messages)-1].Content != "final answer" || s.HasUnansweredContext || s.LastRunFailure != nil {
 					t.Errorf("resumed transcript/state: %+v %+v", messages, s)
 				}
 				env.CancelWorkflow()
@@ -265,7 +278,7 @@ func TestInboxFinalSteerBudgetContinueRealPersistence(t *testing.T) {
 			t.Errorf("calls=%d, wanted exactly two", len(modelMessages))
 		}
 		if len(modelMessages) >= 2 {
-			messages := modelMessages[1]
+			messages := conversationMessages(modelMessages[1])
 			last := messages[len(messages)-1]
 			if last.Role != "user" || last.Content != "retained steer" {
 				t.Errorf("empty/context-only resumed call: %+v", messages)
@@ -279,7 +292,7 @@ func TestInboxFinalSteerBudgetContinueRealPersistence(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(messages) != 8 || s.RunCounter != 2 || s.HasUnansweredContext || s.LastRunFailure != nil {
+		if len(messages) != 6 || s.RunCounter != 2 || s.HasUnansweredContext || s.LastRunFailure != nil {
 			t.Errorf("final transcript/state: %+v %+v", messages, s)
 		}
 		env.CancelWorkflow()

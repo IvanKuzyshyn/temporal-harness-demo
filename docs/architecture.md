@@ -38,7 +38,7 @@ flowchart LR
 
 ### 2. Parallel execution
 
-[Tool executor](../internal/workflows/toolexec.go) preflights and authorizes in model order before execution. All-parallel-safe batches use a workflow semaphore of four; any sequential/unknown tool makes the whole batch sequential. Results remain in model order, while display events can arrive in completion order. All futures are joined rather than failing fast. Initial git/tree/README/TODO context gathering also uses concurrent activities.
+[Tool executor](../internal/workflows/toolexec.go) preflights and authorizes in model order before execution. All-parallel-safe batches use a workflow semaphore of four; any sequential/unknown tool makes the whole batch sequential. Results remain in model order, while display events can arrive in completion order. All futures are joined rather than failing fast. New logical runs gather one bounded, fresh project-evidence snapshot in an activity. A per-run version gate retains the original concurrent git/tree/README/TODO schedule for old histories. [Project grounding](project-grounding.md) describes discovery bounds, retry keys, quoted-data request preparation, and model reliability limits.
 
 ### 3. Child workflow
 
