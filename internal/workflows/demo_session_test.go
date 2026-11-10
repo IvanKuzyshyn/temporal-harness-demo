@@ -147,8 +147,24 @@ func TestDemoSessionActualActivities(t *testing.T) {
 					}
 					env.RegisterDelayedCallback(func() {
 						s := query(t, env)
+						wantFailure := ""
+						if phase == 1 && mode == "deny-command" {
+							wantFailure = "interrupted"
+						} else if phase == 1 && mode == "failing-tests" {
+							wantFailure = "restart_limit"
+						}
+						gotFailure := ""
 						if s.LastRunFailure != nil {
-							t.Fatalf("run failed: %+v", s.LastRunFailure)
+							gotFailure = s.LastRunFailure.Reason
+						}
+						if gotFailure != wantFailure {
+							t.Fatalf("failure=%+v, want %q", s.LastRunFailure, wantFailure)
+						}
+						if wantFailure != "" && (!s.QueuePaused || !s.VerificationPending || !s.HasUnansweredContext) {
+							t.Fatalf("verification failure lost resumability: %+v", s)
+						}
+						if phase == 1 && mode == "failing-tests" && (s.AfterRunCount != 2 || !strings.Contains(s.Answer, "Verification: go test ./... failed")) {
+							t.Fatalf("missing bounded repair outcome: %+v", s)
 						}
 						if phase == 0 { // Demo starts in an already-open ordinary-chat session.
 							phase = 1
@@ -161,7 +177,7 @@ func TestDemoSessionActualActivities(t *testing.T) {
 								t.Errorf("untruthful tests: %s", s.Answer)
 							}
 							wrote := mode != "deny-write" && mode != "unrecognized"
-							if strings.Contains(s.Answer, "write applied") != wrote {
+							if mode != "failing-tests" && strings.Contains(s.Answer, "write applied") != wrote {
 								t.Errorf("untruthful write: %s", s.Answer)
 							}
 							if mode == "unrecognized" && !strings.Contains(s.Answer, "not the exact recognized teaching fixture") {
@@ -187,13 +203,18 @@ func TestDemoSessionActualActivities(t *testing.T) {
 						if mode == "unrecognized" {
 							wantTurns = 3
 						}
-						wantDecisions := 2 * count
-						if mode == "unrecognized" {
-							wantDecisions = 0
-						}
-						wantCommands := count
-						if mode == "unrecognized" || mode == "deny-command" {
-							wantCommands = 0
+						// Every write earns a separate approval-gated afterRun check.
+						wantDecisions, wantCommands, wantHooks := 3*count, 2*count, count
+						switch mode {
+						case "unrecognized":
+							wantDecisions, wantCommands, wantHooks = 0, 0, 0
+						case "deny-write":
+							wantDecisions, wantCommands, wantHooks = 2, 1, 0
+						case "deny-command":
+							wantDecisions, wantCommands, wantHooks = 3, 0, 1
+						case "failing-tests":
+							// Scripted command, first hook, then two no-write repairs.
+							wantDecisions, wantCommands, wantHooks = 5, 4, 3
 						}
 						if reads != 2*count || parallel != count || childModels < count || len(s.Children) != count || demoModels != wantTurns || decisions != wantDecisions || commands != wantCommands {
 							t.Errorf("patterns reads=%d parallel=%d childModels=%d children=%d modelTurns=%d approvals=%d commands=%d", reads, parallel, childModels, len(s.Children), demoModels, decisions, commands)
@@ -208,11 +229,15 @@ func TestDemoSessionActualActivities(t *testing.T) {
 						if mode == "deny-write" && !strings.Contains(string(content), "return a - b") {
 							t.Fatal("denied write executed")
 						}
+						if mode != "deny-write" && mode != "unrecognized" && !strings.Contains(string(content), "return a + b") {
+							t.Fatal("approved fixture correction missing")
+						}
 						messages, err := activities.ReadTranscript(data, s.TranscriptRef)
 						if err != nil {
 							t.Fatal(err)
 						}
 						pending := map[string]string{}
+						hooks := 0
 						for _, m := range messages {
 							if m.Role == "assistant" {
 								for _, call := range m.ToolCalls {
@@ -227,7 +252,29 @@ func TestDemoSessionActualActivities(t *testing.T) {
 									t.Fatalf("unpaired tool: %+v", m)
 								}
 								delete(pending, m.ToolCallID)
-								if m.ToolName == "run_command" {
+								if strings.HasSuffix(m.ToolCallID, "/afterrun/tests") {
+									hooks++
+									var result struct {
+										ExitCode       *int   `json:"exitCode"`
+										LogRef         string `json:"logRef"`
+										IsError        bool   `json:"isError"`
+										Interrupted    bool   `json:"interrupted"`
+										ExecutionError bool   `json:"executionError"`
+									}
+									if err := json.Unmarshal([]byte(m.Content), &result); err != nil {
+										t.Fatal(err)
+									}
+									if result.Interrupted || result.ExecutionError {
+										t.Fatalf("unexpected synthetic infrastructure failure: %+v", result)
+									}
+									if mode == "deny-command" {
+										if result.ExitCode != nil || result.LogRef != "" || !result.IsError {
+											t.Fatalf("denied synthetic test reported execution: %+v", result)
+										}
+									} else if result.ExitCode == nil || result.LogRef == "" || (mode == "failing-tests" && (*result.ExitCode <= 0 || !result.IsError)) || (repeat && (*result.ExitCode != 0 || result.IsError)) {
+										t.Fatalf("untruthful synthetic test result: %+v", result)
+									}
+								} else if m.ToolName == "run_command" {
 									var result tools.Result
 									if err := json.Unmarshal([]byte(m.Content), &result); err != nil {
 										t.Fatal(err)
@@ -237,6 +284,9 @@ func TestDemoSessionActualActivities(t *testing.T) {
 									}
 								}
 							}
+						}
+						if hooks != wantHooks {
+							t.Fatalf("synthetic pairs=%d, want %d", hooks, wantHooks)
 						}
 						if len(pending) != 0 {
 							t.Fatalf("unresolved tool calls: %v", pending)
