@@ -1,6 +1,6 @@
 # Evidence-grounded project requests
 
-Ordinary `run`/`tui` requests use the session's effective local project root and model. They do not select the calculator fixture or the harness-enforced `/demo` plan. “Explain this project” is an ordinary model request, not a script. Existing sessions retain their original configuration; reconnecting does not change their root or model.
+In new sessions, ordinary `run`/`tui` requests use the session's effective local project root and model. They do not select the calculator fixture or the harness-enforced `/demo` plan. Old executions retain their versioned demo-routing behavior until rollover or a new execution. “Explain this project” is an ordinary model request, not a script. Existing sessions retain their original configuration; reconnecting does not change their root or model.
 
 ## Automatic inspection versus tools
 
@@ -43,4 +43,13 @@ Inspection is not verification. A README saying “tests pass,” a source test 
 
 Unit tests capture real `LLMStream` requests from temporary unrelated Go and JavaScript projects (including the [weather fixture](../internal/activities/testdata/weather/)). They cover manifest and implementation contents, distinct roots, malicious README text, changed files across logical runs, stable retries, missing/denied access, exclusions, fallback discovery, byte/file/entry limits, explorer constraints and assistant/tool ordering. Workflow tests cover legacy/fresh/upgrade version choices and retry input keys. Original captured histories are replayed without changing their bytes or manifest.
 
-These tests prove filesystem selection and request construction, **not live model answer quality**. Actual local Ollama ordinary-mode smoke and private-server integration verification are separate orchestrator-owned gates for this task; no live-model success is asserted here.
+These tests prove filesystem selection and request construction, **not live model answer quality**.
+
+A separate ordinary-mode smoke passed on 2026-11-10 using local `gemma4:e4b`, Ollama 0.40.15, and an owned private Temporal server on macOS/arm64:
+
+- Launching from unrelated Go and JavaScript directories, without a workdir flag or environment override, produced the correct absolute roots, source-file citations, and exact values present only in implementation files.
+- An explicit request to inspect a text file outside the automatic source sample produced an actual persisted `read_file` result and the correct identifier.
+- Editing the Go source between prompts in the same session produced the new value, with another actual `read_file` call rather than the old answer.
+- The worker was deliberately bootstrapped with `--model mock`; authoritative requests still used the real original model, exercising request-based provider dispatch on shared queues.
+
+All four prompts used ordinary mode, without the harness-enforced demo or automatic approval. Fixture contents remained unchanged by the harness, and the probe terminated and joined its own workflows/processes without restarting the existing Ollama or default Temporal services. These controlled observations are not a statistical model-quality benchmark, a general upgrade guarantee, or proof that every model resists prompt injection. Terminal interaction and full-stack durability have separate qualification gates.
