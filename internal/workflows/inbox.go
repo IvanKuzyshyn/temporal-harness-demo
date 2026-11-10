@@ -55,7 +55,7 @@ func (r *runtime) receipt(msg MessageInput) (MessageReceipt, bool, error) {
 	return MessageReceipt{}, false, nil
 }
 func (r *runtime) validateMessage(msg MessageInput) error {
-	if msg.Internal || msg.OriginInputID != "" || msg.ContextOnly || msg.AfterRunCount != 0 {
+	if msg.Internal || msg.OriginInputID != "" || msg.ContextOnly || msg.AfterRunCount != 0 || msg.VerificationPending {
 		return fmt.Errorf("internal message metadata is not allowed")
 	}
 	if strings.TrimSpace(msg.Text) == "" {
@@ -138,7 +138,7 @@ func (r *runtime) nextInput(ctx workflow.Context) (MessageInput, error) {
 	}
 	if r.state.ContinueRequested {
 		r.state.ContinueRequested = false
-		return MessageInput{Internal: true, ContextOnly: true, OriginInputID: r.state.OriginInputID, AfterRunCount: r.state.AfterRunCount}, nil
+		return MessageInput{Internal: true, ContextOnly: true, OriginInputID: r.state.OriginInputID, AfterRunCount: r.state.AfterRunCount, VerificationPending: r.state.VerificationPending}, nil
 	}
 	msg := r.state.Inbox[0]
 	if msg.Internal {
@@ -174,6 +174,7 @@ func (r *runtime) drainSteers(ctx workflow.Context) error {
 		r.state.HasUnansweredContext = true
 		if !msg.Internal {
 			r.state.AfterRunCount = 0
+			r.state.VerificationPending = false
 			r.state.OriginInputID = key
 		}
 	}
@@ -243,12 +244,12 @@ func validateRestartCount(count int) error {
 	return nil
 }
 
-// queueInternalFollowUp is the PR17 seam, not an afterRun implementation.
-// It snapshots the originating input and current, already-consumed restart count
-// at enqueue time, not dequeue time. PR17 must check the limit and increment
-// State.AfterRunCount BEFORE calling this helper; the helper never increments.
-// On admission failure PR17 owns rollback. Genuine work ahead of this message
-// may reset State's count; consuming this message restores its own snapshot.
+// queueInternalFollowUp snapshots the origin, verification obligation and current,
+// already-consumed restart count at enqueue time, not dequeue time. afterRun must
+// check the limit and increment State.AfterRunCount BEFORE calling this helper;
+// the helper never increments. On admission failure afterRun owns rollback.
+// Genuine work ahead of this message may reset State's provenance; consuming
+// this message restores its own snapshot.
 func (r *runtime) queueInternalFollowUp(text string) error {
 	if err := validateRestartCount(r.state.AfterRunCount); err != nil {
 		return err
@@ -256,7 +257,7 @@ func (r *runtime) queueInternalFollowUp(text string) error {
 	if r.state.OriginInputID == "" || len(r.state.OriginInputID) > 512 {
 		return fmt.Errorf("invalid internal origin")
 	}
-	msg := MessageInput{Text: text, WhenBusy: "followUp", Internal: true, OriginInputID: r.state.OriginInputID, AfterRunCount: r.state.AfterRunCount}
+	msg := MessageInput{Text: text, WhenBusy: "followUp", Internal: true, OriginInputID: r.state.OriginInputID, AfterRunCount: r.state.AfterRunCount, VerificationPending: r.state.VerificationPending}
 	if len(text) > 64<<10 || strings.TrimSpace(text) == "" {
 		return fmt.Errorf("invalid internal follow-up")
 	}

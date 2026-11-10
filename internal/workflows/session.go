@@ -62,10 +62,12 @@ func SessionWorkflow(ctx workflow.Context, input Input) error {
 		r.inputID = runInputID(r.state.RunCounter, msg.RequestID)
 		if !msg.Internal {
 			r.state.AfterRunCount = 0
+			r.state.VerificationPending = false
 			r.state.OriginInputID = r.inputID
 		} else if msg.OriginInputID != "" {
 			r.state.OriginInputID = msg.OriginInputID
 			r.state.AfterRunCount = msg.AfterRunCount
+			r.state.VerificationPending = msg.VerificationPending
 		}
 		err = r.run(runCtx, msg)
 		if r.toolPersistenceErr != nil {
