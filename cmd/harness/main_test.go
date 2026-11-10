@@ -93,21 +93,16 @@ func TestApprovalDispatcherFlags(t *testing.T) {
 	}
 }
 
-func TestUnimplementedCommandsFailHonestly(t *testing.T) {
+func TestNoninteractiveDispatcher(t *testing.T) {
+	for _, args := range [][]string{{"run", "--help"}, {"session", "list", "--help"}, {"wait", "--help"}} {
+		if err := execute(args, &bytes.Buffer{}); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+	}
 	for _, name := range []string{"run", "session", "wait"} {
-		t.Run(name, func(t *testing.T) {
-			err := execute([]string{name}, &bytes.Buffer{})
-			if err == nil {
-				t.Fatal("command silently succeeded")
-			}
-			for _, fragment := range []string{name + ":", "not implemented", "scaffold"} {
-				if !strings.Contains(err.Error(), fragment) {
-					t.Errorf("error %q missing %q", err, fragment)
-				}
-			}
-			if strings.Contains(err.Error(), "unknown command") {
-				t.Errorf("recognized command rejected as unknown: %v", err)
-			}
-		})
+		err := execute([]string{name}, &bytes.Buffer{})
+		if err == nil || strings.Contains(err.Error(), "not implemented") || strings.Contains(err.Error(), "unknown command") {
+			t.Fatalf("%s must validate its arguments before dialing: %v", name, err)
+		}
 	}
 }
