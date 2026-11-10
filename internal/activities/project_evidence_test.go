@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -51,7 +52,7 @@ func TestGroundedModelProjectsAndRefresh(t *testing.T) {
 			scope := events.Scope{StreamID: "grounded", WorkflowID: "grounded", RunID: "run"}
 			for run := 1; run <= 2; run++ {
 				key := fmt.Sprintf("run-%d", run)
-				if _, err := a.AppendTranscript(context.Background(), workflows.AppendInput{Scope: scope, DataDir: data, EntryID: key, Messages: []llm.Message{{Role: "user", Content: "explain this project"}}}); err != nil {
+				if _, err := a.AppendTranscript(context.Background(), workflows.AppendInput{Scope: scope, DataDir: data, EntryID: key, Messages: []llm.Message{{Role: "user", Content: "explain this project " + key}}}); err != nil {
 					t.Fatal(err)
 				}
 				in := workflows.GatherInput{Scope: scope, DataDir: data, Workdir: root, Kind: "evidence", InputID: key}
@@ -71,6 +72,9 @@ func TestGroundedModelProjectsAndRefresh(t *testing.T) {
 				if _, err := a.LLMStream(context.Background(), workflows.LLMInput{Scope: scope, DataDir: data, Workdir: root, TranscriptRef: TranscriptRef(scope.WorkflowID), InputID: key, Tools: defs}); err != nil {
 					t.Fatal(err)
 				}
+			}
+			if len(captured) != 2 {
+				t.Fatalf("captured refresh requests=%d, want exactly 2", len(captured))
 			}
 			for i, r := range captured {
 				text := ""
@@ -100,8 +104,9 @@ func TestGroundedModelProjectsAndRefresh(t *testing.T) {
 				if len(r.Tools) != 7 || strings.Contains(text, other) || strings.Contains(strings.ToLower(text), "calculator") {
 					t.Fatal("wrong tools or fixture leakage")
 				}
-				if r.Messages[len(r.Messages)-1].Content != "explain this project" {
-					t.Fatal("context replaced user intent")
+				wantIntent := llm.Message{Role: "user", Content: fmt.Sprintf("explain this project run-%d", i+1)}
+				if !reflect.DeepEqual(r.Messages[len(r.Messages)-1], wantIntent) {
+					t.Fatalf("capture %d lost run identity/current intent: %+v", i, r.Messages)
 				}
 				if i == 0 && strings.Contains(text, "NEW_SOURCE") {
 					t.Fatal("retry refreshed snapshot")
