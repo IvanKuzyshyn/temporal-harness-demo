@@ -2,7 +2,7 @@
 
 A local Go + Bubble Tea + Ollama teaching harness for four Temporal patterns: long-running activities, parallel tool execution, child workflows, and recorded human approval. Temporal owns session state; activities do I/O; streamed text is a display aid, not proof of success.
 
-Implemented here: durable sessions, CLI/TUI, guarded tools, approval, a fixture-only guided demo, and approval-gated post-write verification with at most two automatic repair runs. Final integrated real-demo, captured-history replay, and hard-worker-loss evidence is **pending**; see [testing and evidence](docs/testing.md). The [original implementation plan](docs/superpowers/plans/2026-11-09-harness.md) is an execution ledger, not a claim that all 18 steps are complete.
+Implemented here: durable sessions, CLI/TUI, guarded tools, approval, a fixture-only guided demo, and approval-gated post-write verification with at most two automatic repair runs. Live mock and local Gemma CLI demos passed all four patterns; a mock TUI keyboard smoke and recorded-history replay also passed. These are scoped proofs, not native model action-selection evidence. Final reviewed/integrated hard-worker-loss evidence remains **pending**; see [testing and evidence](docs/testing.md). The [original implementation plan](docs/superpowers/plans/2026-11-09-harness.md) is an execution ledger, not a claim that all 18 steps are complete.
 
 ## Quickstart
 
@@ -38,7 +38,7 @@ The guided scenario makes actual provider calls, then **replaces the parent's ac
 
 ## Models and configuration
 
-- Default: local Ollama `gemma4:e4b`, verified with real local model calls. That is narrower than a completed final all-pattern real-demo smoke.
+- Default: local Ollama `gemma4:e4b`, verified in a live all-four-pattern CLI demo with actual provider calls, three approvals, and successful scripted plus separate afterRun tests. The parent action plan was harness-enforced, not independently model-selected.
 - Optional larger model: `HARNESS_MODEL=gemma4:26b ./bin/harness doctor --fix`, then `./bin/harness tui --model gemma4:26b`. This model is **not hardware-verified here**.
 - Deterministic development: `HARNESS_MODEL=mock ./bin/harness tui`. Mock skips Ollama, but a live session still needs Temporal. Unit tests use local fixtures/test environments and do not need a live server.
 - A supported `--model` flag overrides `HARNESS_MODEL`; a nonempty environment value overrides code defaults. Mise preserves caller overrides. Original model/workdir and other workflow input remain fixed for an existing session; later client flags do not reconfigure it. Use a fresh ID after a closed execution or when changing configuration.

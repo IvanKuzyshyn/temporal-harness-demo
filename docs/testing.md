@@ -69,20 +69,41 @@ Coverage worth reading:
 
 ## Live checks and pending final evidence
 
-Earlier integration evidence supplied to this documentation pass establishes:
+Orchestrator live evidence on integrated17 (`c75db0e`, 2026-11-10), reviewed for this follow-up on integrated18 replay commit `89338c0`:
 
-- CLI JSONL/plain output, running-ID reuse, closed-ID rejection, manual approval blocking, SIGINT/timeout detach, auto-approval, and listing healthy plus unavailable legacy sessions.
-- A live **mock** four-pattern approval session at an earlier integration point. Its approval count is not a contract for the composed afterRun version, which can ask for a separate verification approval.
-- Real local default-model (`gemma4:e4b`) calls, including a read-only explorer child. This does not establish a final all-pattern real demo or `gemma4:26b` hardware support.
+- Live Temporal/production-worker CLI demos passed with **mock** (7.05s) and local Ollama **`gemma4:e4b`** (56.85s), each on a fresh temporary sample copy with explicit trusted-fixture `--auto-approve`. Both checked all four event patterns, a completed explorer linked to its parent, three approval events, two non-error command completions (scripted test and separate afterRun), corrected source, an authoritative answer with afterRun exit 0/log reference, and an independent `go test ./...` exit 0. The repository sample remains broken. Real provider calls do not establish native model action selection: the parent plan is harness-enforced.
+- An **80×24 real PTY, mock-provider** demo passed with three keyboard `a` decisions, verified final state/file, and Ctrl+C exit 0 leaving the external worker alive. This is not a real-model TUI smoke or coverage of every key.
+- Self-managed CLI (no `--external-worker`) passed mock startup/cleanup and pure JSONL output; the persisted workflow remained RUNNING after its embedded worker exited. The owned test workflow was then terminated. This is not worker-loss recovery proof.
+- Earlier CLI evidence passed JSONL/plain, running-ID reuse/closed-ID rejection, wait, SIGINT/timeout detach, default-off approvals, and JSON listing including unavailable legacy histories. A permanent tool-result artifact-storage fault produced server-confirmed FAILED and authoritative CLI failure.
+- These live observations come from integration-local logs, not committed reproducibility fixtures. Repeat using [normal CLI/TUI commands](operations.md#safe-demo-and-manual-approvals), not ignored scratch scripts. No cloud model was used; `gemma4:26b` remains unverified.
 
-Those earlier observations were reviewed from integration scratch logs; they are not checked-in reproducibility fixtures. Use the commands in [operations](operations.md), not ignored scratch scripts, to repeat the manual exercises.
+### Recorded replay (integrated18)
 
-**Pending W6/orchestrator evidence — do not treat as passed:**
+- [Capture helper and instructions](../scripts/capture-replay/README.md), [replay tests](../internal/workflows/replay_test.go), and [fixture manifest](../internal/workflows/testdata/replay/manifest.json) are committed. Independent review passed a fresh live capture, four positive replays, coverage checks, and a nondeterminism negative control.
+- Genuine mock-model Temporal captures contain hello CAN (79 events), demo CAN (450), successor (4), and completed explorer (131). They establish two actual Continue-As-New links, retained duplicate receipts/counters, parent/child linkage with nil child Carry, three exact approval decisions, a real write, and two successful command results with distinct log references. The second test result was cached; this does not prove test bodies executed uncached twice.
+- The four-event successor is the full available **open-history prefix**, not a completed session or evidence of future execution. Offline replay registers both workflows with original workflow/run IDs and executes no activities, model calls, commands, or live server requests. The negative control changes a cloned activity name and requires a nondeterminism failure without changing fixtures.
+- Only the owned temporary path is sanitized, including decoded JSON payloads. Raw databases/files and referenced transcript/command-log artifacts are not retained; raw checksums are metadata, not independently verifiable raw evidence. The helper iterates history to exhaustion, but these captures do not establish that multiple server pages were needed.
 
-- Final integrated all-pattern real-Ollama demo, including truthful scripted/afterRun test outcomes and distinct approvals.
-- Captured Temporal history fixtures and their replay test paths/results. No fixture or replay command path is asserted at this base; the replay owner must supply the actual committed deliverable.
-- Live durability/hard-worker-loss automation, actual script/test paths, isolated server settings, and interruption/recovery results. The manual external-worker procedure is a reproduction guide, not the missing result.
+Run the committed offline gates from the repository root (pinned Go and dependencies already installed):
 
-Replay fixtures, once supplied, prove current code against those captured histories only. They do not promise workflow-code upgrades across intermediate draft histories. Prefer fresh IDs after code changes; `query/unavailable` for old histories must not be called success or closure.
+```sh
+go test ./internal/workflows -run TestRecordedReplay -count=1
+go test ./scripts/capture-replay -count=1
+```
+
+For an explicitly opt-in fresh live **mock** capture, choose an output path that does not exist:
+
+```sh
+go run ./scripts/capture-replay -capture -out /tmp/new-replay-capture
+```
+
+- Capture uses an owned loopback server with non-default gRPC/UI ports, temporary database/project/artifacts, and real activities/commands; it installs no tools. Independent normal and SIGTERM cleanup checks passed. Free-port selection has a bind race, not an atomic listener-ownership guarantee. Do not SIGKILL the helper; crash-orphan cleanup is not established.
+- Independent review's initial default-concurrency full suite hit an unchanged resolver-test timeout; serialized full suite and focused race gates passed. This follow-up reran the two offline commands above, not the live capture or the full suite.
+
+**Pending orchestrator final patch — do not treat as passed:**
+
+- Durability work reported complete by its agent (`9eae`), but final reviewed/integrated hard-worker-loss evidence is still pending. Actual automation paths, isolated settings, interruption/recovery results, and review verdict must be supplied by the orchestrator. The [manual restart procedure](operations.md#external-worker-restart-exercise-isolated-server) is not that result, and neither live demos nor replay prove orphan termination.
+
+Replay fixtures prove current code against those captured histories only. They do not promise workflow-code upgrades across intermediate draft histories. Prefer fresh IDs after code changes; `query/unavailable` for old histories must not be called success or closure.
 
 For live work, isolate your own Temporal server's gRPC/UI ports, database, artifacts, and worker processes. Queues are fixed (`agents`, `llm`, `subagents`), so a different session ID on a shared server is **not** worker isolation. Never restart/kill another experiment's services, and do not attach extra workers to its queues. Keep the final default-port real-model smoke separate from private test servers.
