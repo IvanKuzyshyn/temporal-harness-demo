@@ -49,6 +49,8 @@ type MessageInput struct {
 	Internal      bool   `json:"internal,omitempty"`
 	OriginInputID string `json:"originInputId,omitempty"`
 	ContextOnly   bool   `json:"contextOnly,omitempty"`
+	// Snapshot of the origin's already-consumed restart budget (0..2).
+	AfterRunCount int `json:"afterRunCount,omitempty"`
 }
 
 // RetainedReceipt is a bounded FIFO retry window, carried across Continue-As-New.

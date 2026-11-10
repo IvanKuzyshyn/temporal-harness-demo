@@ -20,20 +20,20 @@ func TestInboxStopRetainsAndContinueJoinsQueue(t *testing.T) {
 	f.env.OnActivity(LLMActivity, mock.Anything, mock.MatchedBy(func(in LLMInput) bool { return in.InputID == runInputID(1, "first") })).After(time.Hour).Return(LLMResult{Summary: "stale"}, nil)
 	f.env.OnActivity(LLMActivity, mock.Anything, mock.MatchedBy(func(in LLMInput) bool { return in.InputID != runInputID(1, "first") })).Return(LLMResult{Summary: "ok"}, nil)
 	f.env.RegisterDelayedCallback(func() { f.send("first", "first", "") }, 0)
-	f.env.RegisterDelayedCallback(func() { f.send("queued", "queued", "followUp"); f.env.UpdateWorkflowNoRejection(StopUpdate, "stop", t) }, time.Second)
-	f.env.RegisterDelayedCallback(func() {
+	f.after(func() { f.send("queued", "queued", "followUp"); f.env.UpdateWorkflowNoRejection(StopUpdate, "stop", t) }, time.Second)
+	f.after(func() {
 		s := f.state()
 		if s.Status != "idle" || s.LastRunFailure == nil || s.LastRunFailure.Reason != "aborted" || !s.HasUnansweredContext || !s.QueuePaused || len(s.Inbox) != 1 {
 			t.Errorf("stop state=%+v", s)
 		}
 	}, 2*time.Second)
-	f.env.RegisterDelayedCallback(func() {
+	f.after(func() {
 		if len(f.users) != 1 {
 			t.Errorf("queue auto-ran: %v", f.users)
 		}
 		f.env.UpdateWorkflowNoRejection(ContinueUpdate, "continue", t)
 	}, 3*time.Second)
-	f.env.RegisterDelayedCallback(func() {
+	f.after(func() {
 		s := f.state()
 		if s.RunCounter != 3 || s.Answer != "ok" || s.LastRunFailure != nil || s.HasUnansweredContext || fmt.Sprint(f.users) != "[first queued]" {
 			t.Errorf("resume state=%+v users=%v", s, f.users)
@@ -59,8 +59,8 @@ func TestInboxTurnBudgetFinalVersusToolsAndSteer(t *testing.T) {
 					f.send("steer", "steer", "steer")
 				}
 			}
-			f.env.RegisterDelayedCallback(func() { f.send("first", "first", "") }, 0)
-			f.env.RegisterDelayedCallback(func() {
+			f.after(func() { f.send("first", "first", "") }, 0)
+			f.after(func() {
 				s := f.state()
 				if f.models != 1 || s.Turn != 1 {
 					t.Errorf("budget state=%+v models=%d", s, f.models)
@@ -69,7 +69,7 @@ func TestInboxTurnBudgetFinalVersusToolsAndSteer(t *testing.T) {
 					if s.LastRunFailure != nil || s.Answer != "last-turn answer" || s.HasUnansweredContext {
 						t.Errorf("final=%+v", s)
 					}
-				} else if s.LastRunFailure == nil || s.LastRunFailure.Reason != "turn_limit" || !s.HasUnansweredContext || !s.QueuePaused {
+				} else if s.LastRunFailure == nil || s.LastRunFailure.Reason != "turn_limit" || s.HasUnansweredContext != (kind == "tools") || !s.QueuePaused {
 					t.Errorf("limit=%+v", s)
 				}
 				if kind == "steer" && (len(s.Inbox) != 1 || s.Inbox[0].WhenBusy == "steer") {
@@ -101,7 +101,7 @@ func TestInboxInterruptedToolStopsLogicalRun(t *testing.T) {
 		}
 	}
 	f.env.RegisterDelayedCallback(func() { f.send("first", "first", "") }, 0)
-	f.env.RegisterDelayedCallback(func() {
+	f.after(func() {
 		s := f.state()
 		if f.models != 1 || s.LastRunFailure == nil || s.LastRunFailure.Reason != "interrupted" || len(s.Inbox) != 1 || !s.QueuePaused || fmt.Sprint(f.roles) != "[user tool]" {
 			t.Errorf("state=%+v models=%d roles=%v", s, f.models, f.roles)
@@ -122,14 +122,14 @@ func TestInboxStopDuringTools(t *testing.T) {
 	})
 	f.env.OnActivity(ToolActivity, mock.Anything, mock.Anything).After(time.Hour).Return(tools.Result{Output: "stale"}, nil)
 	f.env.RegisterDelayedCallback(func() { f.send("first", "first", "") }, 0)
-	f.env.RegisterDelayedCallback(func() {
+	f.after(func() {
 		if len(f.state().ActiveTools) != 2 {
 			t.Errorf("tools did not start: %+v", f.state())
 		}
 		f.send("queued", "queued", "followUp")
 		f.env.UpdateWorkflowNoRejection(StopUpdate, "stop", t)
 	}, time.Second)
-	f.env.RegisterDelayedCallback(func() {
+	f.after(func() {
 		s := f.state()
 		if s.Status != "idle" || s.LastRunFailure == nil || s.LastRunFailure.Reason != "aborted" || len(s.ActiveTools) != 0 || len(s.Inbox) != 1 || f.models != 1 {
 			t.Errorf("tool stop=%+v models=%d", s, f.models)
@@ -141,21 +141,21 @@ func TestInboxStopDuringTools(t *testing.T) {
 
 func TestInboxInternalFollowUpKeepsOriginAndCounter(t *testing.T) {
 	f := newInboxFixture(t, func(LLMInput) (LLMResult, error) { return LLMResult{Summary: "fixed"}, nil })
-	f.env.RegisterDelayedCallback(func() {
+	f.after(func() {
 		s := f.state()
 		if s.AfterRunCount != 2 || s.OriginInputID != "original" || s.WroteFile {
 			t.Errorf("internal provenance=%+v", s)
 		}
 		f.send("genuine", "new user", "")
 	}, time.Second)
-	f.env.RegisterDelayedCallback(func() {
+	f.after(func() {
 		s := f.state()
 		if s.AfterRunCount != 0 || s.OriginInputID != runInputID(6, "genuine") {
 			t.Errorf("genuine provenance=%+v", s)
 		}
 		f.env.CancelWorkflow()
 	}, 2*time.Second)
-	f.env.ExecuteWorkflow(SessionWorkflow, Input{Carry: &State{Status: "idle", RunCounter: 4, AfterRunCount: 2, WroteFile: true, OriginInputID: "original", Inbox: []MessageInput{{Text: "test failure", Internal: true, OriginInputID: "original", WhenBusy: "followUp"}}}})
+	f.env.ExecuteWorkflow(SessionWorkflow, Input{Carry: &State{Status: "idle", RunCounter: 4, AfterRunCount: 2, WroteFile: true, OriginInputID: "original", Inbox: []MessageInput{{Text: "test failure", Internal: true, OriginInputID: "original", AfterRunCount: 2, WhenBusy: "followUp"}}}})
 }
 func TestInboxSteerDuringFinalTurnEnd(t *testing.T) {
 	f := newInboxFixture(t, func(LLMInput) (LLMResult, error) { return LLMResult{Summary: "answer"}, nil })
@@ -165,7 +165,7 @@ func TestInboxSteerDuringFinalTurnEnd(t *testing.T) {
 		}
 	}
 	f.env.RegisterDelayedCallback(func() { f.send("first", "first", "") }, 0)
-	f.env.RegisterDelayedCallback(func() {
+	f.after(func() {
 		s := f.state()
 		if f.models != 2 || s.RunCounter != 1 || s.Turn != 2 || s.HasUnansweredContext || fmt.Sprint(f.users) != "[first steer]" {
 			t.Errorf("final-turn steer state=%+v users=%v", s, f.users)
@@ -188,7 +188,7 @@ func TestInboxLateSteerQueuesAfterAgentEnd(t *testing.T) {
 		}
 	}
 	f.env.RegisterDelayedCallback(func() { f.send("first", "first", "") }, 0)
-	f.env.RegisterDelayedCallback(func() {
+	f.after(func() {
 		if f.models != 2 || f.state().RunCounter != 2 || fmt.Sprint(f.users) != "[first late]" {
 			t.Errorf("late state=%+v users=%v", f.state(), f.users)
 		}

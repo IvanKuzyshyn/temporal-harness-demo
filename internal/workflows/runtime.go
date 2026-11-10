@@ -24,6 +24,7 @@ type runtime struct {
 	executionStartTurns int
 	steerCounter        int
 	deferringSteers     bool
+	toolPersistenceErr  error // Fatal: never settle/resume an unresolved tool tail.
 }
 
 const maxAnswerBytes = 8192

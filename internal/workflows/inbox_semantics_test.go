@@ -27,6 +27,10 @@ type inboxFixture struct {
 	models  int
 	onModel func(int)
 	onEmit  func(events.Type)
+	// Cancellation is the default terminal; CAN tests opt in explicitly.
+	expectCAN bool
+	scheduled int
+	checked   int
 }
 
 func newInboxFixture(t *testing.T, model func(LLMInput) (LLMResult, error)) *inboxFixture {
@@ -37,10 +41,17 @@ func newInboxFixture(t *testing.T, model func(LLMInput) (LLMResult, error)) *inb
 			t.Error("test did not complete its workflow")
 			return
 		}
+		if f.checked != f.scheduled {
+			t.Errorf("skipped assertion checkpoints: ran %d of %d", f.checked, f.scheduled)
+		}
 		err := f.env.GetWorkflowError()
 		var can *workflow.ContinueAsNewError
-		if !temporal.IsCanceledError(err) && !errors.As(err, &can) {
-			t.Errorf("session exited unexpectedly before assertions: %v", err)
+		if f.expectCAN {
+			if !errors.As(err, &can) {
+				t.Errorf("expected CAN terminal, got %v", err)
+			}
+		} else if !temporal.IsCanceledError(err) {
+			t.Errorf("expected cancellation after checkpoints, got %v", err)
 		}
 	})
 	f.env.RegisterActivityWithOptions(func(context.Context, EmitInput) (uint64, error) { return 1, nil }, activity.RegisterOptions{Name: EmitActivity})
@@ -85,6 +96,16 @@ func newInboxFixture(t *testing.T, model func(LLMInput) (LLMResult, error)) *inb
 	})
 	return f
 }
+
+// after requires every scheduled scenario/assertion callback to execute, even
+// if an erroneous early terminal would otherwise be accepted by the fixture.
+func (f *inboxFixture) after(fn func(), delay time.Duration) {
+	f.scheduled++
+	f.env.RegisterDelayedCallback(func() {
+		f.checked++
+		fn()
+	}, delay)
+}
 func (f *inboxFixture) send(id, text, mode string) {
 	f.env.UpdateWorkflowNoRejection(MessageUpdate, id, f.t, MessageInput{Text: text, RequestID: id, WhenBusy: mode})
 }
@@ -116,8 +137,8 @@ func TestInboxActualSteerAndFollowUp(t *testing.T) {
 					f.send("steer2", "steer2", "steer")
 				}
 			}
-			f.env.RegisterDelayedCallback(func() { f.send("first", "first", "") }, 0)
-			f.env.RegisterDelayedCallback(func() {
+			f.after(func() { f.send("first", "first", "") }, 0)
+			f.after(func() {
 				if got := fmt.Sprint(f.users); got != "[first steer1 steer2 follow1 follow2]" {
 					t.Errorf("users=%s", got)
 				}
@@ -160,15 +181,15 @@ func TestInboxFailedQueuePausedAndNewInputResumesOldest(t *testing.T) {
 			f.send("older", "older", "followUp")
 		}
 	}
-	f.env.RegisterDelayedCallback(func() { f.send("first", "first", "") }, 0)
-	f.env.RegisterDelayedCallback(func() {
+	f.after(func() { f.send("first", "first", "") }, 0)
+	f.after(func() {
 		s := f.state()
 		if f.models != 1 || s.LastRunFailure == nil || s.LastRunFailure.Reason != "model_error" || len(s.Inbox) != 1 || s.Status != "idle" {
 			t.Errorf("not paused: %+v calls=%d", s, f.models)
 		}
 		f.send("new", "new", "")
 	}, time.Second)
-	f.env.RegisterDelayedCallback(func() {
+	f.after(func() {
 		if fmt.Sprint(f.users) != "[first older new]" {
 			t.Errorf("users=%v", f.users)
 		}
@@ -204,15 +225,15 @@ func TestInboxContinueBusyAndContextOnly(t *testing.T) {
 			resume("busy", true)
 		}
 	}
-	f.env.RegisterDelayedCallback(func() { resume("empty", true); f.send("first", "first", "") }, 0)
-	f.env.RegisterDelayedCallback(func() { resume("resume", false) }, time.Second)
-	f.env.RegisterDelayedCallback(func() {
+	f.after(func() { resume("empty", true); f.send("first", "first", "") }, 0)
+	f.after(func() { resume("resume", false) }, time.Second)
+	f.after(func() {
 		if f.models != 2 || fmt.Sprint(f.users) != "[first]" {
 			t.Errorf("models=%d users=%v", f.models, f.users)
 		}
 		resume("answered", true)
 	}, 2*time.Second)
-	f.env.RegisterDelayedCallback(func() {
+	f.after(func() {
 		if rejected != 3 {
 			t.Errorf("rejected=%d", rejected)
 		}

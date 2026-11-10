@@ -26,6 +26,9 @@ func SessionWorkflow(ctx workflow.Context, input Input) error {
 		r.state.Status = "idle"
 		r.state.MaxTurns = input.MaxTurns
 	}
+	if err := validateRestartCount(r.state.AfterRunCount); err != nil {
+		return err
+	}
 	r.cfg.Carry = nil // Never nest a previous carry into the next execution.
 	r.executionStartTurns = r.state.TotalTurns
 	r.pruneChildren()
@@ -62,8 +65,13 @@ func SessionWorkflow(ctx workflow.Context, input Input) error {
 			r.state.OriginInputID = r.inputID
 		} else if msg.OriginInputID != "" {
 			r.state.OriginInputID = msg.OriginInputID
+			r.state.AfterRunCount = msg.AfterRunCount
 		}
 		err = r.run(runCtx, msg)
+		if r.toolPersistenceErr != nil {
+			cancel()
+			return r.toolPersistenceErr
+		}
 		r.deferringSteers = true
 		if runCtx.Err() != nil {
 			r.fail("aborted", runCtx.Err())

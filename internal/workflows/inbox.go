@@ -55,7 +55,7 @@ func (r *runtime) receipt(msg MessageInput) (MessageReceipt, bool, error) {
 	return MessageReceipt{}, false, nil
 }
 func (r *runtime) validateMessage(msg MessageInput) error {
-	if msg.Internal || msg.OriginInputID != "" || msg.ContextOnly {
+	if msg.Internal || msg.OriginInputID != "" || msg.ContextOnly || msg.AfterRunCount != 0 {
 		return fmt.Errorf("internal message metadata is not allowed")
 	}
 	if strings.TrimSpace(msg.Text) == "" {
@@ -138,9 +138,14 @@ func (r *runtime) nextInput(ctx workflow.Context) (MessageInput, error) {
 	}
 	if r.state.ContinueRequested {
 		r.state.ContinueRequested = false
-		return MessageInput{Internal: true, ContextOnly: true, OriginInputID: r.state.OriginInputID}, nil
+		return MessageInput{Internal: true, ContextOnly: true, OriginInputID: r.state.OriginInputID, AfterRunCount: r.state.AfterRunCount}, nil
 	}
 	msg := r.state.Inbox[0]
+	if msg.Internal {
+		if err := validateRestartCount(msg.AfterRunCount); err != nil {
+			return MessageInput{}, err
+		}
+	}
 	r.state.Inbox = r.state.Inbox[1:]
 	return msg, nil
 }
@@ -214,6 +219,12 @@ func (r *runtime) resume(workflow.Context) error {
 		return fmt.Errorf("continue rejected: session is busy")
 	}
 	if !r.state.HasUnansweredContext {
+		// An answered transcript with retained work resumes the FIFO directly,
+		// never a context-only model turn over the previous final answer.
+		if r.state.QueuePaused && len(r.state.Inbox) > 0 {
+			r.state.QueuePaused = false
+			return nil
+		}
 		err := fmt.Errorf("nothing to answer")
 		r.fail("nothing_to_answer", err)
 		return err
@@ -223,11 +234,29 @@ func (r *runtime) resume(workflow.Context) error {
 	return nil
 }
 
+const maxAfterRunCount = 2
+
+func validateRestartCount(count int) error {
+	if count < 0 || count > maxAfterRunCount {
+		return fmt.Errorf("internal restart count must be between 0 and %d", maxAfterRunCount)
+	}
+	return nil
+}
+
 // queueInternalFollowUp is the PR17 seam, not an afterRun implementation.
-// It preserves the originating input and auto-fix count; external Updates cannot
-// impersonate it. The caller owns incrementing/enforcing AfterRunCount.
+// It snapshots the originating input and current, already-consumed restart count
+// at enqueue time, not dequeue time. PR17 must check the limit and increment
+// State.AfterRunCount BEFORE calling this helper; the helper never increments.
+// On admission failure PR17 owns rollback. Genuine work ahead of this message
+// may reset State's count; consuming this message restores its own snapshot.
 func (r *runtime) queueInternalFollowUp(text string) error {
-	msg := MessageInput{Text: text, WhenBusy: "followUp", Internal: true, OriginInputID: r.state.OriginInputID}
+	if err := validateRestartCount(r.state.AfterRunCount); err != nil {
+		return err
+	}
+	if r.state.OriginInputID == "" || len(r.state.OriginInputID) > 512 {
+		return fmt.Errorf("invalid internal origin")
+	}
+	msg := MessageInput{Text: text, WhenBusy: "followUp", Internal: true, OriginInputID: r.state.OriginInputID, AfterRunCount: r.state.AfterRunCount}
 	if len(text) > 64<<10 || strings.TrimSpace(text) == "" {
 		return fmt.Errorf("invalid internal follow-up")
 	}

@@ -57,6 +57,10 @@ func (r *runtime) run(ctx workflow.Context, msg MessageInput) error {
 		}
 		r.recordSeq(result.LastSeq)
 		if len(result.ToolCalls) == 0 {
+			// The activity has durably answered the transcript. Unconsumed steers
+			// are queued work, not an unanswered transcript (even at the budget).
+			r.state.Answer = bounded(result.Summary, maxAnswerBytes)
+			r.state.HasUnansweredContext = false
 			// TurnEnd can yield to a steer Update, including on a final answer.
 			if err := r.emit(ctx, events.TurnEnd, events.None, events.TurnData{Turn: r.state.Turn}); err != nil {
 				return err
@@ -64,8 +68,6 @@ func (r *runtime) run(ctx workflow.Context, msg MessageInput) error {
 			if r.hasSteers() {
 				continue
 			}
-			r.state.Answer = bounded(result.Summary, maxAnswerBytes)
-			r.state.HasUnansweredContext = false
 			return nil
 		}
 		// Activities already enforce this, but guard the durable/public state
@@ -89,10 +91,24 @@ func (r *runtime) run(ctx workflow.Context, msg MessageInput) error {
 		r.recordSeq(batch.LastSeq)
 		messages := make([]llm.Message, 0, len(batch.Results))
 		for i, res := range batch.Results {
-			messages = append(messages, llm.Message{Role: "tool", ToolCallID: res.ToolCallID, ToolName: result.ToolCalls[i].Name, Content: res.Output})
+			content := res.Output
+			if res.Interrupted {
+				content = "[interrupted]\n" + content
+			}
+			messages = append(messages, llm.Message{Role: "tool", ToolCallID: res.ToolCallID, ToolName: result.ToolCalls[i].Name, Content: content})
 		}
-		if err = r.appendMessages(ctx, fmt.Sprintf("%s/turn/%d/tools", r.inputID, turn), messages...); err != nil {
-			return err
+		// executeBatch has joined its futures, including command recovery. Stop
+		// must not cancel the durable result tail. The append is idempotent and
+		// bounded by activityContext's 3-minute schedule/3-attempt policy; it
+		// never executes a tool. Do this on normal runs too, covering Stop during
+		// the append itself, before settlement or any subsequent model call.
+		persistCtx, finishPersistence := workflow.NewDisconnectedContext(ctx)
+		err = r.appendMessages(persistCtx, fmt.Sprintf("%s/turn/%d/tools", r.inputID, turn), messages...)
+		finishPersistence()
+		if err != nil {
+			// Fail closed rather than expose an unreconciled tail to Continue.
+			r.toolPersistenceErr = temporal.NewNonRetryableApplicationError("finalize tool results", "ToolResultPersistence", err)
+			return r.toolPersistenceErr
 		}
 		r.state.ActiveTools = nil
 		r.pruneChildren()

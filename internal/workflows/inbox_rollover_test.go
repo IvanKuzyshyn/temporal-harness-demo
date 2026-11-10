@@ -33,13 +33,14 @@ func TestInboxContinueAsNewCarriesAndDeduplicates(t *testing.T) {
 	for _, suggested := range []bool{false, true} {
 		t.Run(fmt.Sprint(suggested), func(t *testing.T) {
 			f := newInboxFixture(t, func(LLMInput) (LLMResult, error) { return LLMResult{Summary: "answer"}, nil })
+			f.expectCAN = true
 			f.onModel = func(n int) {
 				f.send("next", "next", "followUp")
 				if suggested {
 					f.env.SetContinueAsNewSuggested(true)
 				}
 			}
-			f.env.RegisterDelayedCallback(func() {
+			f.after(func() {
 				// Omitted RequestID falls back to the actual SDK Update ID.
 				f.env.UpdateWorkflowNoRejection(MessageUpdate, "first", t, MessageInput{Text: "first"})
 			}, 0)
@@ -55,12 +56,13 @@ func TestInboxContinueAsNewCarriesAndDeduplicates(t *testing.T) {
 			}
 			// Simulate the next server execution; testsuite does not automatically follow CAN.
 			g := newInboxFixture(t, func(LLMInput) (LLMResult, error) { return LLMResult{Summary: "next answer"}, nil })
-			g.env.RegisterDelayedCallback(func() {
+			g.expectCAN = !suggested
+			g.after(func() {
 				g.env.UpdateWorkflowNoRejection(MessageUpdate, "first", t, MessageInput{Text: "first"})
 				g.env.UpdateWorkflowNoRejection(MessageUpdate, "different-sdk-id", t, MessageInput{Text: "first", RequestID: "first"})
 			}, 0)
 			if suggested {
-				g.env.RegisterDelayedCallback(func() {
+				g.after(func() {
 					if g.models != 1 || g.state().TotalTurns != 2 || g.state().RunCounter != 2 {
 						t.Errorf("second execution=%+v models=%d", g.state(), g.models)
 					}
@@ -116,7 +118,7 @@ func TestInboxCANDrainsHandlersAndPreservesFailure(t *testing.T) {
 		t.Fatalf("handler/carry: completed=%v state=%+v", completed, s)
 	}
 	f := newInboxFixture(t, func(LLMInput) (LLMResult, error) { return LLMResult{Summary: "ok"}, nil })
-	f.env.RegisterDelayedCallback(func() {
+	f.after(func() {
 		if f.models != 0 || f.state().LastRunFailure.Reason != "interrupted" {
 			t.Errorf("failed carry auto-ran: %+v", f.state())
 		}
@@ -127,14 +129,21 @@ func TestInboxCANDrainsHandlersAndPreservesFailure(t *testing.T) {
 func TestInboxCANDefersLiveChildren(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
+	var firstErr error
+	secondReached := false
 	env.ExecuteWorkflow(func(ctx workflow.Context) error {
 		r := &runtime{cfg: Input{ContinueAfterTurns: 1}, state: State{TotalTurns: 1, Children: []ChildState{{WorkflowID: "live", Status: "working"}}}}
-		if err := r.continueAsNew(ctx); err != nil {
-			return fmt.Errorf("continued with live child: %w", err)
+		firstErr = r.continueAsNew(ctx)
+		if firstErr != nil {
+			return fmt.Errorf("continued with live child: %v", firstErr)
 		}
 		r.state.Children[0].Status = "done"
+		secondReached = true
 		return r.continueAsNew(ctx)
 	})
+	if firstErr != nil || !secondReached {
+		t.Fatalf("child guard: first error=%v second reached=%v", firstErr, secondReached)
+	}
 	_ = carryFromTest(t, env)
 }
 func TestInboxBoundedReceiptsQueryAndProvenance(t *testing.T) {
@@ -143,7 +152,7 @@ func TestInboxBoundedReceiptsQueryAndProvenance(t *testing.T) {
 	if err != nil || receipt.Disposition != "queued" || r.hasSteers() {
 		t.Fatalf("late steer=%+v err=%v", receipt, err)
 	}
-	for _, msg := range []MessageInput{{Text: "x", Internal: true}, {Text: "x", OriginInputID: "spoof"}, {Text: "x", ContextOnly: true}} {
+	for _, msg := range []MessageInput{{Text: "x", Internal: true}, {Text: "x", OriginInputID: "spoof"}, {Text: "x", ContextOnly: true}, {Text: "x", AfterRunCount: 1}, {Text: "x", AfterRunCount: -1}} {
 		if r.validateMessage(msg) == nil {
 			t.Fatal("accepted internal metadata")
 		}
@@ -152,7 +161,7 @@ func TestInboxBoundedReceiptsQueryAndProvenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	internal := r.state.Inbox[1]
-	if !internal.Internal || internal.OriginInputID != "origin" || r.state.AfterRunCount != 2 {
+	if !internal.Internal || internal.OriginInputID != "origin" || internal.AfterRunCount != 2 || r.state.AfterRunCount != 2 {
 		t.Fatalf("lost provenance: %+v", r.state)
 	}
 	// Retain only the last 64 accepted receipts, independent of drained inputs.
