@@ -217,6 +217,13 @@ func TestInboxToolPersistenceFailureFailsClosed(t *testing.T) {
 	if !stopped || settled || len(model.messages()) != 1 || toolCalls != 1 {
 		t.Errorf("unsafe boundary: stopped=%v settled=%v models=%d tools=%d", stopped, settled, len(model.messages()), toolCalls)
 	}
+	s := query(t, env)
+	if !env.IsWorkflowCompleted() || s.Status != "failed" || s.LastRunFailure == nil || s.LastRunFailure.Reason != "interrupted" || !s.QueuePaused || len(s.ActiveTools) != 0 || s.PendingApproval != nil {
+		t.Errorf("closed workflow must project terminal persistence failure: %+v", s)
+	}
+	if s.LastRunFailure != nil && !strings.Contains(s.LastRunFailure.Detail, "ToolResultPersistence") {
+		t.Errorf("lost fatal persistence detail: %+v", s.LastRunFailure)
+	}
 	env.AssertExpectations(t)
 }
 

@@ -70,7 +70,7 @@ func SessionWorkflow(ctx workflow.Context, input Input) error {
 		err = r.run(runCtx, msg)
 		if r.toolPersistenceErr != nil {
 			cancel()
-			return r.toolPersistenceErr
+			return r.failToolPersistence()
 		}
 		r.deferringSteers = true
 		if runCtx.Err() != nil {
@@ -87,6 +87,12 @@ func SessionWorkflow(ctx workflow.Context, input Input) error {
 				}
 				r.fail(reason, err)
 			}
+		}
+		// afterRun may also persist joined results. Fatal persistence takes
+		// precedence over cancellation and must never enter normal settlement.
+		if r.toolPersistenceErr != nil {
+			cancel()
+			return r.failToolPersistence()
 		}
 		if runCtx.Err() != nil {
 			r.fail("aborted", runCtx.Err())
@@ -107,6 +113,17 @@ func SessionWorkflow(ctx workflow.Context, input Input) error {
 		r.settle(ctx)
 		r.cancel = nil
 	}
+}
+
+// failToolPersistence projects terminal state without claiming the unresolved
+// transcript tail was settled. Both joined run seams use the same fatal error.
+func (r *runtime) failToolPersistence() error {
+	r.fail("interrupted", r.toolPersistenceErr)
+	r.state.Status = "failed"
+	r.state.QueuePaused = true
+	r.state.ActiveTools = nil
+	r.state.PendingApproval = nil
+	return r.toolPersistenceErr
 }
 
 func (r *runtime) settle(ctx workflow.Context) {

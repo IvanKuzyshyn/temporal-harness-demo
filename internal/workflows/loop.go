@@ -97,18 +97,8 @@ func (r *runtime) run(ctx workflow.Context, msg MessageInput) error {
 			}
 			messages = append(messages, llm.Message{Role: "tool", ToolCallID: res.ToolCallID, ToolName: result.ToolCalls[i].Name, Content: content})
 		}
-		// executeBatch has joined its futures, including command recovery. Stop
-		// must not cancel the durable result tail. The append is idempotent and
-		// bounded by activityContext's 3-minute schedule/3-attempt policy; it
-		// never executes a tool. Do this on normal runs too, covering Stop during
-		// the append itself, before settlement or any subsequent model call.
-		persistCtx, finishPersistence := workflow.NewDisconnectedContext(ctx)
-		err = r.appendMessages(persistCtx, fmt.Sprintf("%s/turn/%d/tools", r.inputID, turn), messages...)
-		finishPersistence()
-		if err != nil {
-			// Fail closed rather than expose an unreconciled tail to Continue.
-			r.toolPersistenceErr = temporal.NewNonRetryableApplicationError("finalize tool results", "ToolResultPersistence", err)
-			return r.toolPersistenceErr
+		if err = r.persistJoinedToolResults(ctx, fmt.Sprintf("%s/turn/%d/tools", r.inputID, turn), messages...); err != nil {
+			return err
 		}
 		r.state.ActiveTools = nil
 		r.pruneChildren()
