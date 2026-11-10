@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -8,7 +9,7 @@ import (
 )
 
 const demoPrompt = "/demo"
-const helpText = "Enter: follow-up | Alt+Enter or /steer <text>: steer | Shift+Enter (Ctrl+J): newline\nEsc: stop | Ctrl+C: quit | Tab: transcript/patterns | PgUp/PgDn: scroll | Ctrl+T: collapse tools\n/continue | /new [id] | /sessions [id] | /help | /demo | /explore <task> | /run <command>"
+const helpText = "Enter: follow-up | Alt+Enter or /steer <text>: steer | Shift+Enter (Ctrl+J): newline\nEsc: stop | Ctrl+C: quit | Tab: transcript/patterns | PgUp/PgDn: scroll | Ctrl+T: collapse tools\n/older | /latest (retry / newest) | /detail <record number> | /journal | /continue | /new [id] | /sessions [id] | /help | /demo | /explore <task> | /run <command>"
 
 func (m *Model) submitPrompt(steer bool) tea.Cmd {
 	text := strings.TrimSpace(m.prompt.Value())
@@ -25,6 +26,33 @@ func (m *Model) submitPrompt(steer bool) tea.Cmd {
 		m.prompt.Reset()
 		m.refreshViewport(true)
 		return nil
+	case "/detail":
+		n, err := strconv.Atoi(rest)
+		i := n - m.history.page.Before - 1
+		if err != nil || i < 0 || i >= len(m.history.page.Entries) {
+			m.notice = "Use /detail <record number> from the loaded history window"
+			return nil
+		}
+		m.history.detailID = m.history.page.Entries[i].ID
+		m.prompt.Reset()
+		m.refreshViewport(false)
+		m.viewport.GotoTop()
+		return nil
+	case "/journal":
+		m.history.detailID = ""
+		m.prompt.Reset()
+		m.refreshViewport(false)
+		return nil
+	case "/older":
+		m.prompt.Reset()
+		if !m.history.loaded || !m.history.page.HasMore {
+			m.notice = "No older page available"
+			return nil
+		}
+		return m.loadHistory(m.history.page.Before)
+	case "/latest":
+		m.prompt.Reset()
+		return m.loadHistory(0)
 	case "/continue":
 		m.prompt.Reset()
 		return m.actionCmd("continue")
@@ -65,7 +93,9 @@ func (m *Model) submitPrompt(steer bool) tea.Cmd {
 	if steer {
 		mode = "steer"
 	}
-	m.transcript = appendBounded(m.transcript, "You ("+mode+"): "+safeText(text))
+	// Submit receipts carry no durable message ID. Do not create an optimistic
+	// conversation row that cannot later be reconciled by identity.
+	m.notice = "Submitting " + mode + "; awaiting durable history"
 	m.prompt.Reset()
 	m.refreshViewport(true)
 	return m.submitCmd(text, mode, demo)

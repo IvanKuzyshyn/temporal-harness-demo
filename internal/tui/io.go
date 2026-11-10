@@ -3,11 +3,11 @@ package tui
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -18,6 +18,7 @@ import (
 type pollMsg struct{ epoch uint64 }
 type tailMsg struct {
 	epoch     uint64
+	dir       string
 	events    []events.Event
 	offset    int64
 	at        time.Time
@@ -48,10 +49,20 @@ func (m *Model) pollCmd() tea.Cmd {
 
 func (m *Model) tailCmd() tea.Cmd {
 	epoch, id, dir, offset, ctx := m.epoch, m.opts.SessionID, m.opts.DataDir, m.offset, m.ctx
+	// Once Query supplies original metadata, never tail a different client's
+	// directory. Legacy sessions may still use the optional display stream;
+	// transcript reads never use that fallback.
+	authoritative := m.state.Session != nil
+	if authoritative {
+		dir = m.history.dir
+	}
 	return func() tea.Msg {
-		result := tailMsg{epoch: epoch, offset: offset, at: time.Now()}
+		result := tailMsg{epoch: epoch, dir: dir, offset: offset, at: time.Now()}
 		if err := ctx.Err(); err != nil {
 			result.err = err
+			return result
+		}
+		if authoritative && !filepath.IsAbs(dir) {
 			return result
 		}
 		path, err := events.NewStore(dir).Path(id)
@@ -170,8 +181,7 @@ func compactEvent(e events.Event) events.Event {
 			// than truncate/sanitize so long refs with shared prefixes stay distinct.
 			ref := ""
 			if d.MessageRef != "" {
-				sum := sha256.Sum256([]byte(d.MessageRef))
-				ref = hex.EncodeToString(sum[:])
+				ref = messageRefIdentity(d.MessageRef)
 			}
 			message := events.MessageData{Role: bounded(safeText(d.Role), 32), MessageRef: ref}
 			if e.Type == events.MessageUpdate {

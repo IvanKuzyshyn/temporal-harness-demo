@@ -48,6 +48,7 @@ const (
 )
 
 type streamEntry struct {
+	tool                                     bool
 	label, text                              string
 	messageRef, workflowID, parentWorkflowID string
 }
@@ -74,6 +75,7 @@ type Model struct {
 	offsets                         map[string]int64
 	sessionOrder                    []string
 	state                           workflows.State
+	history                         historyState
 	configMismatch                  bool
 	approval                        approvalModal
 	transcript, patterns, commands  []string
@@ -168,6 +170,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "ctrl+t":
 			m.collapseTools = !m.collapseTools
+			m.refreshViewport(false)
 			return m, nil
 		case "pgup":
 			m.viewport.PageUp()
@@ -184,6 +187,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tailMsg:
 		if msg.epoch != m.epoch {
 			return m, nil
+		}
+		if msg.dir != "" && m.state.Session != nil && msg.dir != m.history.dir {
+			return m, m.pollCmd()
 		}
 		m.offset = msg.offset
 		var cmds []tea.Cmd
@@ -228,6 +234,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refreshViewport(false)
 		return m, tea.Batch(cmds...)
+	case historyMsg:
+		m.acceptHistory(msg)
+		return m, nil
 	case snapshotMsg:
 		if msg.epoch != m.epoch || msg.query != m.queryID {
 			return m, nil
@@ -245,6 +254,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.syncApproval(msg.state.PendingApproval)
 		m.configMismatch = m.sessionMismatch(msg.state.Session)
+		historyCmd := m.syncHistory(msg.state.Session, msg.query)
 		m.state = displayState(msg.state)
 		m.lastSeq = msg.state.LastSeq
 		m.stream = nil
@@ -258,7 +268,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				_ = m.reconnect.Buffer(m.pending)
 				m.notice = "Stream gap; refreshing snapshot"
 				m.refreshViewport(false)
-				return m, m.beginQuery()
+				return m, tea.Batch(m.beginQuery(), historyCmd)
 			}
 			m.pending = nil
 			for _, e := range pending {
@@ -266,7 +276,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.refreshViewport(false)
-		return m, nil
+		return m, historyCmd
 	case approvalMsg:
 		if msg.epoch != m.epoch || msg.requestID != m.approval.requestID || msg.hash != m.approval.hash {
 			return m, nil
@@ -394,6 +404,7 @@ func (m *Model) switchSession(id string) tea.Cmd {
 	m.pending = nil
 	m.newMessage = false
 	m.state = workflows.State{}
+	m.history = historyState{}
 	m.configMismatch = false
 	m.approval = approvalModal{}
 	m.started = false
