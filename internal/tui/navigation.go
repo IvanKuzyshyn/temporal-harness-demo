@@ -307,7 +307,16 @@ func (m *Model) rebuildJournal() {
 
 func (m *Model) nativeJournalPart(i int) string {
 	part, b := m.journalParts[i], m.journalBlocks[i]
-	return semanticHeading(part[:b.headingBytes], b.tone) + part[b.headingBytes:]
+	// Styling a multiline string pads shorter lines to the widest heading.
+	// Keep canonical empty separators literal so native viewport wrapping and
+	// the row map see identical geometry, including at effective width one.
+	headings := strings.Split(part[:b.headingBytes], "\n")
+	for j, line := range headings {
+		if line != "" {
+			headings[j] = semanticHeading(line, b.tone)
+		}
+	}
+	return strings.Join(headings, "\n") + part[b.headingBytes:]
 }
 func (m *Model) renderJournal() {
 	if m.showPatterns {
