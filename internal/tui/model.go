@@ -47,7 +47,10 @@ const (
 	maxPromptRunes   = 16 * 1024
 )
 
-type streamEntry struct{ label, text string }
+type streamEntry struct {
+	label, text                              string
+	messageRef, workflowID, parentWorkflowID string
+}
 
 // Model implements tea.Model using pointer semantics. Do not copy a Model or
 // call Update concurrently. Construct it with New.

@@ -2,7 +2,7 @@ package activities
 
 import (
 	"context"
-	"errors"
+	"go.temporal.io/sdk/temporal"
 	"strings"
 	"sync"
 	"testing"
@@ -90,7 +90,7 @@ func TestModelBoundsAndCancellation(t *testing.T) {
 	in.InputID = "canceled"
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err = a.LLMStream(ctx, in); !errors.Is(err, context.Canceled) {
+	if _, err = a.LLMStream(ctx, in); !temporal.IsCanceledError(err) {
 		t.Fatalf("canceled: %v", err)
 	}
 	messages, err = ReadTranscript(dir, in.TranscriptRef)

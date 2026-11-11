@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"syscall"
 	"testing"
 
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/events"
@@ -22,11 +23,32 @@ func TestModelDisplayFailureKeepsDurableResponse(t *testing.T) {
 				t.Fatal(err)
 			}
 			calls := 0
+			var lastSuccessful uint64
 			a.Model = modelFunc(func(_ context.Context, _ llm.Request, emit func(llm.Delta) error) (llm.Response, error) {
 				calls++
-				if err := os.WriteFile(path, []byte("invalid complete record\n"), 0600); err != nil {
+				// Corrupt under the writer lock, preserving the exact last successful
+				// sequence (an immediate heartbeat may or may not have won).
+				f := holdStreamLock(t, path)
+				b, err := os.ReadFile(path)
+				if err != nil {
 					t.Fatal(err)
 				}
+				lines := bytes.Split(bytes.TrimSpace(b), []byte("\n"))
+				var last events.Event
+				if err := json.Unmarshal(lines[len(lines)-1], &last); err != nil {
+					t.Fatal(err)
+				}
+				lastSuccessful = last.Seq
+				if err := f.Truncate(0); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := f.WriteAt([]byte("invalid complete record\n"), 0); err != nil {
+					t.Fatal(err)
+				}
+				if err := syscall.Flock(int(f.Fd()), syscall.LOCK_UN); err != nil {
+					t.Fatal(err)
+				}
+				f.Close()
 				if duringDelta {
 					if err := emit(llm.Delta{Text: "answer"}); err != nil {
 						return llm.Response{}, err
@@ -38,7 +60,7 @@ func TestModelDisplayFailureKeepsDurableResponse(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if first.Summary != "answer" || first.LastSeq != 3 {
+			if first.Summary != "answer" || first.LastSeq != lastSuccessful {
 				t.Fatalf("result=%+v", first)
 			}
 			retry, err := a.LLMStream(context.Background(), in)

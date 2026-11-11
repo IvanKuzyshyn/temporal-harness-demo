@@ -32,10 +32,13 @@ func (r *runtime) run(ctx workflow.Context, msg MessageInput) error {
 		}
 		llmCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 			TaskQueue: LLMQueue, StartToCloseTimeout: 10 * time.Minute, ScheduleToCloseTimeout: 30 * time.Minute,
-			RetryPolicy: &temporal.RetryPolicy{MaximumAttempts: 3},
+			HeartbeatTimeout: 15 * time.Second, WaitForCancellation: true,
+			RetryPolicy: &temporal.RetryPolicy{MaximumAttempts: 2, NonRetryableErrorTypes: []string{"ModelNotFound", "InvalidRequest"}},
 		})
 		var result LLMResult
-		err := workflow.ExecuteActivity(llmCtx, LLMActivity, LLMInput{Scope: r.scope, Model: r.cfg.Model, DataDir: r.cfg.DataDir, TranscriptRef: r.state.TranscriptRef, Turn: turn, Scenario: r.cfg.Scenario, InputID: r.inputID, Tools: r.modelTools()}).Get(ctx, &result)
+		// A canceled run must still join activity cleanup before the next run.
+		waitCtx, _ := workflow.NewDisconnectedContext(ctx)
+		err := workflow.ExecuteActivity(llmCtx, LLMActivity, LLMInput{Scope: r.scope, Model: r.cfg.Model, DataDir: r.cfg.DataDir, TranscriptRef: r.state.TranscriptRef, Turn: turn, Scenario: r.cfg.Scenario, InputID: r.inputID, Tools: r.modelTools()}).Get(waitCtx, &result)
 		if err != nil {
 			reason := "model_error"
 			if temporal.IsCanceledError(err) || ctx.Err() != nil {
