@@ -226,13 +226,33 @@ states are pending, accepted, rejected; rejection requires a public code from th
 schema. Do not return model text, secrets, or raw SDK errors as result data.
 
 `dispatch.New(repo, gateway, Options)` requires an injected gateway;
-`Run(ctx)` reconciles indefinitely, `RunOnce(ctx)` processes at most one claim.
-Defaults: 30-second lease, 10-second gateway deadline, 5-second storage-call
-deadline, exponential retry 1–60 seconds, 250ms idle poll, at most 32 commands per
-burst. Timeout bounds leave lease budget for acknowledgment. Errors/pending
-results schedule retries; no busy-loop, retry cap, deletion, or dead letter.
-Cancellation leaves unacknowledged leases to expire. Gateways must honor context;
-abandoning arbitrary Go code cannot safely force cancellation.
+`Run(ctx)` reconciles until cancellation or exhausted repository-failure budget;
+`RunOnce(ctx)` processes at most one claim. Defaults: 30-second lease, 10-second
+gateway deadline, 5-second storage-call deadline, exponential command retry
+1–60 seconds, 250ms idle/repository-retry poll, at most 32 commands per burst.
+Timeout bounds leave lease budget for acknowledgment. Gateway errors/pending
+results schedule durable retries; there is no intent retry cap, deletion or dead
+letter. Cancellation leaves unacknowledged leases to expire. Gateways must honor
+context; abandoning arbitrary Go code cannot safely force cancellation.
+
+`Run` tolerates two consecutive repository failures, waiting PollInterval after
+each, then returns **`dispatch.ErrRepositoryUnavailable`** on the third. A
+successful repository cycle (including an empty queue) resets this budget. Claim
+and acknowledgement errors both count; ambiguous gateway errors with successfully
+persisted retries do not. The sentinel contains only `dispatcher repository
+unavailable`, deliberately does **not** wrap raw SQL/connection errors, and is safe
+to report. Cancellation returns the context error instead. No intents are removed
+when the loop stops. `RunOnce` remains a lower-level interface returning repository
+errors; callers must not expose/log them verbatim.
+
+**Task 4 supervisor obligation:** observe `Run`'s return with `errors.Is(err,
+dispatch.ErrRepositoryUnavailable)`, report that sanitized failure, and either
+fail service supervision or mark reconciliation unavailable and restart it with
+bounded backoff. Never silently restart in a tight loop or ignore the return.
+A transport-connected callback is not DB or reconciliation readiness, and a
+successful DB Ping does not prove claim/ack SQL is working. Track the supervisor's
+reconciliation state separately and include it in future overall readiness; the
+queue-only executable in this task still has no running production dispatcher.
 
 New repository methods: `CreateConversationOnce`, `ListConversations`,
 `GetConversationProjection`, `GetCommand`, `Ping`, `ClaimCommands`, `SettleClaim`,
@@ -243,6 +263,12 @@ attempts, and returns persisted identities. Acknowledgment compares the token,
 unexpired lease, and pending result in one UPDATE. Stale owners get
 `storage.ErrLeaseLost`; a crash after remote acceptance and before DB ack safely
 retries the same remote identity. Terminal results are not reclaimed/overwritten.
+The retained `RecordCommandResult` locks the command row **before** inspecting
+its state, in the existing conversation→command lock order. `SettleClaim` locks
+only the command row and never takes the conversation lock, so mixed writers
+serialize without a reverse lock-order dependency. The first terminal write wins:
+legacy identical terminal retries succeed (JSONB equality), changed terminal or
+pending-resurrection attempts conflict; stale/terminal claims return ErrLeaseLost.
 There is no cross-database exactly-once claim.
 
 Ordering is deliberate: a normal `message` cannot pass an earlier unresolved

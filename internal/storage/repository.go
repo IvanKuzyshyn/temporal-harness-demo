@@ -327,7 +327,10 @@ func (r *Repository) RecordCommandResult(ctx context.Context, c chat.Conversatio
 		return err
 	}
 	return r.withConversation(ctx, c, func(tx pgx.Tx) error {
-		old, e := scanReceipt(tx.QueryRow(ctx, "SELECT "+receiptColumns+" FROM commands WHERE conversation_id=$1 AND id=$2", c, id))
+		// Keep the existing conversation -> command lock order. SettleClaim
+		// locks only the command row, so the receipt must be locked before its
+		// terminal-state inspection; the conversation lock alone cannot fence it.
+		old, e := scanReceipt(tx.QueryRow(ctx, "SELECT "+receiptColumns+" FROM commands WHERE conversation_id=$1 AND id=$2 FOR UPDATE", c, id))
 		if e != nil {
 			return e
 		}
