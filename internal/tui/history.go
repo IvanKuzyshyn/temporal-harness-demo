@@ -11,6 +11,8 @@ import (
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/workflows"
 )
 
+const historyDiagnostic = "diagnostic:history"
+
 // A single complete page replaces the previous window. No concatenated gaps or
 // unbounded session cache; /older walks backward, /latest returns to the tail.
 type historyState struct {
@@ -23,7 +25,7 @@ type historyState struct {
 	observedTotal          int
 	page                   activities.TranscriptPage
 	err                    string
-	detailID               string   // selection follows durable identity, not a row offset
+	detailID               string   // durable record identity, or the namespaced historyDiagnostic panel
 	retired                []string // bounded completed MessageRef identities, independent of page
 }
 type historyMsg struct {
@@ -60,6 +62,9 @@ func (m *Model) syncHistory(session *workflows.SessionInfo, query uint64) tea.Cm
 		}
 		m.history = historyState{dir: dir, generation: m.history.generation + 1}
 		m.journalParts = nil
+		m.journalBlocks = nil
+		m.expandedWork = nil
+		m.browseStream = nil
 		m.followLive, m.unread = true, 0
 		m.selectedID = ""
 		m.anchor = readingAnchor{}
@@ -87,6 +92,7 @@ func (m *Model) loadHistory(before int) tea.Cmd {
 	m.history.pending = false
 	m.history.detailID = ""
 	m.selectedID = ""
+	m.expandedWork = nil
 	m.anchor = readingAnchor{}
 	m.showPatterns = false
 	m.history.explicit = true
@@ -154,6 +160,7 @@ func (m *Model) acceptHistory(msg historyMsg) {
 		m.history.page = msg.page
 		m.reconcileStreams()
 		if changedWindow {
+			m.expandedWork = nil
 			m.history.detailID = ""
 		}
 		m.history.loaded = true
@@ -192,8 +199,8 @@ func (m *Model) historyHeader() string {
 	if h.pending {
 		text += " [loading]"
 	}
-	if h.err != "" {
-		text += " [unavailable; cached page if any: " + h.err + "]"
+	if h.err != "" && h.loaded {
+		text += " [cached]"
 	}
 	return text
 }

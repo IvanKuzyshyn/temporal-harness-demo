@@ -82,6 +82,9 @@ type Model struct {
 	selectedID                      string
 	anchor                          readingAnchor
 	journalParts                    []string
+	journalBlocks                   []conversationBlock
+	journalCompact                  bool // budget fallback: native wrapping AND native row map
+	expandedWork                    map[string]bool
 	log                             logState
 	logGeneration                   uint64
 	logCancel                       context.CancelFunc
@@ -89,8 +92,10 @@ type Model struct {
 	approval                        approvalModal
 	transcript, patterns, commands  []string
 	stream                          []streamEntry
+	browseStream                    []streamEntry // bounded frozen live inputs for explicit work expansion
 	notice                          string
-	showPatterns, collapseTools     bool
+	requestFailure                  string // explicit operation error, never inferred from receipt text
+	showPatterns                    bool
 	width, height                   int
 	prompt                          textarea.Model
 	viewport                        viewport.Model
@@ -149,6 +154,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.quitting {
 		return m, nil
 	}
+	m.syncViewportHeight()
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.captureAnchor()
@@ -178,9 +184,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.togglePatterns()
 			return m, nil
 		case "ctrl+t":
-			m.collapseTools = !m.collapseTools
-			m.rebuildJournal()
-			m.refreshViewport(false)
+			m.toggleWork()
 			return m, nil
 		case "pgup":
 			m.browse()
@@ -354,6 +358,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.notice = bounded(m.notice, maxText)
 		m.commands = appendBounded(m.commands, m.notice)
+		m.requestFailure = ""
+		if msg.err != nil {
+			m.requestFailure, m.notice = m.notice, ""
+		} else if msg.label == "Submit" {
+			m.notice = "" // Durable conversation/queue replaces successful receipt chatter.
+		}
 		if msg.label == "sessions" {
 			m.transcript = appendBounded(m.transcript, m.notice)
 			m.resumeFollowing()
@@ -464,6 +474,9 @@ func (m *Model) switchSession(id string) tea.Cmd {
 	m.anchor = readingAnchor{}
 	m.showPatterns = false
 	m.journalParts = nil
+	m.journalBlocks = nil
+	m.journalCompact = false
+	m.expandedWork = nil
 	m.log = logState{}
 	m.heartbeat = time.Time{}
 	m.configMismatch = false
@@ -474,9 +487,11 @@ func (m *Model) switchSession(id string) tea.Cmd {
 	m.lastSnapshot = time.Time{}
 	m.transcript = nil
 	m.stream = nil
+	m.browseStream = nil
 	m.patterns = nil
 	m.commands = nil
 	m.notice = "Connecting"
+	m.requestFailure = ""
 	m.prompt.Reset()
 	m.refreshViewport(true)
 	return m.tailCmd()

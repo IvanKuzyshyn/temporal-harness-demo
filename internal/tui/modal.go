@@ -122,7 +122,8 @@ func (m *Model) approvalFits() bool { return m.width >= 40 && m.height >= 12 }
 
 func (m *Model) approvalScreen() string {
 	if !m.approvalFits() {
-		return lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(m.height).Render("RESIZE: approval paused\nNeed 40x12 or larger\nEsc stop · Ctrl+C quit")
+		heading := semanticHeading(ansi.Truncate("RESIZE: approval paused", m.width, "…"), "attention")
+		return lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(m.height).Render(heading + "\nNeed 40x12 or larger\nEsc stop · Ctrl+C quit")
 	}
 	lines, start, height := m.approvalPage()
 	end := min(len(lines), start+height)
@@ -163,6 +164,9 @@ func (m *Model) approvalScreen() string {
 	for i := range rows {
 		rows[i] = ansi.Truncate(rows[i], m.width, "…")
 	}
+	// Only the trusted status is semantic; preview, arguments and denial text
+	// remain neutral. Apply the span after truncation in terminal cells.
+	rows[0] = semanticHeading(rows[0], "attention")
 	return lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(m.height).Render(strings.Join(rows, "\n"))
 }
 

@@ -52,7 +52,10 @@ The guided scenario makes actual provider calls, then **replaces the parent's ac
 
 The native TUI reserves bottom rows for your draft at 80×24 and 120×40. PgUp/PgDn
 or the mouse wheel browse without following new output; **End** returns live.
-Ctrl+Up/Down selects a record, Ctrl+O expands it, and Ctrl+L opens a captured
+Cyan **You** and green **Assistant · response completed** headings distinguish
+roles; completion does not certify tests. Intermediate work starts collapsed;
+**Ctrl+T** expands one group, while concise failures and approvals stay visible.
+Ctrl+Up/Down selects an entry, Ctrl+O opens raw detail, and Ctrl+L opens a captured
 command log (Ctrl+Left/Right pages beyond the model tail). `/help`, `/detail N`,
 `/lognext`, `/older`, `/latest`, and `/metadata` provide discoverable fallbacks.
 Original model/project, actual per-run mode, real phase/timing, active counts and
@@ -60,6 +63,8 @@ observed heartbeat freshness are labeled honestly; read evidence is not test
 verification. Approval preempts drafting; below 40×12 decision dispatch is blocked
 with a resize warning. See [native terminal behavior and qualification limits](docs/terminal-journal.md)
 and [controlled real-model, durability and PTY qualification](docs/project-assistant-qualification.md).
+The [conversation-first preview and rebuild instructions](docs/conversation-first.md)
+show actual native terminal captures for the readability correction.
 
 Fresh ordinary runs gather **one bounded project-evidence activity**, not the old
 four parallel context gatherers. Parallel tool batches and the explicit guided

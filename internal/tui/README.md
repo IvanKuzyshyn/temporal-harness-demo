@@ -25,15 +25,22 @@ calls have a ten-second timeout. Ctrl+C cancels the session context.
 - Esc requests Stop; Ctrl+C quits (does not implicitly stop the workflow).
 - Tab switches journal/pattern log; PgUp/PgDn or mouse wheel browse the selected
   panel without following updates. End follows latest and clears unseen updates.
-- Ctrl+Up/Down selects a durable record; Ctrl+O expands/collapses it. Ordinary
-  typing and Up/Down still edit the pinned composer.
+- Ctrl+Up/Down selects a **visible entry** (prompt, response, work summary, or
+  expanded receipt), marked with `>`. Ctrl+O opens/closes raw record detail;
+  on a work summary it toggles that group. Ordinary typing and Up/Down still
+  edit the pinned composer.
 - Ctrl+L or `/log` opens a selected command's validated log; Ctrl+Left/Right or
   `/logprev` / `/lognext` page bytes beyond the model tail. `/metadata` shows
   sanitized original session values as scrollable rows.
-- Ctrl+T collapses/expands tool details in the chronological journal.
+- Ctrl+T toggles **one work block**: the selected group/receipt's group, otherwise
+  the latest work summary visible in the viewport. It does not submit text or
+  decide approvals. Expand work, then select a receipt for Ctrl+O/Ctrl+L. The
+  composer separator always hints this non-typing control in normal sizes.
 - `/older` loads the preceding 64-record window; `/latest` retries/returns to the
   newest window. `/detail <record number>` opens scrollable captured record
   details; `/journal` returns to the window. PgUp/PgDn also scroll record details.
+  A history-read failure shows one red notice; `/history-error` opens its bounded
+  raw diagnostic. Ctrl+O or `/journal` returns, and `/latest` retries.
 - `/continue`, `/new [id]`, `/sessions [id]`, `/help` are local commands.
   `/sessions <id>` reconnects to that session. `/new` generates a crypto-random ID.
 - `/explore ...` and `/run ...` are submitted unchanged for workflow handling.
@@ -64,6 +71,41 @@ fallbacks only until a nonempty history window is available. Original raw sessio
 DataDir is used for history, never a guessed client directory. Missing optional
 JSONL cannot erase the persisted conversation.
 
+`conversation.go` projects the loaded page into distinct cyan `› You` prompts,
+neutral response bodies with green `✓ Assistant · response completed` headings,
+and **one default-collapsed work block per prompt**. Response completion does not
+certify command/test success. System evidence, tool-request messages and durable
+tool results stay inside their prompt's work; failed/interrupted/unknown canonical
+outcomes remain visible in its summary. Live tool/child observations and current
+Query activity lack a trustworthy prompt identity and occupy a separate
+**live observations / unassociated** work block (`work:live`), even after a newer prompt
+page arrives. They are never assigned by cached page position, call ID or prose.
+Query request failures are separate notices, not colors applied to unrelated
+historical responses. Work preceding the first loaded prompt is labeled
+**earlier / partial**. Empty settled work is omitted. Live drafts are explicitly
+best-effort, not completed responses. A blank row separates substantive responses
+and subsequent turns. Role bodies word-wrap with a two-cell continuation inset;
+expanded receipt bodies keep a four-cell gutter. Each durable receipt previews
+at most three logical lines / 160 display cells, with an explicit continuation
+label pointing to `/detail N` when shortened. Detail/log panels stay literal.
+
+`conversationBlock` IDs, group membership and heading spans are the shared mapping
+for plain/styled rendering, visible selection and reflow anchors. Source identities
+are durable IDs; synthetic group IDs derive from the prompt or first partial-work
+record, never call IDs or old rendered indices. Only heading spans receive semantic
+color; evidence/body text is neutral and sanitized. Expansion stores IDs only,
+bounded by the loaded page plus a possible live-only group. Poll refresh preserves
+surviving groups; eviction, End/latest, older-window navigation, session and source
+changes discard obsolete expansion state. Frozen browsing also retains a bounded
+snapshot of live inputs so explicit expansion cannot consume incoming updates.
+
+Normal chrome uses five rows at 80×24/120×40 (including its separator), excluding
+exceptional notices, nonempty queues and configuration warnings. Model/session
+share the aligned brand row (session suffixes distinguish long IDs); project
+paths are middle-elided to retain root context and basename. Original project, activity/freshness and browsing
+state have separate rows. Empty queue and successful Submit chatter are suppressed.
+The multiline composer has a separate rule and persistent controls.
+
 The UI retains one contiguous page of up to 64 complete durable records (from a
 32MiB-bounded artifact), plus 128 entries each for local notices, pattern log, and
 command events (4KiB per entry), 128 live segments (64KiB assistant / 4KiB tool),
@@ -71,9 +113,30 @@ and 512 compact replay events. A separate FIFO of up to 512 completed MessageRef
 hashes retires matching live entries across page eviction and snapshot replay;
 this bounded replay horizon resets on session/original-directory changes.
 Workflow and parent keys are SHA-256 identities separate from sanitized display
-labels, including in pending reconnect events. The journal overview limits durable record text
-to 4KiB each; selected detail permits 504KiB. Aggregate journal viewport text is
-bounded to 512KiB, with explicit truncation labels. Pending reconnect buffers use the events package's 4096-event cap,
+labels, including in pending reconnect events. Frozen browsing holds at most 128
+live-input references with the same text bounds; it does not accumulate pages.
+Projection metadata retains no duplicate raw/rendered bodies: bounded text lives
+in the shared journal parts and only trusted heading byte spans are styled.
+The expanded journal overview uses bounded receipt previews (from at most 4KiB
+per record); selected detail permits 504KiB. Width-specific wrapping is transient;
+the frozen canonical text and original source-cell anchor are retained, not a
+second width-dependent source cache. Aggregate journal viewport text is
+bounded to 512KiB **including heading ANSI and separators**. Rebuild budgets the
+width-independent native representation and reserves one mapped omission notice;
+only retained headings remain selectable. The notice explicitly includes omitted
+live observations, which have no promised durable detail route. `/detail N` still
+addresses the loaded durable page, not just retained overview targets.
+
+Ordinary windows retain word wrapping/gutters. If those added continuation rows
+would exceed 512KiB, the entire retained window uses native cell-sliced wrapping
+and the matching native row map instead; **no additional content is cut on resize**.
+This boundary-only fallback sacrifices continuation gutters/word boundaries, not
+source text, IDs or the original anchor cell. Resizing back restores normal prose
+wrapping if it fits. Detail/log geometry never changes. No final byte truncation
+is applied to styled journal output. At effective width one (including width
+zero), an unrenderable wide prose grapheme consumes its complete source bytes and
+maps to an empty row; its canonical text survives restoration to a usable width.
+Pending reconnect buffers use the events package's 4096-event cap,
 with a same-sized TUI projection buffer; the events-package copy validates only
 sequence numbers. Prompt input has a hard aggregate 16,384-rune
 bound (at most 64KiB UTF-8), independent of display width; all keyboard and paste
@@ -92,8 +155,11 @@ the terminal dimensions; extremely small terminals necessarily hide some panes.
   replaces it and both approval and denial dispatch are refused. Esc/Ctrl+C
   remain available; denial reason survives resizing. The normal composer is
   absent during approval, not misleadingly editable.
-- Tool results and log references are available in the scrollable journal/detail
-  view, not limited to the old two-line Commands pane. This is not a terminal emulator.
+- Tool results and log references are available through expanded work and raw
+  detail, not in the default conversation. Ctrl+O from a log reveals its owning
+  work/receipt so the same source remains selected and Ctrl+L can reopen it.
+  `/detail N` uses the original page's global source number, shown on expanded
+  receipts; it is not a projected row number. This is not a terminal emulator.
 - Older browsing replaces the window and suppresses live suffixes rather than
   retaining unbounded history. Snapshots do not replace an older window. Tool
   pairing never crosses a page boundary or reuses another assistant's call ID.

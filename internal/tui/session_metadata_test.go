@@ -51,7 +51,7 @@ func TestReconnectMetadataProjection(t *testing.T) {
 		t.Fatal("projection lost session metadata")
 	}
 	m.state = displayState(workflows.State{})
-	if !strings.Contains(m.View().Content, "unknown (legacy") {
+	if !strings.Contains(m.View().Content, "config unknown") {
 		t.Error("legacy configuration not explicitly unknown")
 	}
 }

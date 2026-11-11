@@ -22,7 +22,7 @@ func TestQueueSnapshotsAndFooter(t *testing.T) {
 		} {
 			m.Update(snapshotMsg{epoch: m.epoch, query: m.queryID, state: workflows.State{Status: "idle", Inbox: inbox}})
 			view := ansi.Strip(m.View().Content)
-			for _, want := range []string{"Queued:", "session:one", "turn:0/8 idle"} {
+			for _, want := range []string{"session:one", "turn:0/8", "idle"} {
 				if !strings.Contains(view, want) {
 					t.Fatalf("%v missing %q: %s", size, want, view)
 				}
@@ -31,7 +31,7 @@ func TestQueueSnapshotsAndFooter(t *testing.T) {
 				if !strings.Contains(view, inbox[0].WhenBusy+": "+inbox[0].Text) {
 					t.Fatalf("queue preview missing: %s", view)
 				}
-			} else if !strings.Contains(view, "Queued: 0") || strings.Contains(view, "beta") {
+			} else if strings.Contains(view, "Queued:") || strings.Contains(view, "beta") {
 				t.Fatalf("queue not cleared: %s", view)
 			}
 			if strings.Contains(view, "alpha") && len(inbox) == 1 && inbox[0].Text == "beta" {

@@ -141,16 +141,21 @@ func TestApprovalChildToolsAndPaneKeys(t *testing.T) {
 	child.Pattern = events.Child
 	tool, _ := json.Marshal(events.ToolData{Name: "run_command", Chunk: "output\x1b]52;c;bad\x07", IsError: true})
 	m.Update(tailMsg{epoch: m.epoch, events: []streamEvent{compactEvent(child), compactEvent(events.Event{Seq: 2, Type: events.ToolEnd, Data: tool})}, at: time.Now()})
-	if !strings.Contains(m.viewport.GetContent(), "  child explorer:") {
-		t.Fatal("child not indented")
+	if strings.Contains(m.viewport.GetContent(), "child text") {
+		t.Fatal("child work leaked while collapsed")
+	}
+	m.Update(key('t', tea.ModCtrl))
+	if !strings.Contains(m.viewport.GetContent(), "child explorer:") {
+		t.Fatal("expanded child identity missing")
 	}
 	m.Update(key(tea.KeyTab, 0))
 	if !m.showPatterns || !strings.Contains(m.viewport.GetContent(), "child") {
 		t.Fatal("pattern toggle failed")
 	}
+	m.Update(key(tea.KeyTab, 0))
 	m.Update(key('t', tea.ModCtrl))
-	if !m.collapseTools {
-		t.Fatal("tools not collapsed")
+	if strings.Contains(m.viewport.GetContent(), "child text") {
+		t.Fatal("work not collapsed")
 	}
 	m.state = displayState(workflows.State{PendingApproval: &workflows.PendingApproval{RequestID: "approval-1", Preview: "preview\x1b[2J"}})
 	if !strings.Contains(m.approvalView(), "approval-1") || strings.Contains(m.approvalView(), "\x1b") {

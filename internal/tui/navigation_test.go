@@ -35,26 +35,39 @@ func TestResizeKeepsActualIntraRecordPosition(t *testing.T) {
 			m.rebuildJournal()
 			m.browse()
 			m.prompt.SetValue("draft\nkept")
-			// One history header row, one record heading, then cell 2320.
+			// One history row, one heading, then 29 rows of 78 body cells.
+			// The two-cell inset is presentation, never part of source identity.
 			m.viewport.SetYOffset(2 + 29)
-			before, frozen := m.viewport.View(), m.viewport.GetContent()
-			line := "You: " + body.String()
-			if !strings.HasPrefix(ansi.Strip(before), ansi.Cut(line, 2320, 2400)) {
+			before, frozen := m.viewport.View(), strings.Join(m.journalParts, "\n")
+			if !strings.HasPrefix(ansi.Strip(before), "  "+ansi.Cut(body.String(), 2262, 2340)) {
 				t.Fatal("fixture did not reach intended content")
+			}
+			assertAnchoredTop := func() {
+				t.Helper()
+				top := strings.TrimRight(strings.Split(ansi.Strip(m.viewport.View()), "\n")[0], " ")
+				if !strings.HasPrefix(top, "  ") {
+					t.Fatal("reflow lost body inset")
+				}
+				text := top[2:]
+				index := strings.Index(body.String(), text)
+				if index < 0 {
+					t.Fatalf("reflow invented source text: %q", top)
+				}
+				start := ansi.StringWidth(body.String()[:index])
+				if start > 2262 || start+ansi.StringWidth(text) <= 2262 {
+					t.Fatalf("visible top escaped original source cell 2262: %q (cell %d)", top, start)
+				}
 			}
 			// Frozen rendered content must not be reconstructed on resize.
 			m.history.page.Entries[0].Message.Content = "REPLACED"
 			for _, width := range []int{120, 80, 81, 119, 80} {
 				m.Update(tea.WindowSizeMsg{Width: width, Height: 24})
-				start := 2320 / width * width
-				want := ansi.Cut(line, start, start+width)
-				if got := ansi.Strip(m.viewport.View()); !strings.HasPrefix(got, want) {
-					t.Fatalf("width %d visible top escaped anchored content: want %q, got %q", width, want, strings.Split(got, "\n")[0])
-				}
+				assertAnchoredTop()
+				want := strings.TrimRight(strings.Split(ansi.Strip(m.viewport.View()), "\n")[0], " ")
 				if view := ansi.Strip(m.View().Content); !strings.Contains(view, want) || !strings.Contains(view, "draft") || !strings.Contains(view, "kept") {
 					t.Fatal("anchored content or composer not visible in terminal frame")
 				}
-				if m.viewport.GetContent() != frozen || m.prompt.Value() != "draft\nkept" {
+				if strings.Join(m.journalParts, "\n") != frozen || m.prompt.Value() != "draft\nkept" {
 					t.Fatal("resize changed frozen content or draft")
 				}
 			}
@@ -67,9 +80,7 @@ func TestResizeKeepsActualIntraRecordPosition(t *testing.T) {
 				m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 				m.Update(key(tea.KeyPgDown, 0))
 				m.Update(key(tea.KeyTab, 0))
-				if !strings.HasPrefix(ansi.Strip(m.viewport.View()), ansi.Cut(line, 2280, 2400)) {
-					t.Fatal("hidden base view did not reflow to anchored content")
-				}
+				assertAnchoredTop()
 				m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 				if m.viewport.View() != before || len(m.journalParts) != len(records)+1 {
 					t.Fatal("repeated panel visits changed retained window/position")
@@ -186,16 +197,44 @@ func TestPatternsPreserveFollowingAndRefreshDoesNotResetBrowsing(t *testing.T) {
 	m, _ := testModel(t)
 	m.history.page.Entries = durableRecords(64)
 	m.rebuildJournal()
-	m.patterns = []string{strings.Repeat("PATTERN\n", 80)}
+	for i := 0; i < 80; i++ {
+		m.patterns = append(m.patterns, fmt.Sprintf("PATTERN-%02d", i))
+	}
+	assertPatternFrame := func(first int) {
+		t.Helper()
+		frame := ansi.Strip(m.View().Content)
+		if !strings.Contains(frame, fmt.Sprintf("PATTERN-%02d", first)) || strings.Contains(frame, "PATTERN-79") {
+			t.Fatalf("pattern frame ignored reading offset %d: %s", first, frame)
+		}
+		if !m.followLive {
+			t.Fatal("pattern frame changed journal follow policy")
+		}
+	}
 	m.Update(key(tea.KeyTab, 0))
+	assertPatternFrame(0)
 	m.Update(key(tea.KeyPgDown, 0))
+	assertPatternFrame(m.viewport.Height())
+	m.Update(key(tea.KeyPgUp, 0))
+	assertPatternFrame(0)
 	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	assertPatternFrame(3)
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	assertPatternFrame(0)
+	m.Update(key(tea.KeyPgDown, 0))
+	offset := m.viewport.YOffset()
+	m.started, m.reconnect = true, nil
+	m.Update(tailMsg{epoch: m.epoch, events: []streamEvent{delta(1, "JOURNAL-LIVE-TAIL")}})
+	assertPatternFrame(offset)
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	assertPatternFrame(offset)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	assertPatternFrame(offset)
 	if !m.followLive {
 		t.Fatal("scrolling secondary panel changed underlying follow policy")
 	}
 	m.Update(key(tea.KeyTab, 0))
-	if !m.followLive || !m.viewport.AtBottom() {
-		t.Fatal("return did not preserve following")
+	if !m.followLive || !m.viewport.AtBottom() || !strings.Contains(ansi.Strip(m.View().Content), "JOURNAL-LIVE-TAIL") || strings.Contains(m.View().Content, "PATTERN-") {
+		t.Fatal("return did not render the still-following journal")
 	}
 	m.browse()
 	m.unread = 9
@@ -287,7 +326,6 @@ func TestOlderWindowStillReportsNewDurableRecords(t *testing.T) {
 func TestCollapsedOutcomeRetainsMeaning(t *testing.T) {
 	m, _ := testModel(t)
 	m.history.page.Entries = durableRecords(1)
-	m.collapseTools = true
 	m.history.page.Entries[0].Message = llm.Message{Role: "tool", ToolName: "run_command", ToolCallID: "c", Content: `{"toolCallId":"c","isError":false,"output":"","details":{"exitCode":"2"}}`}
 	m.refreshViewport(true)
 	if !strings.Contains(m.viewport.GetContent(), "[failed]") {
@@ -345,6 +383,8 @@ func TestRecordSelectionDetailsAndTyping(t *testing.T) {
 	m.prompt.SetValue("draft")
 	m.Update(key(tea.KeyUp, tea.ModCtrl))
 	m.Update(key(tea.KeyUp, tea.ModCtrl))
+	m.Update(key('t', tea.ModCtrl)) // Expand selected work, then select its source.
+	m.Update(key(tea.KeyDown, tea.ModCtrl))
 	m.Update(key('o', tea.ModCtrl))
 	if m.history.detailID != m.history.page.Entries[1].ID || !strings.Contains(m.viewport.GetContent(), "DETAIL-END") {
 		t.Fatal("selected detail not expanded")
