@@ -45,21 +45,44 @@ func (m *Model) partDisplayLines(index int) []conversationLine {
 		if !heading {
 			text = strings.TrimPrefix(text, strings.Repeat(" ", block.inset))
 		}
+		// Printable ASCII has identical byte/cell boundaries. Classify once
+		// per logical line, avoiding whole-suffix width scans and ANSI-aware
+		// truncation for every wrapped row. Keep Unicode/control handling on
+		// the existing path; styling is applied only after this projection.
+		ascii := true
+		for i := 0; i < len(text); i++ {
+			if text[i] < ' ' || text[i] > '~' {
+				ascii = false
+				break
+			}
+		}
 		width := max(1, m.width-inset)
 		cell := 0
 		for {
-			size := ansi.StringWidth(text)
+			size := len(text)
+			if !ascii {
+				size = ansi.StringWidth(text)
+			}
 			if size <= width {
 				out = append(out, conversationLine{prefix + text, line, cell, heading})
 				break
 			}
-			chunk := ansi.Truncate(text, width, "")
-			n := ansi.StringWidth(chunk)
+			var chunk string
+			n := width
+			if ascii {
+				chunk = text[:width]
+			} else {
+				chunk = ansi.Truncate(text, width, "")
+				n = ansi.StringWidth(chunk)
+			}
 			if inset > 0 {
 				// Prefer a word boundary, but hard-wrap oversized identifiers/evidence.
 				if space := strings.LastIndexByte(chunk, ' '); space > 0 {
 					chunk = chunk[:space+1]
-					n = ansi.StringWidth(chunk)
+					n = len(chunk)
+					if !ascii {
+						n = ansi.StringWidth(chunk)
+					}
 				}
 			}
 			consumed := len(chunk)
