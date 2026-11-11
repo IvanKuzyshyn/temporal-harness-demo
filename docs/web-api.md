@@ -235,12 +235,17 @@ results schedule durable retries; there is no intent retry cap, deletion or dead
 letter. Cancellation leaves unacknowledged leases to expire. Gateways must honor
 context; abandoning arbitrary Go code cannot safely force cancellation.
 
-`Run` tolerates two consecutive repository failures, waiting PollInterval after
-each, then returns **`dispatch.ErrRepositoryUnavailable`** on the third. A
-successful repository cycle (including an empty queue) resets this budget. Claim
-and acknowledgement errors both count; ambiguous gateway errors with successfully
-persisted retries do not. The sentinel contains only `dispatcher repository
-unavailable`, deliberately does **not** wrap raw SQL/connection errors, and is safe
+`Run` tolerates two repository failures without a successful worked cycle,
+waiting PollInterval after each, then returns
+**`dispatch.ErrRepositoryUnavailable`** on the third. Only a non-error cycle that
+worked a command resets this budget (`RunOnce` returns `worked=true, err=nil`);
+successfully persisted acknowledgements/retries provide such progress. **Empty
+claim polls do not reset it**: failed acknowledgements leave leased commands
+ineligible for claiming, so an empty poll alone proves no write recovery. This
+conservative budget also retains earlier claim failures while idle until a
+command is successfully worked. Claim and acknowledgement errors both count;
+ambiguous gateway errors with successfully persisted retries do not. The sentinel
+contains only `dispatcher repository unavailable`, deliberately does **not** wrap raw SQL/connection errors, and is safe
 to report. Cancellation returns the context error instead. No intents are removed
 when the loop stops. `RunOnce` remains a lower-level interface returning repository
 errors; callers must not expose/log them verbatim.

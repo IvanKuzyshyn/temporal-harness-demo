@@ -11,8 +11,9 @@ import (
 var ErrRepositoryUnavailable = errors.New("dispatcher repository unavailable")
 
 // Run reconciles both never-dispatched and dispatched-but-pending commands.
-// Three consecutive repository failures return ErrRepositoryUnavailable; each
-// retry waits PollInterval and any successful repository cycle resets the budget.
+// Three repository failures without a successful worked cycle return
+// ErrRepositoryUnavailable. Each retry waits PollInterval. Empty polls do not
+// reset the budget: failed acknowledgements may leave commands hidden by leases.
 // The caller must observe the return, mark reconciliation unhealthy, and back off
 // before restarting. Transport connectivity alone is not repository readiness.
 // A bounded burst avoids idle latency without spinning on a service outage.
@@ -40,10 +41,10 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 				}
 				break
 			}
-			failures = 0
 			if !worked {
 				break
 			}
+			failures = 0
 		}
 		timer.Reset(d.opts.PollInterval)
 	}
