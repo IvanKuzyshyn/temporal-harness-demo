@@ -1,0 +1,180 @@
+{
+  "command": "go run ./scripts/capture-replay -capture",
+  "capturedAt": "2026-11-10T06:11:34Z",
+  "sourceCommit": "c75db0e7c374a2092767f9bcba077452197bd4e5",
+  "goVersion": "go1.27.3",
+  "sdkVersion": "v1.50.0",
+  "temporalVersion": "temporal version 1.10.0 (Server 1.32.2, UI 2.56.1)",
+  "address": "127.0.0.1:50413",
+  "uiPort": 50414,
+  "redaction": "Only the owned temporary root is replaced with /replay-capture in protobuf strings and decoded json/plain payload bytes. Worker identity is replay-capture at source. Workflow/run IDs, event structure and activity results are preserved; raw checksums refer to pre-redaction protojson.",
+  "firstReceipt": {
+    "disposition": "started"
+  },
+  "duplicateReceipt": {
+    "disposition": "started"
+  },
+  "beforeDuplicate": {
+    "status": "idle",
+    "turn": 1,
+    "maxTurns": 12,
+    "transcriptRef": "artifacts/d9a99b34ec9eee0300a2c7901c7a572eb6b82e8b39daf2d576158276092c9b10.transcript.json",
+    "inbox": [],
+    "activeTools": null,
+    "children": null,
+    "lastSeq": 14,
+    "answer": "Mock assistant: ready.",
+    "runCounter": 1,
+    "approvalCounter": 0,
+    "childCounter": 0,
+    "totalTurns": 1,
+    "afterRunCount": 0,
+    "contextGathered": true,
+    "wroteFile": false,
+    "verificationPending": false,
+    "hasUnansweredContext": false,
+    "queuePaused": false,
+    "continueRequested": false,
+    "originInputId": "run/1/input/recorded-hello"
+  },
+  "afterDuplicate": {
+    "status": "idle",
+    "turn": 1,
+    "maxTurns": 12,
+    "transcriptRef": "artifacts/d9a99b34ec9eee0300a2c7901c7a572eb6b82e8b39daf2d576158276092c9b10.transcript.json",
+    "inbox": [],
+    "activeTools": null,
+    "children": null,
+    "lastSeq": 14,
+    "answer": "Mock assistant: ready.",
+    "runCounter": 1,
+    "approvalCounter": 0,
+    "childCounter": 0,
+    "totalTurns": 1,
+    "afterRunCount": 0,
+    "contextGathered": true,
+    "wroteFile": false,
+    "verificationPending": false,
+    "hasUnansweredContext": false,
+    "queuePaused": false,
+    "continueRequested": false,
+    "originInputId": "run/1/input/recorded-hello"
+  },
+  "finalState": {
+    "status": "idle",
+    "turn": 5,
+    "maxTurns": 12,
+    "transcriptRef": "artifacts/d9a99b34ec9eee0300a2c7901c7a572eb6b82e8b39daf2d576158276092c9b10.transcript.json",
+    "inbox": [],
+    "activeTools": null,
+    "children": [
+      {
+        "workflowId": "recorded-replay-1794291094273222000/explore-1",
+        "status": "done",
+        "summaryRef": "artifacts/339bfedfeeefd7dc1a6fadcf5badf33f3b144b1cb98ae6b4bc70b3b64987acfb.transcript.json#38b3e8fee1bea75742140845bb7c3a3385ded4e519ee9b047a8518bfcde831c5"
+      }
+    ],
+    "lastSeq": 189,
+    "answer": "Forced demo plan (harness-enforced, not provider-selected tools). Authoritative tool-result summary: explorer child completed; write applied (an already-fixed fixture uses an approved no-op); go test ./...: tests passed (exitCode=0). Provider stream was draft commentary, not verification evidence.\n\nVerification: go test ./... passed (exitCode=0; logRef=artifacts/d9a99b34ec9eee0300a2c7901c7a572eb6b82e8b39daf2d576158276092c9b10/cmd-4406123764da9c65792108e039e52dc16c814bd44980cd8cf5b994b2396d2b5e.log)",
+    "runCounter": 2,
+    "approvalCounter": 3,
+    "childCounter": 1,
+    "totalTurns": 6,
+    "afterRunCount": 0,
+    "contextGathered": true,
+    "wroteFile": true,
+    "verificationPending": false,
+    "hasUnansweredContext": false,
+    "queuePaused": false,
+    "continueRequested": false,
+    "originInputId": "run/2/input/recorded-demo"
+  },
+  "approvals": [
+    {
+      "requestId": "recorded-replay-1794291094273222000-approval-1",
+      "actionHash": "edf0f6710c364072c26ccf6498db77da446885b3a38e944b549dc570e41e311b",
+      "call": {
+        "id": "demo-d850c73ad9974465-2-0",
+        "name": "write_file",
+        "args": {
+          "path": "calc/calc.go",
+          "content": "package calc\n\n// TODO: Fix Add to return the sum instead of the difference.\n// TODO: Add coverage for negative operands once the intentional bug is fixed.\nfunc Add(a, b int) int {\n\treturn a + b\n}\n"
+        }
+      },
+      "expiresAt": "2026-11-10T06:12:39.066553Z",
+      "preview": "--- current \"calc/calc.go\"\n+++ proposed \"calc/calc.go\"\n@@ whole-file replacement (not a minimal diff) @@\n-package calc\n-\n-// TODO: Fix Add to return the sum instead of the difference.\n-// TODO: Add coverage for negative operands once the intentional bug is fixed.\n-func Add(a, b int) int {\n-\treturn a - b\n-}\n+package calc\n+\n+// TODO: Fix Add to return the sum instead of the difference.\n+// TODO: Add coverage for negative operands once the intentional bug is fixed.\n+func Add(a, b int) int {\n+\treturn a + b\n+}\n"
+    },
+    {
+      "requestId": "recorded-replay-1794291094273222000-approval-2",
+      "actionHash": "1e297f36f5470f3fd30f20d0b26e672dd93a807ecd2fb0b7638a94e9884deb2e",
+      "call": {
+        "id": "demo-d850c73ad9974465-3-0",
+        "name": "run_command",
+        "args": {
+          "cmd": "go",
+          "args": [
+            "test",
+            "./..."
+          ]
+        }
+      },
+      "expiresAt": "2026-11-10T06:12:39.768171Z",
+      "preview": "run_command {\"cmd\":\"go\",\"args\":[\"test\",\"./...\"]}"
+    },
+    {
+      "requestId": "recorded-replay-1794291094273222000-approval-3",
+      "actionHash": "1e297f36f5470f3fd30f20d0b26e672dd93a807ecd2fb0b7638a94e9884deb2e",
+      "call": {
+        "id": "run/2/input/recorded-demo/afterrun/tests",
+        "name": "run_command",
+        "args": {
+          "cmd": "go",
+          "args": [
+            "test",
+            "./..."
+          ]
+        }
+      },
+      "expiresAt": "2026-11-10T06:12:40.843378Z",
+      "preview": "run_command {\"cmd\":\"go\",\"args\":[\"test\",\"./...\"]}"
+    }
+  ],
+  "histories": [
+    {
+      "file": "hello-can.json",
+      "workflowId": "recorded-replay-1794291094273222000",
+      "runId": "01a1c415-5306-75c0-aa3a-037b2025c455",
+      "workflowType": "SessionWorkflow",
+      "events": 79,
+      "sha256": "2b200bca8b8fa88c92845f7eada3a3c0fe977fde86e8eeb4493d18665b57a5d6",
+      "rawSha256": "3d9c5fb0619d8ec3a2bdc2d1baf0b6f9aa436a341befd84ec902d45f4c638df4"
+    },
+    {
+      "file": "demo-can.json",
+      "workflowId": "recorded-replay-1794291094273222000",
+      "runId": "12ae19fa-2d79-45a3-80b8-e9191ff1cae6",
+      "workflowType": "SessionWorkflow",
+      "events": 450,
+      "sha256": "d29bf302585eac8eb59ceaecf8bd8d22ef0f8a2f89c2d72edbccfa5b308638e0",
+      "rawSha256": "a8114656a42f163d1cff9ba4a7ea4d91ab50a54baf7103b23a7f48e4aed3b528"
+    },
+    {
+      "file": "successor.json",
+      "workflowId": "recorded-replay-1794291094273222000",
+      "runId": "508e8573-a583-4d8b-97d4-81fa49b967a8",
+      "workflowType": "SessionWorkflow",
+      "events": 4,
+      "sha256": "9de0a1efc71887d40e75be1d81b61f13f3c302ff830ab41c95ab83229cf309a0",
+      "rawSha256": "969e786eb8f783c208ffcbc8f3f21e799fbdc078dcfb1848f2209a1b9b85649c"
+    },
+    {
+      "file": "explorer.json",
+      "workflowId": "recorded-replay-1794291094273222000/explore-1",
+      "runId": "01a1c415-5c38-7cd1-8584-9e48e9b8dae9",
+      "workflowType": "ExplorerWorkflow",
+      "events": 131,
+      "sha256": "c6c9f6fc285524235e6c82ac834278e28e75bd6d51b8463cd763dcb839c1274e",
+      "rawSha256": "62554c97bb0d65f54e92bb8d267a6b8b1752d7f3e4986409cd1e2a98e4245709"
+    }
+  ]
+}
