@@ -51,8 +51,18 @@ func (m *Model) capPrompt() {
 	}
 }
 
-func (m *Model) bufferEvents(batch []events.Event) error {
-	if err := m.reconnect.Buffer(batch); err != nil {
+// Reconnect validates ordering only. Keep the bounded display projections in
+// pending so opaque workflow keys survive resolution without changing events.
+func sequenceEvents(batch []streamEvent) []events.Event {
+	seqs := make([]events.Event, len(batch))
+	for i, e := range batch {
+		seqs[i].Seq = e.Seq
+	}
+	return seqs
+}
+
+func (m *Model) bufferEvents(batch []streamEvent) error {
+	if err := m.reconnect.Buffer(sequenceEvents(batch)); err != nil {
 		return err
 	}
 	m.pending = append(m.pending, batch...)

@@ -3,11 +3,11 @@ package tui
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -15,10 +15,19 @@ import (
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/workflows"
 )
 
+// streamEvent is a TUI-only projection. Event workflow IDs are display labels;
+// opaque keys preserve identity across sanitization, truncation and replay.
+// Nothing is added to or repurposed in the on-disk event protocol.
+type streamEvent struct {
+	events.Event
+	workflowKey, parentKey string
+}
+
 type pollMsg struct{ epoch uint64 }
 type tailMsg struct {
 	epoch     uint64
-	events    []events.Event
+	dir       string
+	events    []streamEvent
 	offset    int64
 	at        time.Time
 	err       error
@@ -48,17 +57,28 @@ func (m *Model) pollCmd() tea.Cmd {
 
 func (m *Model) tailCmd() tea.Cmd {
 	epoch, id, dir, offset, ctx := m.epoch, m.opts.SessionID, m.opts.DataDir, m.offset, m.ctx
+	// Once Query supplies original metadata, never tail a different client's
+	// directory. Legacy sessions may still use the optional display stream;
+	// transcript reads never use that fallback.
+	authoritative := m.state.Session != nil
+	if authoritative {
+		dir = m.history.dir
+	}
 	return func() tea.Msg {
-		result := tailMsg{epoch: epoch, offset: offset, at: time.Now()}
+		result := tailMsg{epoch: epoch, dir: dir, offset: offset, at: time.Now()}
 		if err := ctx.Err(); err != nil {
 			result.err = err
 			return result
 		}
+		if authoritative && !filepath.IsAbs(dir) {
+			return result
+		}
 		path, err := events.NewStore(dir).Path(id)
 		if err == nil {
-			result.events, result.offset, err = events.Tail(path, offset)
-			for i, e := range result.events {
-				result.events[i] = compactEvent(e)
+			var raw []events.Event
+			raw, result.offset, err = events.Tail(path, offset)
+			for _, e := range raw {
+				result.events = append(result.events, compactEvent(e))
 			}
 		}
 		result.err = err
@@ -155,7 +175,8 @@ func (m *Model) actionCmd(action string) tea.Cmd {
 
 // compactEvent keeps replay buffers independent of large tool arguments and
 // unused payloads. The on-disk stream remains the complete diagnostic record.
-func compactEvent(e events.Event) events.Event {
+func compactEvent(e events.Event) streamEvent {
+	workflowKey, parentKey := optionalIdentity(e.WorkflowID), optionalIdentity(e.ParentWorkflowID)
 	e.TS, e.RunID = "", ""
 	e.WorkflowID = bounded(safeText(e.WorkflowID), 256)
 	e.ParentWorkflowID = bounded(safeText(e.ParentWorkflowID), 256)
@@ -170,8 +191,7 @@ func compactEvent(e events.Event) events.Event {
 			// than truncate/sanitize so long refs with shared prefixes stay distinct.
 			ref := ""
 			if d.MessageRef != "" {
-				sum := sha256.Sum256([]byte(d.MessageRef))
-				ref = hex.EncodeToString(sum[:])
+				ref = messageRefIdentity(d.MessageRef)
 			}
 			message := events.MessageData{Role: bounded(safeText(d.Role), 32), MessageRef: ref}
 			if e.Type == events.MessageUpdate {
@@ -191,10 +211,17 @@ func compactEvent(e events.Event) events.Event {
 		}
 	}
 	e.Data, _ = json.Marshal(payload)
-	return e
+	return streamEvent{Event: e, workflowKey: workflowKey, parentKey: parentKey}
 }
 
-func needsSnapshot(es []events.Event) bool {
+func optionalIdentity(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	return messageRefIdentity(raw)
+}
+
+func needsSnapshot(es []streamEvent) bool {
 	for _, e := range es {
 		switch e.Type {
 		case events.AgentEnd, events.AgentSettled, events.RunFailed, events.ApprovalRequested, events.ApprovalResolved:

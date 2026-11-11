@@ -12,7 +12,7 @@ import (
 func TestRetryReconnectSuffixAndDuplicateTail(t *testing.T) {
 	m := New(nil, Options{SessionID: "parent"})
 	defer m.Close()
-	es := []events.Event{
+	es := []streamEvent{
 		retryEvent(1, events.MessageStart, "parent", "", "ref", ""),
 		retryEvent(2, events.MessageUpdate, "parent", "", "ref", "oldpartial"),
 		retryEvent(3, events.MessageStart, "parent", "", "ref", ""),
@@ -27,6 +27,22 @@ func TestRetryReconnectSuffixAndDuplicateTail(t *testing.T) {
 	view := m.viewport.View()
 	if strings.Contains(view, "oldpartial") || strings.Count(view, "newpartial") != 1 || len(m.stream) != 1 {
 		t.Fatalf("duplicate retry after reconnect: %s", view)
+	}
+}
+
+func TestStreamWorkflowKeysDoNotAliasTruncatedLabels(t *testing.T) {
+	m := New(nil, Options{SessionID: "parent"})
+	defer m.Close()
+	prefix := strings.Repeat("x", maxText)
+	for _, ref := range []string{"ref", ""} {
+		m.stream = nil
+		m.newMessage = false
+		m.applyEvent(retryEvent(1, events.MessageUpdate, prefix+"a", prefix+"a", ref, "first"))
+		m.applyEvent(retryEvent(2, events.MessageUpdate, prefix+"b", prefix+"a", ref, "second"))
+		m.applyEvent(retryEvent(3, events.MessageUpdate, prefix+"b", prefix+"b", ref, "third"))
+		if len(m.stream) != 3 || m.stream[0].text != "first" || m.stream[1].text != "second" || m.stream[2].text != "third" {
+			t.Fatalf("workflow/parent keys aliased for ref %q: %+v", ref, m.stream)
+		}
 	}
 }
 

@@ -102,7 +102,7 @@ func displayState(s workflows.State) workflows.State {
 	return out
 }
 
-func (m *Model) applyEvent(e events.Event) {
+func (m *Model) applyEvent(e streamEvent) {
 	m.lastSeq = e.Seq
 	if len(m.recent) >= maxReplayEvents {
 		copy(m.recent, m.recent[1:])
@@ -114,7 +114,7 @@ func (m *Model) applyEvent(e events.Event) {
 	newLog := e.Seq > m.displaySeq
 	m.displaySeq = max(m.displaySeq, e.Seq)
 	prefix := ""
-	if e.ParentWorkflowID != "" || (e.WorkflowID != "" && e.WorkflowID != m.opts.SessionID) {
+	if e.parentKey != "" || (e.workflowKey != "" && e.workflowKey != optionalIdentity(m.opts.SessionID)) {
 		prefix = "  child " + bounded(safeText(e.WorkflowID), 128) + ": "
 	}
 	if newLog && (e.Pattern != "" && e.Pattern != events.None || e.Type == events.ChildStarted || e.Type == events.ChildCompleted) {
@@ -129,14 +129,20 @@ func (m *Model) applyEvent(e events.Event) {
 			}
 			return
 		}
-		label := prefix + "Assistant: "
+		label := prefix + "Assistant (stream draft, best-effort): "
 		if d.MessageRef != "" && (d.Role == "assistant" || d.Role == "") {
-			// Identity lives on bounded entries, so snapshot reconstruction and
-			// session switches also reset all attempt-tracking state.
+			candidate := streamEntry{messageRef: d.MessageRef, workflowKey: e.workflowKey, parentKey: e.parentKey}
+			if m.persistedStream(candidate) {
+				m.retireStream(d.MessageRef)
+				m.newMessage = true
+				return
+			}
+			// Attempt identity lives on bounded entries; completed identities have
+			// a separate bounded replay horizon that survives page replacement.
 			index := -1
 			for i := range m.stream {
 				entry := &m.stream[i]
-				if entry.messageRef == d.MessageRef && entry.workflowID == e.WorkflowID && entry.parentWorkflowID == e.ParentWorkflowID {
+				if entry.messageRef == d.MessageRef && entry.workflowKey == e.workflowKey && entry.parentKey == e.parentKey {
 					index = i
 					break
 				}
@@ -147,7 +153,7 @@ func (m *Model) applyEvent(e events.Event) {
 					m.stream = m.stream[:maxEntries-1]
 				}
 				index = len(m.stream)
-				m.stream = append(m.stream, streamEntry{label: label, messageRef: d.MessageRef, workflowID: e.WorkflowID, parentWorkflowID: e.ParentWorkflowID})
+				m.stream = append(m.stream, streamEntry{label: label, messageRef: d.MessageRef, workflowKey: e.workflowKey, parentKey: e.parentKey})
 			}
 			entry := &m.stream[index]
 			if e.Type == events.MessageStart {
@@ -166,20 +172,18 @@ func (m *Model) applyEvent(e events.Event) {
 		if d.Delta == "" {
 			return
 		}
-		if m.newMessage || len(m.stream) == 0 || m.stream[len(m.stream)-1].label != label {
+		if m.newMessage || len(m.stream) == 0 || m.stream[len(m.stream)-1].label != label ||
+			m.stream[len(m.stream)-1].workflowKey != e.workflowKey || m.stream[len(m.stream)-1].parentKey != e.parentKey {
 			if len(m.stream) >= maxEntries {
 				copy(m.stream, m.stream[1:])
 				m.stream = m.stream[:maxEntries-1]
 			}
-			m.stream = append(m.stream, streamEntry{label: label})
+			m.stream = append(m.stream, streamEntry{label: label, workflowKey: e.workflowKey, parentKey: e.parentKey})
 		}
 		m.newMessage = false
 		last := &m.stream[len(m.stream)-1]
 		last.text = bounded(last.text+safeText(d.Delta), maxAnswer)
 	case events.ToolStart, events.ToolUpdate, events.ToolEnd:
-		if !newLog {
-			return
-		}
 		var d events.ToolData
 		if json.Unmarshal(e.Data, &d) != nil {
 			return
@@ -197,14 +201,14 @@ func (m *Model) applyEvent(e events.Event) {
 		if d.Interrupted {
 			line += " [interrupted]"
 		}
-		m.commands = appendBounded(m.commands, line)
-	case events.ChildStarted, events.ChildCompleted:
-		if !newLog {
-			return
+		if newLog {
+			m.commands = appendBounded(m.commands, line)
 		}
+		m.appendLiveEntry(streamEntry{tool: true, label: "Live tool event (unverified): ", text: bounded(safeText(line), maxText)})
+	case events.ChildStarted, events.ChildCompleted:
 		var d events.ChildData
 		if json.Unmarshal(e.Data, &d) == nil {
-			m.transcript = appendBounded(m.transcript, "  Child "+d.ChildWorkflowID+": "+string(e.Type)+" "+d.Task)
+			m.appendLiveEntry(streamEntry{label: "Live child progress (best-effort): ", text: bounded(safeText(d.ChildWorkflowID+": "+string(e.Type)+" "+d.Task), maxText)})
 		}
 	}
 }
@@ -215,17 +219,7 @@ func (m *Model) refreshViewport(forceBottom bool) {
 	if m.showPatterns {
 		content = strings.Join(m.patterns, "\n")
 	} else {
-		lines := append([]string(nil), m.transcript...)
-		if m.state.Answer != "" {
-			lines = append(lines, "Assistant (snapshot): "+m.state.Answer)
-		}
-		for _, entry := range m.stream {
-			lines = append(lines, entry.label+entry.text)
-		}
-		if m.state.LastRunFailure != nil {
-			lines = append(lines, "Failure: "+m.state.LastRunFailure.Reason+" "+m.state.LastRunFailure.Detail)
-		}
-		content = strings.Join(lines, "\n")
+		content = boundedJournal(m.journalLines())
 	}
 	m.viewport.SetContent(content)
 	if bottom {
@@ -307,17 +301,15 @@ func (m *Model) View() tea.View {
 		return view
 	}
 	title := lipgloss.NewStyle().Bold(true)
-	panel := "Transcript (Tab: patterns)"
+	panel := "Journal · /older /latest · PgUp/PgDn · Tab: patterns"
 	if m.showPatterns {
 		panel = "Pattern log (Tab: transcript)"
 	}
 	commands := "(no commands yet)"
 	if m.collapseTools {
 		commands = "(collapsed; Ctrl+T to expand)"
-	} else if len(m.commands) > 0 {
-		// Show the bounded tail; /help and the transcript remain independently scrollable.
-		lines := strings.Split(strings.Join(m.commands, "\n"), "\n")
-		commands = strings.Join(lines[max(0, len(lines)-2):], "\n")
+	} else {
+		commands = "Tool details in journal · PgUp/PgDn to scroll\nLive events are not certified command outcomes"
 	}
 	commandPane := lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(2).Render(commands)
 	if lipgloss.Height(commandPane) < 2 {
@@ -351,8 +343,14 @@ func (m *Model) View() tea.View {
 		m.approvalView(), m.queueView(), m.prompt.View(), footer, link, m.sessionConfiguration(),
 	}, "\n")
 	// Status and notices are plain text, never terminal instructions.
-	if m.notice != "" {
-		content = strings.Replace(content, title.Render("Commands (Ctrl+T collapse)"), title.Render("Commands")+" · "+bounded(safeText(strings.ReplaceAll(m.notice, "\n", " ")), 160), 1)
+	notice := m.notice
+	if m.history.err != "" {
+		// A history failure must remain visible even when its window header
+		// has scrolled offscreen. Query status and approval remain independent.
+		notice = "History: " + m.history.err
+	}
+	if notice != "" {
+		content = strings.Replace(content, title.Render("Commands (Ctrl+T collapse)"), title.Render("Commands")+" · "+bounded(singleLine(notice), 160), 1)
 	}
 	view := tea.NewView(lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(m.height).Render(content))
 	view.AltScreen = true

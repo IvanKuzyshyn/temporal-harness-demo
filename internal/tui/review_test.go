@@ -23,7 +23,7 @@ func TestGapSuffixSurvivesRecovery(t *testing.T) {
 			if pending {
 				m.beginQuery()
 			}
-			m.Update(tailMsg{epoch: m.epoch, events: []events.Event{delta(6, "six"), delta(7, "seven")}, offset: 700, at: time.Now()})
+			m.Update(tailMsg{epoch: m.epoch, events: []streamEvent{delta(6, "six"), delta(7, "seven")}, offset: 700, at: time.Now()})
 			if pending {
 				old := m.queryID
 				m.Update(snapshotMsg{epoch: m.epoch, query: old, state: workflows.State{LastSeq: 4}, at: time.Now()})
@@ -37,7 +37,7 @@ func TestGapSuffixSurvivesRecovery(t *testing.T) {
 			if strings.Count(text, "six") != 1 || strings.Count(text, "seven") != 1 {
 				t.Fatalf("lost/duplicated suffix: %s", text)
 			}
-			m.Update(tailMsg{epoch: m.epoch, events: []events.Event{delta(8, "eight")}, at: time.Now()})
+			m.Update(tailMsg{epoch: m.epoch, events: []streamEvent{delta(8, "eight")}, at: time.Now()})
 			if m.lastSeq != 8 || m.queryPending {
 				t.Fatal("next event caused another gap")
 			}
@@ -71,7 +71,7 @@ func TestSessionReturnRereadsUncoveredDeltas(t *testing.T) {
 			if strings.Count(m.viewport.GetContent(), "live") != 5 {
 				t.Fatal("lost uncovered deltas on return")
 			}
-			m.Update(tailMsg{epoch: m.epoch, events: []events.Event{delta(16, "next")}, at: time.Now()})
+			m.Update(tailMsg{epoch: m.epoch, events: []streamEvent{delta(16, "next")}, at: time.Now()})
 			if m.lastSeq != 16 || m.queryPending {
 				t.Fatal("return caused gap")
 			}

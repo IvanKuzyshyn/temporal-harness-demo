@@ -48,8 +48,9 @@ const (
 )
 
 type streamEntry struct {
-	label, text                              string
-	messageRef, workflowID, parentWorkflowID string
+	tool                               bool
+	label, text                        string
+	messageRef, workflowKey, parentKey string
 }
 
 // Model implements tea.Model using pointer semantics. Do not copy a Model or
@@ -64,16 +65,17 @@ type Model struct {
 	epoch, queryID                  uint64
 	started, queryPending, quitting bool
 	reconnect                       *events.Reconnect
-	pending                         []events.Event
+	pending                         []streamEvent
 	lastSnapshot                    time.Time
 	lastSeq                         uint64
 	displaySeq                      uint64
-	recent                          []events.Event
+	recent                          []streamEvent
 	newMessage                      bool
 	offset                          int64
 	offsets                         map[string]int64
 	sessionOrder                    []string
 	state                           workflows.State
+	history                         historyState
 	configMismatch                  bool
 	approval                        approvalModal
 	transcript, patterns, commands  []string
@@ -168,6 +170,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "ctrl+t":
 			m.collapseTools = !m.collapseTools
+			m.refreshViewport(false)
 			return m, nil
 		case "pgup":
 			m.viewport.PageUp()
@@ -184,6 +187,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tailMsg:
 		if msg.epoch != m.epoch {
 			return m, nil
+		}
+		if msg.dir != "" && m.state.Session != nil && msg.dir != m.history.dir {
+			return m, m.pollCmd()
 		}
 		m.offset = msg.offset
 		var cmds []tea.Cmd
@@ -228,6 +234,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.refreshViewport(false)
 		return m, tea.Batch(cmds...)
+	case historyMsg:
+		m.acceptHistory(msg)
+		return m, nil
 	case snapshotMsg:
 		if msg.epoch != m.epoch || msg.query != m.queryID {
 			return m, nil
@@ -245,28 +254,32 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.syncApproval(msg.state.PendingApproval)
 		m.configMismatch = m.sessionMismatch(msg.state.Session)
+		historyCmd := m.syncHistory(msg.state.Session, msg.query)
 		m.state = displayState(msg.state)
 		m.lastSeq = msg.state.LastSeq
 		m.stream = nil
 		m.recent = nil
 		m.newMessage = false
 		if m.reconnect != nil {
-			pending, err := m.reconnect.Resolve(m.lastSeq)
+			_, err := m.reconnect.Resolve(m.lastSeq)
 			m.reconnect = nil
 			if err != nil {
 				m.reconnect = events.NewReconnect()
-				_ = m.reconnect.Buffer(m.pending)
+				_ = m.reconnect.Buffer(sequenceEvents(m.pending))
 				m.notice = "Stream gap; refreshing snapshot"
 				m.refreshViewport(false)
-				return m, m.beginQuery()
+				return m, tea.Batch(m.beginQuery(), historyCmd)
 			}
+			pending := m.pending
 			m.pending = nil
 			for _, e := range pending {
-				m.applyEvent(e)
+				if e.Seq > msg.state.LastSeq {
+					m.applyEvent(e)
+				}
 			}
 		}
 		m.refreshViewport(false)
-		return m, nil
+		return m, historyCmd
 	case approvalMsg:
 		if msg.epoch != m.epoch || msg.requestID != m.approval.requestID || msg.hash != m.approval.hash {
 			return m, nil
@@ -394,6 +407,7 @@ func (m *Model) switchSession(id string) tea.Cmd {
 	m.pending = nil
 	m.newMessage = false
 	m.state = workflows.State{}
+	m.history = historyState{}
 	m.configMismatch = false
 	m.approval = approvalModal{}
 	m.started = false

@@ -16,13 +16,13 @@ import (
 
 func TestEventsArrivingDuringQueryAreReplayedOnce(t *testing.T) {
 	m, _ := testModel(t)
-	m.Update(tailMsg{epoch: m.epoch, events: []events.Event{delta(1, "old")}, at: time.Now()})
-	m.Update(tailMsg{epoch: m.epoch, events: []events.Event{delta(2, " newer")}, offset: 200, at: time.Now()})
+	m.Update(tailMsg{epoch: m.epoch, events: []streamEvent{delta(1, "old")}, at: time.Now()})
+	m.Update(tailMsg{epoch: m.epoch, events: []streamEvent{delta(2, " newer")}, offset: 200, at: time.Now()})
 	m.Update(snapshotMsg{epoch: m.epoch, query: m.queryID, state: workflows.State{LastSeq: 1, Answer: "base"}, at: time.Now()})
 	if got := m.viewport.GetContent(); strings.Contains(got, "old") || strings.Count(got, "newer") != 1 {
 		t.Fatalf("bad replay: %s", got)
 	}
-	m.Update(tailMsg{epoch: m.epoch, events: []events.Event{delta(2, "duplicate")}, at: time.Now()})
+	m.Update(tailMsg{epoch: m.epoch, events: []streamEvent{delta(2, "duplicate")}, at: time.Now()})
 	if strings.Contains(m.viewport.GetContent(), "duplicate") {
 		t.Fatal("stale live event rendered")
 	}
@@ -34,7 +34,7 @@ func TestPeriodicSnapshotPreservesNewerDeltasWithoutDuplicatingLogs(t *testing.T
 	m.reconnect = nil
 	m.lastSnapshot = time.Now()
 	tool, _ := json.Marshal(events.ToolData{Name: "run_command", Chunk: "once"})
-	m.Update(tailMsg{epoch: m.epoch, events: []events.Event{delta(1, "live"), {Seq: 2, Type: events.ToolUpdate, Data: tool}}, at: time.Now()})
+	m.Update(tailMsg{epoch: m.epoch, events: []streamEvent{delta(1, "live"), compactEvent(events.Event{Seq: 2, Type: events.ToolUpdate, Data: tool})}, at: time.Now()})
 	m.beginQuery()
 	m.Update(snapshotMsg{epoch: m.epoch, query: m.queryID, state: workflows.State{LastSeq: 0, Status: "running"}, at: time.Now()})
 	if !strings.Contains(m.viewport.GetContent(), "live") {
@@ -135,12 +135,12 @@ func TestApprovalChildToolsAndPaneKeys(t *testing.T) {
 	m.started = true
 	m.reconnect = nil
 	m.lastSnapshot = time.Now()
-	child := delta(1, "child text")
+	child := delta(1, "child text").Event
 	child.WorkflowID = "explorer"
 	child.ParentWorkflowID = "one"
 	child.Pattern = events.Child
 	tool, _ := json.Marshal(events.ToolData{Name: "run_command", Chunk: "output\x1b]52;c;bad\x07", IsError: true})
-	m.Update(tailMsg{epoch: m.epoch, events: []events.Event{child, {Seq: 2, Type: events.ToolEnd, Data: tool}}, at: time.Now()})
+	m.Update(tailMsg{epoch: m.epoch, events: []streamEvent{compactEvent(child), compactEvent(events.Event{Seq: 2, Type: events.ToolEnd, Data: tool})}, at: time.Now()})
 	if !strings.Contains(m.viewport.GetContent(), "  child explorer:") {
 		t.Fatal("child not indented")
 	}
@@ -184,7 +184,7 @@ func TestReconnectOverflowInvalidatesInflightQuery(t *testing.T) {
 	m.started = true
 	m.beginQuery()
 	old := m.queryID
-	batch := make([]events.Event, events.MaxReconnectEvents+1)
+	batch := make([]streamEvent, events.MaxReconnectEvents+1)
 	m.Update(tailMsg{epoch: m.epoch, events: batch, at: time.Now()})
 	if m.queryID == old || !m.queryPending {
 		t.Fatal("overflow did not restart snapshot")
@@ -198,7 +198,14 @@ func TestReconnectOverflowInvalidatesInflightQuery(t *testing.T) {
 func TestCompactedEventsAndReplayAreBounded(t *testing.T) {
 	m, _ := testModel(t)
 	for i := 1; i <= maxReplayEvents+20; i++ {
-		e := compactEvent(delta(uint64(i), strings.Repeat("x", maxText*2)))
+		raw := delta(uint64(i), "").Event
+		raw.WorkflowID = strings.Repeat("w", maxText) + fmt.Sprint(i)
+		raw.ParentWorkflowID = strings.Repeat("p", maxText) + fmt.Sprint(i)
+		raw.Data, _ = json.Marshal(events.MessageData{Delta: strings.Repeat("x", maxText*2)})
+		e := compactEvent(raw)
+		if len(e.workflowKey) != 64 || len(e.parentKey) != 64 || len(e.WorkflowID) > 256 || len(e.ParentWorkflowID) > 256 {
+			t.Fatal("unbounded identity or display labels")
+		}
 		if len(e.Data) > maxText+100 {
 			t.Fatal("oversized compacted event")
 		}

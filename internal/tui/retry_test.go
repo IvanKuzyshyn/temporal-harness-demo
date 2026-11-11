@@ -10,7 +10,7 @@ import (
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/workflows"
 )
 
-func retryEvent(seq uint64, typ events.Type, workflow, parent, ref, text string) events.Event {
+func retryEvent(seq uint64, typ events.Type, workflow, parent, ref, text string) streamEvent {
 	data, _ := json.Marshal(events.MessageData{Role: "assistant", MessageRef: ref, Delta: text})
 	return compactEvent(events.Event{Seq: seq, Type: typ, WorkflowID: workflow, ParentWorkflowID: parent, Data: data})
 }
@@ -18,7 +18,7 @@ func retryEvent(seq uint64, typ events.Type, workflow, parent, ref, text string)
 func TestRetryReplacesOnlyMatchingStream(t *testing.T) {
 	m := New(nil, Options{SessionID: "parent"})
 	defer m.Close()
-	es := []events.Event{
+	es := []streamEvent{
 		retryEvent(1, events.MessageStart, "parent", "", "turn1", ""),
 		retryEvent(2, events.MessageUpdate, "parent", "", "turn1", "previous-turn"),
 		retryEvent(3, events.MessageStart, "parent", "", "turn2", ""),
