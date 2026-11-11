@@ -36,6 +36,7 @@ type Input struct {
 	DataDir            string        `json:"dataDir"`
 	MaxTurns           int           `json:"maxTurns"`
 	ApprovalTimeout    time.Duration `json:"approvalTimeout"`
+	HangTimeout        time.Duration `json:"hangTimeout"`
 	ContinueAfterTurns int           `json:"continueAfterTurns"`
 	Scenario           string        `json:"scenario,omitempty"`
 	Carry              *State        `json:"carry,omitempty"`
