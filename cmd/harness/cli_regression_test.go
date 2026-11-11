@@ -17,7 +17,7 @@ import (
 	"go.temporal.io/api/serviceerror"
 )
 
-func TestFastRunJSONAndDemo(t *testing.T) {
+func TestFastRunJSONDoesNotImplyDemo(t *testing.T) {
 	dir := t.TempDir()
 	f := &cliFake{queryErrors: map[int]error{0: serviceerror.NewNotFound("new")}, states: []workflows.State{{}, {Status: "idle", RunCounter: 1, Answer: "final\nanswer"}}}
 	f.submit = func() {
@@ -40,7 +40,7 @@ func TestFastRunJSONAndDemo(t *testing.T) {
 			t.Fatalf("not JSONL: %s", line)
 		}
 	}
-	if f.input.Scenario != "demo" || diag.Len() != 0 {
+	if f.input.Scenario != "" || !strings.Contains(diag.String(), "unknown (legacy") {
 		t.Fatalf("input=%+v diagnostics=%q", f.input, diag.String())
 	}
 }
@@ -58,7 +58,7 @@ func TestAutoApprovalExplicitOnly(t *testing.T) {
 				if len(f.decisions) != 1 || f.decisions[0].RequestID != "current" || f.decisions[0].ActionHash != "hash" || f.decisions[0].User == "" || !strings.Contains(diag.String(), "WARNING") {
 					t.Fatalf("decisions=%+v diagnostics=%s", f.decisions, diag.String())
 				}
-			} else if len(f.decisions) != 0 || diag.Len() != 0 {
+			} else if len(f.decisions) != 0 || strings.Contains(diag.String(), "--auto-approve") || !strings.Contains(diag.String(), "unknown (legacy") {
 				t.Fatal("automatic approval enabled by default")
 			}
 			if !json.Valid(bytes.TrimSpace(out.Bytes())) {

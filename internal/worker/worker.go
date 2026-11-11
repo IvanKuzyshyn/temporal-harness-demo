@@ -6,15 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/activities"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/config"
-	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
-	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm/mock"
-	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm/ollama"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/workflows"
 	temporalclient "go.temporal.io/sdk/client"
 	temporallog "go.temporal.io/sdk/log"
@@ -33,28 +29,11 @@ func Start(ctx context.Context, cfg config.Config) (*Runner, error) {
 	return start(ctx, cfg, temporalclient.DialContext, temporalworker.New)
 }
 
-func selectModel(cfg config.Config) (llm.Model, error) {
-	if cfg.Model == "mock" {
-		return mock.New(), nil
-	}
-	host := strings.TrimSpace(cfg.OllamaHost)
-	if host == "" {
-		host = "127.0.0.1:11434"
-	}
-	if !strings.Contains(host, "://") {
-		host = "http://" + host
-	}
-	return ollama.New(host)
-}
-
 func start(ctx context.Context, cfg config.Config, dial func(context.Context, temporalclient.Options) (temporalclient.Client, error), factory func(temporalclient.Client, string, temporalworker.Options) temporalworker.Worker) (*Runner, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	model, err := selectModel(cfg)
-	if err != nil {
-		return nil, err
-	}
+	model := selectModel(cfg)
 	startup := &startupRPCContext{ctx: ctx}
 	defer startup.finished.Store(true)
 	c, err := dial(ctx, temporalclient.Options{

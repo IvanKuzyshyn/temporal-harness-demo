@@ -103,6 +103,8 @@ func (m *Model) submitCmd(text, mode string, demo bool) tea.Cmd {
 	epoch, id, backend, parent, in := m.epoch, m.opts.SessionID, m.backend, m.ctx, m.opts.Input
 	if demo {
 		in.Scenario = "demo"
+		// Existing sessions ignore Input overrides, so the message must opt in too.
+		text = demoPrompt
 	}
 	return func() tea.Msg {
 		result := operationMsg{epoch: epoch, label: "Submit"}

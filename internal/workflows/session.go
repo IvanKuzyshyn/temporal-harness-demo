@@ -26,6 +26,8 @@ func SessionWorkflow(ctx workflow.Context, input Input) error {
 		r.state.Status = "idle"
 		r.state.MaxTurns = input.MaxTurns
 	}
+	// Carry is run state, never an authority for session configuration.
+	r.state.Session = &SessionInfo{Model: input.Model, Workdir: input.Workdir, DataDir: input.DataDir, Scenario: input.Scenario}
 	if err := validateRestartCount(r.state.AfterRunCount); err != nil {
 		return err
 	}

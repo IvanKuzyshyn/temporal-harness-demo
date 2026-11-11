@@ -23,7 +23,7 @@ Use a **temporary copy** of the teaching project before any scripted run or auto
 sample=$(mktemp -d "${TMPDIR:-/tmp}/harness-sample.XXXXXX")
 cp -R examples/sample-project/. "$sample/"
 export HARNESS_WORKDIR="$sample"
-./bin/harness demo
+./bin/harness demo --workdir "$sample"
 ```
 
 `demo` opens a guided banner, but does not autoplay. Enter `/demo` to start; review each approval. Alternatively:
@@ -42,7 +42,11 @@ The guided scenario makes actual provider calls, then **replaces the parent's ac
 - Optional larger model: `HARNESS_MODEL=gemma4:26b ./bin/harness doctor --fix`, then `./bin/harness tui --model gemma4:26b`. This model is **not hardware-verified here**.
 - Deterministic development: `HARNESS_MODEL=mock ./bin/harness tui`. Mock skips Ollama, but a live session still needs Temporal. Unit tests use local fixtures/test environments and do not need a live server.
 - A supported `--model` flag overrides `HARNESS_MODEL`; a nonempty environment value overrides code defaults. Mise preserves caller overrides. Original model/workdir and other workflow input remain fixed for an existing session; later client flags do not reconfigure it. Use a fresh ID after a closed execution or when changing configuration.
-- Defaults: Temporal `localhost:7233`, UI `localhost:8233`, Ollama `127.0.0.1:11434`, workdir `examples/sample-project`, artifacts `.data/`. See [all settings and service ownership](docs/operations.md).
+- Project root for `run`, `tui`, and `demo`: nonempty `--workdir` > nonempty `HARNESS_WORKDIR` > **invocation current directory**, resolved to an absolute path. `mise exec --` preserves that default; mise no longer selects the fixture. Mise tasks themselves run in their task directory, so use `mise exec -- /absolute/path/to/bin/harness tui` from another project (or pass `--workdir`). Nothing is automatically copied or created in the project.
+- The TUI shows the authoritative original session model/root and warns when client selection differs. `run` prints sanitized original configuration and mismatch diagnostics to stderr, before submission on reconnect or at the first query for a new session. Older workers without metadata are explicitly unknown, not assumed to use the reconnecting client's selection. Use a new session to change configuration. `run --json` keeps stdout JSONL-only and includes `session` metadata in its final `session_state` when available.
+- Workers dispatch each activity request by its original model: exactly `mock` uses mock; every other value uses the configured local Ollama endpoint and that exact model, with no fallback. This also applies to shared queues and reconnects with different client selections. Mock-only processing constructs no Ollama client; a real request still requires the configured endpoint/model to be available.
+- New workflow runs select the guided script only via an explicit `/demo` message or explicit initial `Scenario=demo`; ordinary natural-language fixture prompts do not opt in, even with mock. Old recorded workflow histories retain their natural-language alias behavior through a Temporal version gate.
+- Defaults: Temporal `localhost:7233`, UI `localhost:8233`, Ollama `127.0.0.1:11434`, workdir current directory, artifacts `.data/`. See [all settings and service ownership](docs/operations.md).
 
 ## Noninteractive example
 

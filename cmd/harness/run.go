@@ -19,9 +19,9 @@ import (
 )
 
 type runOptions struct {
-	prompt, session, model      string
-	json, autoApprove, external bool
-	timeout                     time.Duration
+	prompt, session, model, workdir string
+	json, autoApprove, external     bool
+	timeout                         time.Duration
 }
 
 func runCommand(args []string, out io.Writer) error {
@@ -31,6 +31,7 @@ func runCommand(args []string, out io.Writer) error {
 	f.StringVar(&o.prompt, "p", "", "prompt (never interpreted by a shell)")
 	f.StringVar(&o.session, "session", "", "session ID")
 	f.StringVar(&o.model, "model", "", "model override")
+	f.StringVar(&o.workdir, "workdir", "", "project root (overrides HARNESS_WORKDIR; default: current directory)")
 	f.BoolVar(&o.json, "json", false, "JSONL events and authoritative final session_state")
 	f.BoolVar(&o.autoApprove, "auto-approve", false, "WARNING: approve current tool requests automatically")
 	f.BoolVar(&o.external, "external-worker", false, "use existing dependencies and external worker")
@@ -44,7 +45,7 @@ func runCommand(args []string, out io.Writer) error {
 	if f.NArg() != 0 || strings.TrimSpace(o.prompt) == "" || o.timeout <= 0 {
 		return fmt.Errorf("run requires -p text and a positive timeout, without positional arguments")
 	}
-	cfg, err := config.Load()
+	cfg, err := config.LoadWithWorkdir(o.workdir)
 	if err != nil {
 		return err
 	}
@@ -72,28 +73,32 @@ func runSession(ctx context.Context, b cliBackend, cfg config.Config, o runOptio
 	ctx, cancel := context.WithTimeout(ctx, o.timeout)
 	defer cancel()
 	baseline, err := b.Query(ctx, o.session)
-	newSession := false
 	if err != nil {
 		var missing *serviceerror.NotFound
 		if !errors.As(err, &missing) {
 			return fmt.Errorf("baseline query: %w", err)
 		}
-		newSession = true
 	}
+	haveBaseline := err == nil
 	requestID, err := cliID()
 	if err != nil {
 		return err
 	}
 	input := sessionInput(cfg)
-	if cfg.Model == "mock" && newSession && (o.prompt == "Find what is broken in the sample project and verify the fix" || o.prompt == "Find what's broken in the sample project and verify the fix") {
-		input.Scenario = "demo"
-	}
 	// Establish the tail cursor BEFORE Submit. Subsequent bounded reads include even
 	// a run that starts and settles while the enqueue Update is returning.
 	path, err := events.NewStore(cfg.DataDir).Path(o.session)
 	if err != nil {
 		return err
 	}
+	// Existing-session metadata is known before submission, even for a fast run.
+	// New sessions report only after their first authoritative successful query.
+	if haveBaseline {
+		if err := printRunConfiguration(diag, baseline.Session, input); err != nil {
+			return err
+		}
+	}
+	configurationReported := haveBaseline
 	var offset int64
 	streamOK := true
 	if st, e := os.Stat(path); e == nil {
@@ -161,6 +166,12 @@ func runSession(ctx context.Context, b cliBackend, cfg config.Config, o runOptio
 		state, e := b.Query(ctx, o.session)
 		if e != nil {
 			return fmt.Errorf("session query: %w", e)
+		}
+		if !configurationReported {
+			if err := printRunConfiguration(diag, state.Session, input); err != nil {
+				return err
+			}
+			configurationReported = true
 		}
 		if runSettled(state, baseline) {
 			if plainStreamed {

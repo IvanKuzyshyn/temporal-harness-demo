@@ -60,6 +60,14 @@ func appendBounded(lines []string, s string) []string {
 // tool arguments, or child collections returned by the backend.
 func displayState(s workflows.State) workflows.State {
 	out := workflows.State{Status: bounded(singleLine(s.Status), 128), Turn: s.Turn, MaxTurns: s.MaxTurns, LastSeq: s.LastSeq, Answer: bounded(safeText(s.Answer), maxAnswer)}
+	if s.Session != nil {
+		out.Session = &workflows.SessionInfo{
+			Model:    bounded(singleLine(s.Session.Model), maxText),
+			Workdir:  bounded(singleLine(s.Session.Workdir), maxText),
+			DataDir:  bounded(singleLine(s.Session.DataDir), maxText),
+			Scenario: bounded(singleLine(s.Session.Scenario), maxText),
+		}
+	}
 	if len(s.Inbox) > 0 {
 		n := min(len(s.Inbox), 64)
 		capacity := n
@@ -267,8 +275,26 @@ func (m *Model) resize(w, h int) {
 	m.prompt.SetWidth(max(4, m.width))
 	m.prompt.SetHeight(3)
 	m.viewport.SetWidth(max(1, m.width))
-	m.viewport.SetHeight(max(1, m.height-12))
+	m.viewport.SetHeight(max(1, m.height-15))
 	m.refreshViewport(false)
+}
+
+func (m *Model) sessionMismatch(s *workflows.SessionInfo) bool {
+	// An unspecified scenario is not a selection against which to warn. /demo
+	// opts in per run and may initialize a fresh session with Scenario=demo.
+	return s != nil && (s.Model != m.opts.Model || s.Workdir != m.opts.Input.Workdir || s.DataDir != m.opts.Input.DataDir || (m.opts.Input.Scenario != "" && s.Scenario != m.opts.Input.Scenario))
+}
+
+func (m *Model) sessionConfiguration() string {
+	s := m.state.Session
+	if s == nil {
+		return "config:unknown (legacy or not yet queried)\nselected model:" + singleLine(m.opts.Model) + "\nselected root:" + singleLine(m.opts.Input.Workdir)
+	}
+	text := "model:" + singleLine(s.Model) + "\nroot:" + singleLine(s.Workdir) + "\nconfig:original session"
+	if m.configMismatch || m.sessionMismatch(s) {
+		text += " [mismatch: client selection not applied]"
+	}
+	return text
 }
 
 func (m *Model) View() tea.View {
@@ -308,7 +334,7 @@ func (m *Model) View() tea.View {
 	if maxTurns == 0 {
 		maxTurns = m.opts.Input.MaxTurns
 	}
-	footer := fmt.Sprintf("session:%s model:%s turn:%d/%d %s", singleLine(m.opts.SessionID), singleLine(m.opts.Model), m.state.Turn, maxTurns, status)
+	footer := fmt.Sprintf("session:%s turn:%d/%d %s", singleLine(m.opts.SessionID), m.state.Turn, maxTurns, status)
 	link := "UI: http://localhost:8233/namespaces/default/workflows/" + url.PathEscape(m.opts.SessionID)
 	if lipgloss.Width(link) > m.width {
 		link = "UI: http://localhost:8233 (default namespace)"
@@ -322,7 +348,7 @@ func (m *Model) View() tea.View {
 		title.Render(banner),
 		title.Render(panel), transcriptPane,
 		title.Render("Commands (Ctrl+T collapse)"), commandPane,
-		m.approvalView(), m.queueView(), m.prompt.View(), footer, link,
+		m.approvalView(), m.queueView(), m.prompt.View(), footer, link, m.sessionConfiguration(),
 	}, "\n")
 	// Status and notices are plain text, never terminal instructions.
 	if m.notice != "" {

@@ -7,7 +7,7 @@ import (
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/events"
 )
 
-const demoPrompt = "Inspect calc and its tests, delegate a read-only review, propose correcting Add with approval, then run go test ./... and summarize the result."
+const demoPrompt = "/demo"
 const helpText = "Enter: follow-up | Alt+Enter or /steer <text>: steer | Shift+Enter (Ctrl+J): newline\nEsc: stop | Ctrl+C: quit | Tab: transcript/patterns | PgUp/PgDn: scroll | Ctrl+T: collapse tools\n/continue | /new [id] | /sessions [id] | /help | /demo | /explore <task> | /run <command>"
 
 func (m *Model) submitPrompt(steer bool) tea.Cmd {

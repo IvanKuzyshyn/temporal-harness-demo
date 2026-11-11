@@ -87,7 +87,18 @@ type ChildState struct {
 	Status     string `json:"status"`
 	SummaryRef string `json:"summaryRef,omitempty"`
 }
+
+// SessionInfo is the fixed effective workflow input, not the reconnecting client's
+// selection. It is derived without activities or filesystem access.
+type SessionInfo struct {
+	Model    string `json:"model"`
+	Workdir  string `json:"workdir"`
+	DataDir  string `json:"dataDir"`
+	Scenario string `json:"scenario"`
+}
+
 type State struct {
+	Session              *SessionInfo      `json:"session,omitempty"`
 	Status               string            `json:"status"`
 	Turn                 int               `json:"turn"`
 	MaxTurns             int               `json:"maxTurns"`

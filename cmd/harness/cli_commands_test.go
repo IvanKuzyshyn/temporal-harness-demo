@@ -83,7 +83,7 @@ func TestRunHistoricalAndChildSettlement(t *testing.T) {
 	if f.queries != 4 || final.Type != "session_state" || final.Answer != "authoritative" || final.ID != "s" {
 		t.Fatalf("queries=%d output=%q", f.queries, out.String())
 	}
-	if len(f.decisions) != 0 || diag.Len() != 0 || f.submitted.RequestID == "" {
+	if len(f.decisions) != 0 || !bytes.Contains(diag.Bytes(), []byte("unknown (legacy")) || f.submitted.RequestID == "" {
 		t.Fatalf("unexpected defaults: %+v %s", f, diag.String())
 	}
 }

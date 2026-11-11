@@ -228,7 +228,14 @@ func TestInitDemoAndEmptyIDAreCommands(t *testing.T) {
 	for _, cmd := range batch[1:] {
 		m.Update(cmd())
 	}
-	if len(f.messages) != 1 || f.inputs[0].Scenario != "demo" {
+	if len(f.messages) != 1 || f.inputs[0].Scenario != "demo" || f.messages[0].Text != "/demo" {
 		t.Fatal("startup demo not submitted")
+	}
+	// The first authoritative query for the freshly opted-in demo must not
+	// conflict with the client's unspecified scenario.
+	f.state.Session = &workflows.SessionInfo{Model: m.opts.Model, Workdir: m.opts.Input.Workdir, DataDir: m.opts.Input.DataDir, Scenario: "demo"}
+	m.Update(m.queryCmd()())
+	if m.configMismatch {
+		t.Fatal("fresh autoplay incorrectly reported a configuration mismatch")
 	}
 }

@@ -134,16 +134,17 @@ func pollPause(ctx context.Context, d time.Duration) error {
 
 // Emit a bounded summary rather than the potentially large inbox/tool state.
 type cliSummary struct {
-	Type    string             `json:"type"`
-	ID      string             `json:"id"`
-	Status  string             `json:"status"`
-	Turn    int                `json:"turn"`
-	Failure *workflows.Failure `json:"failure,omitempty"`
-	Answer  string             `json:"answer,omitempty"`
+	Session *workflows.SessionInfo `json:"session,omitempty"`
+	Type    string                 `json:"type"`
+	ID      string                 `json:"id"`
+	Status  string                 `json:"status"`
+	Turn    int                    `json:"turn"`
+	Failure *workflows.Failure     `json:"failure,omitempty"`
+	Answer  string                 `json:"answer,omitempty"`
 }
 
 func summary(id string, s workflows.State) cliSummary {
-	return cliSummary{Type: "session_state", ID: id, Status: s.Status, Turn: s.Turn, Failure: s.LastRunFailure, Answer: s.Answer}
+	return cliSummary{Type: "session_state", ID: id, Status: s.Status, Turn: s.Turn, Failure: s.LastRunFailure, Answer: s.Answer, Session: s.Session}
 }
 
 // terminalText removes terminal control introducers (including C1), not just
@@ -156,6 +157,23 @@ func terminalText(s string) string {
 		}
 		return r
 	}, s)
+}
+
+// Diagnostics always go to stderr, including in JSONL mode. Quote sanitized
+// metadata to keep paths/models on one line and prevent control injection.
+func printRunConfiguration(diag io.Writer, s *workflows.SessionInfo, selected workflows.Input) error {
+	if s == nil {
+		_, err := fmt.Fprintln(diag, "configuration: unknown (legacy session metadata unavailable); client selection is not authoritative")
+		return err
+	}
+	if _, err := fmt.Fprintf(diag, "configuration: original session model=%q root=%q dataDir=%q scenario=%q\n", terminalText(s.Model), terminalText(s.Workdir), terminalText(s.DataDir), terminalText(s.Scenario)); err != nil {
+		return err
+	}
+	if s.Model != selected.Model || s.Workdir != selected.Workdir || s.DataDir != selected.DataDir || (selected.Scenario != "" && s.Scenario != selected.Scenario) {
+		_, err := fmt.Fprintln(diag, "configuration mismatch: client selection not applied; using original session configuration")
+		return err
+	}
+	return nil
 }
 
 func printFinal(out io.Writer, id string, s workflows.State, asJSON bool) error {

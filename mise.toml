@@ -7,7 +7,6 @@ ollama = "0.40.15"
 HARNESS_MODEL = "{{ env.HARNESS_MODEL | default(value='gemma4:e4b') }}"
 TEMPORAL_ADDRESS = "{{ env.TEMPORAL_ADDRESS | default(value='localhost:7233') }}"
 OLLAMA_HOST = "{{ env.OLLAMA_HOST | default(value='127.0.0.1:11434') }}"
-HARNESS_WORKDIR = "{{ env.HARNESS_WORKDIR | default(value=config_root ~ '/examples/sample-project') }}"
 
 [tasks.setup]
 description = "Install tools, build, start dependencies, pull model"
