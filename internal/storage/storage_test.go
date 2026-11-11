@@ -5,6 +5,7 @@ package storage_test
 import (
 	"context"
 	"fmt"
+	neturl "net/url"
 	"os"
 	"strings"
 	"sync"
@@ -296,7 +297,38 @@ func TestMigrationCycle(t *testing.T) {
 	}
 	_, p := database(t)
 	url := os.Getenv("WEBCHAT_TEST_DATABASE_URL")
-	require.NoError(t, storage.Migrate(url, "up"))
+	// Both targets live in the runner's unique disposable container. Use the
+	// existing Temporal role credentials, not changed/granted app permissions.
+	forbiddenURL := os.Getenv("WEBCHAT_TEST_TEMPORAL_DATABASE_URL")
+	require.NotEmpty(t, forbiddenURL)
+	forbiddenConfig, err := pgxpool.ParseConfig(forbiddenURL)
+	require.NoError(t, err)
+	require.Equal(t, p.Config().ConnConfig.Host, forbiddenConfig.ConnConfig.Host)
+	require.Equal(t, p.Config().ConnConfig.Port, forbiddenConfig.ConnConfig.Port)
+	require.Equal(t, "temporal", forbiddenConfig.ConnConfig.User)
+	require.Equal(t, "temporal", forbiddenConfig.ConnConfig.Database)
+	forbidden, err := pgxpool.NewWithConfig(ctx, forbiddenConfig)
+	require.NoError(t, err)
+	t.Cleanup(forbidden.Close)
+	assertNoMetadata := func() {
+		t.Helper()
+		var name *string
+		require.NoError(t, forbidden.QueryRow(ctx, "SELECT to_regclass('public.schema_migrations')::text").Scan(&name))
+		require.Nil(t, name, "rejected target must never receive migration metadata")
+	}
+	assertNoMetadata()
+	for _, alias := range []string{"dbname", "database"} {
+		attack := url + "&user=temporal&password=" + neturl.QueryEscape(forbiddenConfig.ConnConfig.Password) + "&" + alias + "=temporal"
+		if err := storage.Migrate(attack, "up"); err == nil {
+			t.Error("effective Temporal target was accepted")
+		}
+		assertNoMetadata()
+	}
+	// Input-order alias resolution selects the application DB. Re-encoding the
+	// query through url.Values before connecting would reverse these aliases.
+	allowedAliases := url + "&dbname=temporal&database=" + neturl.QueryEscape(p.Config().ConnConfig.Database)
+	require.NoError(t, storage.Migrate(allowedAliases, "up"))
+	assertNoMetadata()
 	require.NoError(t, storage.Migrate(url, "down"))
 	var name *string
 	require.NoError(t, p.QueryRow(ctx, "SELECT to_regclass('public.conversations')::text").Scan(&name))

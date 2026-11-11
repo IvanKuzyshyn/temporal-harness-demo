@@ -14,6 +14,17 @@ applies embedded application migrations with pinned golang-migrate/pgx.
 application database by the integration runner. Never point migrations at a
 Temporal database; the migration helper rejects both Temporal database names
 and non-application roles, and the application role cannot connect to those DBs.
+It parses the pgx connection configuration once, validates the **effective** user
+and database after URL query overrides, aliases, environment, and service-file
+settings, then connects from that same configuration without URI re-encoding or
+reparsing. Validation happens before constructing the migration driver (which
+can create `schema_migrations`). An empty effective database is rejected rather
+than left to server defaults. Startup `role`, `session_authorization`, and
+`options` (including `PGOPTIONS`/service-file options) are rejected; this helper
+also uses fixed migration settings, not custom `x-` driver parameters. Ordinary
+application URLs with SSL mode, connect timeout, and application name remain
+supported. Duplicate/aliased parameters use pgx's input-order resolution; only
+the final resolved application identity is used.
 
 All domain structs are in `internal/chat/contracts.go`. Identity strings must
 be nonzero, lowercase, hyphenated UUIDs. Models are exactly `qwen3.5:9b` and

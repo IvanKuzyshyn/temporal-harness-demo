@@ -42,6 +42,7 @@ compose=(docker compose -p "$project" -f "$work/compose.yaml")
 port=$("${compose[@]}" port postgres 5432)
 [[ "$port" =~ ^127\.0\.0\.1:[0-9]+$ ]] || { echo "unsafe target: $port" >&2; exit 1; }
 export WEBCHAT_TEST_DATABASE_URL="postgres://webchat:test-app-only@$port/$database?sslmode=disable"
+export WEBCHAT_TEST_TEMPORAL_DATABASE_URL="postgres://temporal:test-temporal-only@$port/temporal?sslmode=disable"
 export WEBCHAT_TEST_RECEIPT="$work/receipt"
 echo "Storage integration project=$project database=$database address=$port volume=$volume"
 run() { mise exec -- go test -p 1 -count=1 -tags integration "$@" ./internal/storage/...; }
