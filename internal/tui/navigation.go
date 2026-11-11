@@ -4,13 +4,12 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/x/ansi"
 )
 
 // Browsing freezes one bounded rendered window as well as its durable page.
 // This preserves live drafts too when a snapshot reconstructs or retires them.
-// Positions use logical lines and display cells, matching the pinned viewport's
-// cell-sliced SoftWrap (not ansi.Hardwrap's grapheme-aware line breaking).
+// Positions use canonical logical lines and source cells. The same transient
+// row projection drives both native rendering and anchor/selection geometry.
 // Keep the original cell through successive resizes: re-capturing a projected
 // row at each width would round it down repeatedly and cause reading drift.
 type readingAnchor struct {
@@ -19,16 +18,6 @@ type readingAnchor struct {
 	valid                    bool
 }
 
-func wrappedRows(line string, width int) int {
-	return max(1, (ansi.StringWidth(line)+max(1, width)-1)/max(1, width))
-}
-func partRows(part string, width int) int {
-	rows := 0
-	for _, line := range strings.Split(part, "\n") {
-		rows += wrappedRows(line, width)
-	}
-	return rows
-}
 func (m *Model) browse() {
 	if !m.showPatterns {
 		if m.followLive {
@@ -67,14 +56,13 @@ func (m *Model) captureAnchor() {
 	}
 	m.anchor = readingAnchor{}
 	row := 0
-	for i, part := range m.journalParts {
-		for j, line := range strings.Split(part, "\n") {
-			n := wrappedRows(line, m.width)
-			if y := m.viewport.YOffset(); y >= row && y < row+n {
-				m.anchor = readingAnchor{recordID: m.recordForPart(i), part: i, line: j, cell: (y - row) * max(1, m.width), offset: y, valid: true}
+	for i := range m.journalParts {
+		for _, line := range m.partDisplayLines(i) {
+			if y := m.viewport.YOffset(); y == row {
+				m.anchor = readingAnchor{recordID: m.recordForPart(i), part: i, line: line.line, cell: line.cell, offset: y, valid: true}
 				return
 			}
-			row += n
+			row++
 		}
 	}
 }
@@ -116,16 +104,20 @@ func (m *Model) restoreAnchor() {
 		return
 	}
 	row := 0
-	for _, part := range m.journalParts[:a.part] {
-		row += partRows(part, m.width)
+	for i := range m.journalParts[:a.part] {
+		row += len(m.partDisplayLines(i))
 	}
-	lines := strings.Split(m.journalParts[a.part], "\n")
-	line := min(a.line, len(lines)-1)
-	for _, text := range lines[:line] {
-		row += wrappedRows(text, m.width)
+	// Find the row containing the ORIGINAL cell, without rounding the anchor
+	// itself down to the new width's word boundary on each resize.
+	lines := m.partDisplayLines(a.part)
+	position := 0
+	for i, line := range lines {
+		if line.line > a.line || (line.line == a.line && line.cell > a.cell) {
+			break
+		}
+		position = i
 	}
-	// Clamp inside the anchored part/line, not just the whole viewport.
-	row += min(a.cell/max(1, m.width), wrappedRows(lines[line], m.width)-1)
+	row += position
 	m.viewport.SetYOffset(row)
 	a.offset = m.viewport.YOffset()
 }
@@ -199,6 +191,11 @@ func (m *Model) selectRecord(direction int) {
 }
 func (m *Model) toggleDetail() {
 	m.showPatterns = false
+	if m.history.detailID == historyDiagnostic {
+		m.history.detailID = ""
+		m.rebuildJournal()
+		return
+	}
 	if m.log.ref != "" {
 		m.selectedID = m.log.recordID
 		m.log = logState{}
@@ -263,6 +260,9 @@ func (m *Model) rebuildJournal() {
 	for i, b := range m.journalBlocks {
 		m.journalParts[i] = b.text(m.selectedID)
 		m.journalBlocks[i].headingBytes = len(safeText(b.heading))
+		if b.separate {
+			m.journalBlocks[i].headingBytes++
+		}
 		if b.id != "" && b.id == m.selectedID {
 			m.journalBlocks[i].headingBytes += 2
 		}
@@ -292,9 +292,20 @@ func (m *Model) renderJournal() {
 	}
 	styled := make([]string, len(m.journalBlocks))
 	for i, b := range m.journalBlocks {
-		part := m.journalParts[i]
-		n := b.headingBytes
-		styled[i] = semanticHeading(part[:n], b.tone) + part[n:]
+		if b.inset == 0 {
+			part := m.journalParts[i]
+			styled[i] = semanticHeading(part[:b.headingBytes], b.tone) + part[b.headingBytes:]
+			continue // Literal detail/log text retains the viewport's native soft wrap.
+		}
+		lines := m.partDisplayLines(i)
+		text := make([]string, len(lines))
+		for j, line := range lines {
+			text[j] = line.text
+			if line.heading {
+				text[j] = semanticHeading(line.text, b.tone)
+			}
+		}
+		styled[i] = strings.Join(text, "\n")
 	}
 	m.viewport.SetContent(boundedJournal(styled))
 }

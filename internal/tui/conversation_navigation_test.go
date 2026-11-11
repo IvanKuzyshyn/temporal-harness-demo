@@ -191,7 +191,9 @@ func TestConversationExpandedSourceAnchorSurvivesResize(t *testing.T) {
 	m.rebuildJournal()
 	m.viewport.GotoTop()
 	m.Update(key('t', tea.ModCtrl))
-	m.viewport.SetYOffset(12)
+	// The context is now a bounded preview: anchor within its second body
+	// row, rather than the old unbounded context's twelfth viewport row.
+	m.viewport.SetYOffset(6)
 	m.anchor = readingAnchor{}
 	m.captureAnchor()
 	if m.anchor.recordID != r[1].ID {

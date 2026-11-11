@@ -153,8 +153,8 @@ func TestJournalDetailsBoundsAndLatestControls(t *testing.T) {
 	}
 	m.selectedID = "work:" + records[68].ID
 	m.toggleWork()
-	if !strings.Contains(m.viewport.GetContent(), "display truncated") {
-		t.Fatal("expanded overview missing truncation label")
+	if !strings.Contains(m.viewport.GetContent(), "preview only · /detail 70") {
+		t.Fatal("expanded overview missing preview/full-source label")
 	}
 	m.prompt.SetValue("/detail 70")
 	m.submitPrompt(false)
@@ -304,9 +304,18 @@ func TestJournalRenderBoundSanitizationAndDurableChildren(t *testing.T) {
 	if strings.ContainsAny(boundedJournal(m.journalLines()), "\x1b\x07\u202e") {
 		t.Fatal("untrusted terminal controls retained")
 	}
-	if len(text) > maxJournalText || strings.ContainsAny(text, "\x07\u202e") || !strings.Contains(text, "durable child summary") || !strings.Contains(text, "child-artifact#message") || !strings.Contains(text, "display limit") {
+	if len(text) > maxJournalText || strings.ContainsAny(text, "\x07\u202e") || !strings.Contains(text, "durable child summary") || !strings.Contains(text, "preview only") || !strings.Contains(text, "display limit") {
 		t.Fatal("bounds/sanitization/child summary lost")
 	}
+	// Receipt previews may omit metadata; the authoritative child source still
+	// exposes it in full rather than deleting it to fit the journal.
+	m.prompt.SetValue("/detail 64")
+	m.submitPrompt(false)
+	if !strings.Contains(m.viewport.GetContent(), "child-artifact#message") {
+		t.Fatal("full durable child source unavailable")
+	}
+	m.history.detailID = ""
+	m.resumeFollowing()
 	m.history.older = true
 	m.refreshViewport(false)
 	if strings.Contains(m.viewport.GetContent(), "Live child progress") {
@@ -332,7 +341,7 @@ func TestHistoryErrorVisibleWhileScrolledWithQueryStatus(t *testing.T) {
 	m.state = workflows.State{Status: "idle"}
 	m.refreshViewport(true)
 	view := m.View().Content
-	if !strings.Contains(view, "artifact unreadable") || !strings.Contains(view, "idle") {
+	if !strings.Contains(view, "History unavailable") || !strings.Contains(view, "/history-error") || strings.Contains(view, "artifact unreadable") || !strings.Contains(view, "idle") {
 		t.Fatal("history error is hidden above scrollback or Query status discarded")
 	}
 }

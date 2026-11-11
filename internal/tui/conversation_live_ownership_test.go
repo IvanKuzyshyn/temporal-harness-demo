@@ -48,8 +48,8 @@ func TestConversationLiveOwnershipAcrossQueryHistorySeam(t *testing.T) {
 					t.Fatalf("cached completed A acquired current work/activity:\n%s\nwant:\n%s", got, before)
 				}
 				frame := ansi.Strip(m.View().Content)
-				answer, live := strings.Index(frame, "ANSWER-A"), strings.Index(frame, "current live / unassociated")
-				if answer < 0 || live <= answer || !strings.Contains(frame[live:], "current activity: generating") {
+				answer, live := strings.Index(frame, "ANSWER-A"), strings.Index(frame, "live observations / unassociated")
+				if answer < 0 || live <= answer || !strings.Contains(frame[live:], "Ctrl+T · generating") {
 					t.Fatalf("actual frame must put explicitly unassociated activity AFTER completed A: %s", frame)
 				}
 			}
@@ -74,8 +74,8 @@ func TestConversationLiveOwnershipAcrossQueryHistorySeam(t *testing.T) {
 			m.selectedID = "work:live"
 			m.Update(key('t', tea.ModCtrl))
 			frame := ansi.Strip(m.View().Content)
-			live := strings.Index(frame, "current live / unassociated")
-			if live < 0 || !strings.Contains(frame, "2 observations · current live / unassociated") || strings.Index(frame, "LIVE-TOOL") <= live || strings.Index(frame, "LIVE-CHILD") <= live {
+			live := strings.Index(frame, "live observations / unassociated")
+			if live < 0 || !strings.Contains(frame, "2 live observations / unassociated") || strings.Index(frame, "LIVE-TOOL") <= live || strings.Index(frame, "LIVE-CHILD") <= live {
 				t.Fatalf("expanded observations not owned by separate live group: %s", frame)
 			}
 			m.applyEvent(compactEvent(events.Event{Seq: 3, Type: events.ToolUpdate, Data: tool}))
@@ -83,7 +83,7 @@ func TestConversationLiveOwnershipAcrossQueryHistorySeam(t *testing.T) {
 			m.Update(key('t', tea.ModCtrl))
 			m.Update(key('t', tea.ModCtrl))
 			frame = ansi.Strip(m.View().Content)
-			if strings.Count(frame, "LIVE-TOOL") != 1 || !strings.Contains(frame, "2 observations · current live / unassociated") {
+			if strings.Count(frame, "LIVE-TOOL") != 1 || !strings.Contains(frame, "2 live observations / unassociated") {
 				t.Fatalf("frozen expansion consumed incoming observations: %s", frame)
 			}
 			assertOwnership()
@@ -102,8 +102,8 @@ func TestConversationLiveOwnershipAcrossQueryHistorySeam(t *testing.T) {
 			m.selectedID = "work:live"
 			m.Update(key('t', tea.ModCtrl))
 			frame = ansi.Strip(m.View().Content)
-			promptB, durableB, live := strings.Index(frame, "PROMPT-B"), strings.Index(frame, "B-DURABLE-TOOL"), strings.Index(frame, "current live / unassociated")
-			if promptB < 0 || durableB <= promptB || live <= durableB || strings.Index(frame, "LIVE-CHILD") <= live || strings.Count(frame, "LIVE-TOOL") != 2 || !strings.Contains(frame, "3 observations · current live / unassociated") {
+			promptB, durableB, live := strings.Index(frame, "PROMPT-B"), strings.Index(frame, "B-DURABLE-TOOL"), strings.Index(frame, "live observations / unassociated")
+			if promptB < 0 || durableB <= promptB || live <= durableB || strings.Index(frame, "LIVE-CHILD") <= live || strings.Count(frame, "LIVE-TOOL") != 2 || !strings.Contains(frame, "3 live observations / unassociated") {
 				t.Fatalf("later B page guessed live ownership or lost ordered durable work: %s", frame)
 			}
 			assertOwnership()

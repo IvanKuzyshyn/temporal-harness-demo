@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // conversationBlock is the single identity/semantic mapping used by rendering,
@@ -17,12 +19,17 @@ type conversationBlock struct {
 	heading, body, tone   string
 	members               []string
 	headingBytes          int // retained prefix length; heading/body are cleared after rendering
+	inset                 int // continuation gutter for presentation bodies; raw detail stays literal
+	separate              bool
 }
 
 func (b conversationBlock) text(selected string) string {
 	heading := safeText(b.heading)
 	if b.id != "" && b.id == selected {
 		heading = "> " + heading
+	}
+	if b.separate {
+		heading = "\n" + heading
 	}
 	if b.body != "" {
 		return heading + "\n" + b.body
@@ -32,6 +39,19 @@ func (b conversationBlock) text(selected string) string {
 
 func roleBody(text string) string {
 	return "  " + strings.ReplaceAll(journalText(text, maxText), "\n", "\n  ")
+}
+
+// Preview limits are independent of terminal width, so frozen source positions
+// survive reflow. Full evidence remains on the existing durable detail surface.
+func receiptPreview(row journalEntry, number int) string {
+	text := recordBody(row, maxText)
+	lines := strings.Split(text, "\n")
+	preview := strings.Join(lines[:min(3, len(lines))], "\n")
+	preview = ansi.Truncate(preview, 160, "")
+	if preview != text {
+		preview += fmt.Sprintf("\n… preview only · /detail %d for full record", number)
+	}
+	return "    " + strings.ReplaceAll(preview, "\n", "\n    ")
 }
 
 func recordBody(row journalEntry, limit int) string {
@@ -71,6 +91,13 @@ func outcomeTone(status string) string {
 func (m *Model) conversation() []conversationBlock {
 	rows := journalEntries(m.history.page.Entries)
 	blocks := []conversationBlock{{heading: m.historyHeader(), tone: "muted"}}
+	if m.history.detailID == historyDiagnostic {
+		text := m.history.err
+		if text == "" {
+			text = "No current history error"
+		}
+		return append(blocks, conversationBlock{heading: "History diagnostic · Ctrl+O /journal return · /latest retry", body: text, tone: "failure"})
+	}
 	if m.history.detailID != "" {
 		for _, row := range rows {
 			if row.record.ID == m.history.detailID {
@@ -109,13 +136,13 @@ func (m *Model) conversation() []conversationBlock {
 			}
 			heading := fmt.Sprintf("%s Work · %d observations", mark, len(g.work)+len(g.live))
 			if g.id == "work:live" {
-				heading += " · current live / unassociated"
+				heading = fmt.Sprintf("%s Work · %d live observations / unassociated", mark, len(g.live))
 			} else if g.partial {
 				heading += " · earlier / partial"
 			}
 			heading += " · Ctrl+T"
 			if g.activity != "" {
-				heading += " · current activity: " + g.activity
+				heading += " · " + ansi.Truncate(g.activity, 20, "…")
 			}
 			counts := map[string]int{}
 			members := []string{}
@@ -168,15 +195,15 @@ func (m *Model) conversation() []conversationBlock {
 						}
 					}
 					label = fmt.Sprintf("  ↳ %s · /detail %d", label, n)
-					blocks = append(blocks, conversationBlock{id: row.record.ID, sourceID: row.record.ID, groupID: g.id, heading: label, body: recordBody(row, maxText), tone: outcomeTone(status)})
+					blocks = append(blocks, conversationBlock{id: row.record.ID, sourceID: row.record.ID, groupID: g.id, heading: label, body: receiptPreview(row, n), tone: outcomeTone(status), inset: 4})
 				}
 				for _, entry := range g.live {
-					blocks = append(blocks, conversationBlock{groupID: g.id, heading: "  ↳ " + singleLine(entry.label), body: journalText(entry.text, maxText), tone: "muted"})
+					blocks = append(blocks, conversationBlock{groupID: g.id, heading: "  ↳ " + singleLine(entry.label), body: "    " + strings.ReplaceAll(journalText(entry.text, maxText), "\n", "\n    "), tone: "muted", inset: 4})
 				}
 			}
 		}
 		for _, row := range g.answers {
-			blocks = append(blocks, conversationBlock{id: row.record.ID, sourceID: row.record.ID, heading: "✓ Assistant · response completed", body: roleBody(row.record.Message.Content) + "\n", tone: "complete"})
+			blocks = append(blocks, conversationBlock{id: row.record.ID, sourceID: row.record.ID, heading: "✓ Assistant · response completed", body: roleBody(row.record.Message.Content), tone: "complete", inset: 2, separate: true})
 		}
 	}
 	for _, row := range rows {
@@ -184,7 +211,7 @@ func (m *Model) conversation() []conversationBlock {
 		if msg.Role == "user" {
 			flush()
 			g = group{id: "work:" + row.record.ID}
-			blocks = append(blocks, conversationBlock{id: row.record.ID, sourceID: row.record.ID, heading: "› You", body: roleBody(msg.Content), tone: "user"})
+			blocks = append(blocks, conversationBlock{id: row.record.ID, sourceID: row.record.ID, heading: "› You", body: roleBody(msg.Content), tone: "user", inset: 2, separate: len(blocks) > 1})
 		} else if msg.Role == "assistant" && len(msg.ToolCalls) == 0 && strings.TrimSpace(msg.Content) != "" {
 			g.answers = append(g.answers, row)
 		} else {
@@ -266,7 +293,7 @@ func (m *Model) toggleWork() {
 	if target == "" {
 		row := 0
 		for i, b := range m.journalBlocks {
-			end := row + partRows(m.journalParts[i], m.width)
+			end := row + len(m.partDisplayLines(i))
 			if b.id == b.groupID && b.id != "" && end > m.viewport.YOffset() && row < m.viewport.YOffset()+m.viewport.Height() {
 				target = b.id
 			}
@@ -299,11 +326,14 @@ func (m *Model) revealSelected() {
 	row := 0
 	for i, b := range m.journalBlocks {
 		if b.id == m.selectedID {
+			if b.separate {
+				row++ // Reveal the actual heading, not only its blank separator.
+			}
 			if row < m.viewport.YOffset() || row >= m.viewport.YOffset()+m.viewport.Height() {
 				m.viewport.SetYOffset(row)
 			}
 			return
 		}
-		row += partRows(m.journalParts[i], m.width)
+		row += len(m.partDisplayLines(i))
 	}
 }

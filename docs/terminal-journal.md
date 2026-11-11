@@ -12,7 +12,8 @@ following/browsing row and separator. Nonempty queues and exceptional warnings
 can add rows; empty queues and successful Submit receipts do not. One conversation
 region occupies the remaining space above a visibly separated multiline composer
 and persistent controls. The composer occupies reserved bottom rows. Width-limited chrome is explicitly elided rather than wrapping over
-the prompt. `/metadata` adds sanitized original metadata as scrollable journal
+the prompt. Long session IDs show a distinguishing suffix; long project paths
+are middle-elided to keep root context and basename. `/metadata` adds sanitized original metadata as scrollable journal
 rows (4 KiB per field); original unsanitized metadata remains in the State Query.
 Client selections are labeled unknown/requested until authoritative metadata is
 available. Mismatch comparison uses raw values, not their sanitized rendering.
@@ -25,7 +26,11 @@ available. Mismatch comparison uses raw values, not their sanitized rendering.
   summary or expanded receipt. **Ctrl+O** opens/closes raw source detail (on a
   work summary it toggles that group). `/detail NUMBER` uses the global source
   number shown on expanded receipts, not the rendered row index; `/journal`
-  returns to conversation. Selection is separate from normal Up/Down and ordinary
+  returns to conversation. A history-read failure has one red notice, without
+  repeating its raw filename/hash in the journal. `/history-error` opens the
+  bounded diagnostic; Ctrl+O or `/journal` returns and `/latest` retries. Cached
+  conversation remains readable; a missing history page never invents a prompt.
+  Selection is separate from normal Up/Down and ordinary
   text, which still edit the composer. Detail uses the same scroll keys/wheel.
 - **Ctrl+T** expands/collapses **one** work block: the selected group or its selected
   receipt's owner, otherwise the latest visible work summary. If none is visible,
@@ -52,7 +57,7 @@ intermediate tool-request assistant messages and durable tool results. A settled
 prompt with no work has no empty block. Work before the first loaded user is
 **earlier / partial**, never assigned to that later prompt. Live tool/child
 observations and active Query phase have no trustworthy prompt identity: they
-appear in a separate **current live / unassociated** block after the durable page,
+appear in a separate **live observations / unassociated** block after the durable page,
 not inside the last cached prompt's work. A later page does not itself establish
 ownership of surviving live observations. Counts describe bounded observations,
 not complete run history or unique executions. Substantive durable responses and
@@ -69,8 +74,10 @@ live-input references are retained for expansion while frozen; incoming work is 
 silently exposed by Ctrl+T. Rendering and selection share the projection's stable
 source/group IDs, not a one-record-per-rendered-part index assumption. A stable ID
 plus logical line and display-cell position preserve the actual reading content
-across resize. Reflow uses the pinned viewport's cell-sliced wrapping, including
-wide and combining characters, and bounds restoration inside the anchored record.
+across resize. Role and receipt bodies use word-aware wrapping with continuation
+insets, driven by the same row-to-source-cell mapping as selection and anchors.
+Raw detail/log panels retain the pinned viewport's literal cell-sliced wrapping,
+including wide and combining characters. Restoration stays inside the anchored record.
 The original cell is retained across repeated width changes rather than rounded
 down anew at each width. Legacy/live-only text uses a position in the same bounded
 frozen display window, without inventing a durable identity.
@@ -109,6 +116,11 @@ heartbeat is not proof of a dead workflow or a successful command.
 
 Prompts use a cyan/bold `› You` heading; substantive durable responses use a green
 `✓ Assistant · response completed` heading with neutral indented body text.
+A blank row precedes each substantive response and subsequent turn. Wrapped role
+bodies keep a two-cell inset. Expanded durable receipts keep a four-cell gutter
+and preview at most three logical lines / 160 display cells; shortened previews
+explicitly link `/detail N` for the full bounded record. This makes the receipts
+scannable without letting a single context payload consume the entire journal.
 **Response completion is not test/command verification.** Work uses a restrained
 summary; canonical failures are red and interrupted/unknown outcomes amber. A
 current request failure is a separate notice and cannot recolor an unrelated old

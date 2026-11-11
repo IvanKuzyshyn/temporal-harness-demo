@@ -11,6 +11,8 @@ import (
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/workflows"
 )
 
+const historyDiagnostic = "diagnostic:history"
+
 // A single complete page replaces the previous window. No concatenated gaps or
 // unbounded session cache; /older walks backward, /latest returns to the tail.
 type historyState struct {
@@ -23,7 +25,7 @@ type historyState struct {
 	observedTotal          int
 	page                   activities.TranscriptPage
 	err                    string
-	detailID               string   // selection follows durable identity, not a row offset
+	detailID               string   // durable record identity, or the namespaced historyDiagnostic panel
 	retired                []string // bounded completed MessageRef identities, independent of page
 }
 type historyMsg struct {
@@ -197,8 +199,8 @@ func (m *Model) historyHeader() string {
 	if h.pending {
 		text += " [loading]"
 	}
-	if h.err != "" {
-		text += " [unavailable; cached page if any: " + h.err + "]"
+	if h.err != "" && h.loaded {
+		text += " [cached]"
 	}
 	return text
 }

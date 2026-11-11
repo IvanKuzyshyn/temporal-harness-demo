@@ -93,7 +93,7 @@ func TestConversationFrozenWorkToggleDoesNotConsumeIncoming(t *testing.T) {
 	}
 	m.jumpLatest()
 	v := ansi.Strip(m.viewport.GetContent())
-	if !strings.Contains(v, "3 observations · Ctrl+T") || !strings.Contains(v, "1 observations · current live / unassociated") {
+	if !strings.Contains(v, "3 observations · Ctrl+T") || !strings.Contains(v, "1 live observations / unassociated") {
 		t.Fatal("End did not expose newest observations separately from durable prompt work")
 	}
 }
@@ -105,7 +105,7 @@ func TestConversationWorkingWithoutDurableToolStillHasOneWorkBlock(t *testing.T)
 	m.state = workflows.State{Status: "working", Phase: "generating", Mode: "normal", ActiveTools: []llm.ToolCall{{Name: "read_file"}}}
 	m.rebuildJournal()
 	v := ansi.Strip(m.viewport.GetContent())
-	if strings.Count(v, "▸ Work") != 1 || !strings.Contains(v, "current activity: generating") {
+	if strings.Count(v, "▸ Work") != 1 || !strings.Contains(v, "live observations / unassociated · Ctrl+T · generating") {
 		t.Fatalf("active work absent: %s", v)
 	}
 	m.state.Status = "idle"

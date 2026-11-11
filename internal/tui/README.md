@@ -39,6 +39,8 @@ calls have a ten-second timeout. Ctrl+C cancels the session context.
 - `/older` loads the preceding 64-record window; `/latest` retries/returns to the
   newest window. `/detail <record number>` opens scrollable captured record
   details; `/journal` returns to the window. PgUp/PgDn also scroll record details.
+  A history-read failure shows one red notice; `/history-error` opens its bounded
+  raw diagnostic. Ctrl+O or `/journal` returns, and `/latest` retries.
 - `/continue`, `/new [id]`, `/sessions [id]`, `/help` are local commands.
   `/sessions <id>` reconnects to that session. `/new` generates a crypto-random ID.
 - `/explore ...` and `/run ...` are submitted unchanged for workflow handling.
@@ -76,12 +78,16 @@ certify command/test success. System evidence, tool-request messages and durable
 tool results stay inside their prompt's work; failed/interrupted/unknown canonical
 outcomes remain visible in its summary. Live tool/child observations and current
 Query activity lack a trustworthy prompt identity and occupy a separate
-**current live / unassociated** work block (`work:live`), even after a newer prompt
+**live observations / unassociated** work block (`work:live`), even after a newer prompt
 page arrives. They are never assigned by cached page position, call ID or prose.
 Query request failures are separate notices, not colors applied to unrelated
 historical responses. Work preceding the first loaded prompt is labeled
 **earlier / partial**. Empty settled work is omitted. Live drafts are explicitly
-best-effort, not completed responses.
+best-effort, not completed responses. A blank row separates substantive responses
+and subsequent turns. Role bodies word-wrap with a two-cell continuation inset;
+expanded receipt bodies keep a four-cell gutter. Each durable receipt previews
+at most three logical lines / 160 display cells, with an explicit continuation
+label pointing to `/detail N` when shortened. Detail/log panels stay literal.
 
 `conversationBlock` IDs, group membership and heading spans are the shared mapping
 for plain/styled rendering, visible selection and reflow anchors. Source identities
@@ -95,7 +101,8 @@ snapshot of live inputs so explicit expansion cannot consume incoming updates.
 
 Normal chrome uses five rows at 80×24/120×40 (including its separator), excluding
 exceptional notices, nonempty queues and configuration warnings. Model/session
-share the aligned brand row; original project, activity/freshness and browsing
+share the aligned brand row (session suffixes distinguish long IDs); project
+paths are middle-elided to retain root context and basename. Original project, activity/freshness and browsing
 state have separate rows. Empty queue and successful Submit chatter are suppressed.
 The multiline composer has a separate rule and persistent controls.
 
@@ -110,8 +117,10 @@ labels, including in pending reconnect events. Frozen browsing holds at most 128
 live-input references with the same text bounds; it does not accumulate pages.
 Projection metadata retains no duplicate raw/rendered bodies: bounded text lives
 in the shared journal parts and only trusted heading byte spans are styled.
-The expanded journal overview limits durable record text
-to 4KiB each; selected detail permits 504KiB. Aggregate journal viewport text is
+The expanded journal overview uses bounded receipt previews (from at most 4KiB
+per record); selected detail permits 504KiB. Width-specific wrapping is transient;
+the frozen canonical text and original source-cell anchor are retained, not a
+second width-dependent source cache. Aggregate journal viewport text is
 bounded to 512KiB, with explicit truncation labels. Pending reconnect buffers use the events package's 4096-event cap,
 with a same-sized TUI projection buffer; the events-package copy validates only
 sequence numbers. Prompt input has a hard aggregate 16,384-rune

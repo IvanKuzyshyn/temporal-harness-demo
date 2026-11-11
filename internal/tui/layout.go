@@ -9,6 +9,24 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// Prefer the distinguishing suffix rather than a shared session-name prefix.
+func shortSession(id string) string {
+	id = strings.TrimPrefix(singleLine(id), "session-")
+	if ansi.StringWidth(id) <= 12 {
+		return id
+	}
+	return "…" + ansi.Cut(id, ansi.StringWidth(id)-11, ansi.StringWidth(id))
+}
+
+func middleElide(text string, width int) string {
+	n := ansi.StringWidth(text)
+	if n <= width {
+		return text
+	}
+	left := min(16, max(0, (width-1)/3))
+	return ansi.Truncate(text, left, "") + "…" + ansi.Cut(text, n-max(0, width-left-1), n)
+}
+
 // Chrome is measured in terminal cells. Full original identities remain in
 // /metadata; neither client choices nor elided display values become authority.
 func (m *Model) chrome() (top []string, bottom string) {
@@ -37,7 +55,7 @@ func (m *Model) chrome() (top []string, bottom string) {
 		mode = "demo (enforced)"
 	}
 	left := "Harness / " + singleLine(mode)
-	right := "model:" + ansi.Truncate(singleLine(model), max(8, m.width/4), "…") + " · session:" + ansi.Truncate(singleLine(m.opts.SessionID), 12, "…")
+	right := "model:" + ansi.Truncate(singleLine(model), max(8, m.width/4), "…") + " · session:" + shortSession(m.opts.SessionID)
 	left = ansi.Truncate(left, max(8, m.width-ansi.StringWidth(right)-2), "…")
 	brand := left + strings.Repeat(" ", max(1, m.width-ansi.StringWidth(left+right))) + right
 	nav := "Journal · LIVE"
@@ -46,6 +64,8 @@ func (m *Model) chrome() (top []string, bottom string) {
 	}
 	if m.log.ref != "" {
 		nav = fmt.Sprintf("Captured command log · %d unseen updates · End latest", m.unread)
+	} else if m.history.detailID == historyDiagnostic {
+		nav = fmt.Sprintf("History diagnostic · %d unseen updates · End latest", m.unread)
 	} else if m.history.detailID != "" {
 		nav = fmt.Sprintf("Record detail · %d unseen updates · End latest", m.unread)
 	}
@@ -75,7 +95,8 @@ func (m *Model) chrome() (top []string, bottom string) {
 			freshness = "heartbeat " + elapsed(m.heartbeat, m.now) + " ago"
 		}
 		activity := fmt.Sprintf("%s%s · turn:%d/%d · %s · %s · %s", pulse, status, m.state.Turn, turns, phase, clock, freshness)
-		top = append(top, "project "+singleLine(root)+" · "+origin, activity, nav, strings.Repeat("─", m.width))
+		project := "project " + middleElide(singleLine(root), max(1, m.width-ansi.StringWidth("project  · "+origin))) + " · " + origin
+		top = append(top, project, activity, nav, strings.Repeat("─", m.width))
 	} else {
 		top = append(top, nav)
 	}
@@ -84,7 +105,7 @@ func (m *Model) chrome() (top []string, bottom string) {
 		notice = "Guided demo is opt-in: /demo · use a disposable sample copy"
 	}
 	if m.history.err != "" {
-		notice = "History unavailable: " + m.history.err
+		notice = "History unavailable · /latest retry · /history-error details"
 	}
 	if m.height >= 14 {
 		if m.configMismatch {
@@ -147,6 +168,7 @@ func (m *Model) resize(w, h int) {
 	m.viewport.SetHeight(m.journalHeight())
 	m.refreshViewport(false)
 	if !m.followLive {
+		m.renderJournal() // Reflow the frozen canonical window, not a fresh projection.
 		m.restoreAnchor()
 	}
 }
@@ -170,6 +192,9 @@ func (m *Model) View() tea.View {
 				} else {
 					rows[i] = attentionStyle.Render(row)
 				}
+			}
+			if strings.HasPrefix(row, "History unavailable") {
+				rows[i] = semanticHeading(row, "failure")
 			}
 			if m.requestFailure != "" && row == ansi.Truncate(singleLine("Request failed · "+m.requestFailure), m.width, "…") {
 				rows[i] = semanticHeading(row, "failure")
