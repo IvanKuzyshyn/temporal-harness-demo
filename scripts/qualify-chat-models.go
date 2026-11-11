@@ -18,6 +18,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode"
 )
 
 type chatRequest struct {
@@ -56,21 +57,54 @@ type chunk struct {
 	PromptEvalCount int    `json:"prompt_eval_count"`
 	EvalCount       int    `json:"eval_count"`
 }
+
+// Receipt evidence describes this client's transport observation, NOT when the
+// provider generated tokens or stopped GPU work. Use a broad observation window
+// rather than treating parser iterations or tiny scheduling gaps as streaming.
+// Short/coalesced responses are inconclusive, not proof of a provider failure.
+const receiptObservationWindow = 250 * time.Millisecond
+
+type textReceipt struct {
+	Read int   `json:"read"`
+	AtMS int64 `json:"at_ms"`
+}
+
+type receiptReader struct {
+	io.Reader
+	start time.Time
+	read  int
+	at    time.Duration
+}
+
+func (r *receiptReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if n > 0 {
+		r.read++
+		r.at = time.Since(r.start)
+	}
+	return n, err
+}
+
 type result struct {
-	Model         string     `json:"model"`
-	Kind          string     `json:"kind"`
-	Error         string     `json:"error,omitempty"`
-	Cancelled     bool       `json:"cancelled,omitempty"`
-	Text          string     `json:"text,omitempty"`
-	Tools         []toolCall `json:"tools,omitempty"`
-	Chunks        int        `json:"chunks"`
-	TextChunks    int        `json:"text_chunks"`
-	FirstChunkMS  int64      `json:"first_chunk_ms"`
-	ElapsedMS     int64      `json:"elapsed_ms"`
-	CancelMS      int64      `json:"cancel_ms,omitempty"`
-	PromptTokens  int        `json:"prompt_tokens"`
-	OutputTokens  int        `json:"output_tokens"`
-	ContextLength int        `json:"context_length,omitempty"`
+	Model             string        `json:"model"`
+	Kind              string        `json:"kind"`
+	Error             string        `json:"error,omitempty"`
+	Cancelled         bool          `json:"cancelled,omitempty"`
+	Text              string        `json:"text,omitempty"`
+	Tools             []toolCall    `json:"tools,omitempty"`
+	Chunks            int           `json:"chunks"`
+	TextChunks        int           `json:"text_chunks"`
+	FirstChunkMS      int64         `json:"first_chunk_ms"`
+	ElapsedMS         int64         `json:"elapsed_ms"`
+	CancelMS          int64         `json:"cancel_ms,omitempty"`
+	PromptTokens      int           `json:"prompt_tokens"`
+	OutputTokens      int           `json:"output_tokens"`
+	ContextLength     int           `json:"context_length,omitempty"`
+	Delivery          string        `json:"delivery,omitempty"`
+	ContentLength     int64         `json:"content_length"`
+	TextReceipts      []textReceipt `json:"text_receipts,omitempty"`
+	TextReceiptSpanMS int64         `json:"text_receipt_span_ms"`
+	ImageSemantics    string        `json:"image_semantics,omitempty"`
 }
 
 func request(model, kind string, img []byte) chatRequest {
@@ -110,6 +144,7 @@ func post(ctx context.Context, client *http.Client, base string, body chatReques
 func qualifyChat(parent context.Context, client *http.Client, base, model, kind string, img []byte) (out result) {
 	out.Model = model
 	out.Kind = kind
+	out.Delivery = "inconclusive"
 	start := time.Now()
 	defer func() { out.ElapsedMS = time.Since(start).Milliseconds() }()
 	if model != "qwen3.5:9b" && model != "gemma4:e4b" {
@@ -129,10 +164,13 @@ func qualifyChat(parent context.Context, client *http.Client, base, model, kind 
 		out.Error = fmt.Sprintf("HTTP %d: %s", resp.StatusCode, b)
 		return
 	}
-	scanner := bufio.NewScanner(io.LimitReader(resp.Body, 4<<20))
+	out.ContentLength = resp.ContentLength
+	receipts := &receiptReader{Reader: io.LimitReader(resp.Body, 4<<20), start: start}
+	scanner := bufio.NewScanner(receipts)
 	scanner.Buffer(make([]byte, 4096), 1<<20)
 	done := false
 	var cancelAt time.Time
+	var firstTextReceipt time.Duration
 	for scanner.Scan() {
 		var c chunk
 		if err := json.Unmarshal(scanner.Bytes(), &c); err != nil {
@@ -155,6 +193,18 @@ func qualifyChat(parent context.Context, client *http.Client, base, model, kind 
 		out.Tools = append(out.Tools, c.Message.ToolCalls...)
 		if !c.Done && c.Message.Content != "" {
 			out.TextChunks++
+			if len(out.TextReceipts) == 0 {
+				firstTextReceipt = receipts.at
+			}
+			if len(out.TextReceipts) == 0 || out.TextReceipts[len(out.TextReceipts)-1].Read != receipts.read {
+				out.TextReceipts = append(out.TextReceipts, textReceipt{Read: receipts.read, AtMS: receipts.at.Milliseconds()})
+				out.TextReceiptSpanMS = (receipts.at - firstTextReceipt).Milliseconds()
+				// Known-length bodies and quickly coalesced records are deliberately
+				// inconclusive. Even positive evidence means incremental RECEIPT only.
+				if resp.ContentLength < 0 && len(out.TextReceipts) >= 2 && receipts.at-firstTextReceipt >= receiptObservationWindow {
+					out.Delivery = "incremental-receipt-observed"
+				}
+			}
 		}
 		if c.Done {
 			done = true
@@ -200,6 +250,8 @@ func qualifyChat(parent context.Context, client *http.Client, base, model, kind 
 	case "text":
 		if out.TextChunks < 2 || strings.TrimSpace(out.Text) == "" {
 			out.Error = "expected at least two non-final text chunks"
+		} else if out.Delivery != "incremental-receipt-observed" {
+			out.Error = "streaming inconclusive: protocol records alone do not establish incremental receipt"
 		}
 	case "tools":
 		if len(out.Tools) != 1 {
@@ -211,15 +263,40 @@ func qualifyChat(parent context.Context, client *http.Client, base, model, kind 
 			out.Error = "tool call violates fixture schema"
 		}
 	case "image":
-		lower := strings.ToLower(out.Text)
-		if !strings.Contains(lower, "hello") || !strings.Contains(lower, "world") {
-			out.Error = "translation did not preserve hello/world meaning"
+		out.ImageSemantics = "review-required"
+		if fixtureTranslationAccepted(out.Text) {
+			out.ImageSemantics = "accepted"
+		} else {
+			out.Error = "image translation not auto-certified: explicit review required (wrong, refused, or ambiguous fixture answer)"
 		}
-		if out.TextChunks < 2 {
-			out.Error = "image translation was not streamed"
-		}
+		// A short translation is a semantic-only probe. The longer text probe
+		// independently gates incremental receipt for each exact model.
 	}
 	return
+}
+
+// This is intentionally a closed acceptance set for BONJOUR LE MONDE, not a
+// general semantic classifier. Preserve all words: removing refusal/uncertainty
+// words or merely finding keywords would turn guesses into false positives.
+// Legitimate answers outside this small set require explicit human review.
+func fixtureTranslationAccepted(text string) bool {
+	if strings.Contains(text, "...") || strings.ContainsRune(text, '…') {
+		return false
+	}
+	normalized := strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || strings.ContainsRune(",.!\"'“”‘’:", r) {
+			return ' '
+		}
+		return unicode.ToLower(r)
+	}, text)
+	normalized = strings.Join(strings.Fields(normalized), " ")
+	for _, prefix := range []string{"english translation ", "translation "} {
+		if strings.HasPrefix(normalized, prefix) {
+			normalized = strings.TrimPrefix(normalized, prefix)
+			break
+		}
+	}
+	return normalized == "hello world" || normalized == "hello to the world"
 }
 
 func qualifyUnavailable(ctx context.Context, client *http.Client, base string) (out result) {

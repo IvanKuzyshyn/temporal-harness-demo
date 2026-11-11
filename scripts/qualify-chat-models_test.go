@@ -77,9 +77,12 @@ func TestChatQualification(t *testing.T) {
 				if tc.fault == "buffered" {
 					content = nil
 				}
-				for _, text := range content {
+				for i, text := range content {
 					json.NewEncoder(w).Encode(map[string]any{"model": model, "message": map[string]any{"role": "assistant", "content": text}, "done": false})
 					w.(http.Flusher).Flush()
+					if i == 0 && tc.kind == "text" && tc.fault == "" {
+						time.Sleep(500 * time.Millisecond)
+					}
 				}
 				if tc.fault == "incomplete" {
 					return
@@ -114,6 +117,107 @@ func TestChatQualification(t *testing.T) {
 				t.Fatalf("want failure=%v, got %+v", tc.fail, result)
 			}
 		})
+	}
+}
+
+// Multiple NDJSON records are protocol framing, not evidence that any text
+// arrived before the provider had already buffered the complete answer.
+func TestStreamingRequiresIncrementalReceipt(t *testing.T) {
+	for _, mode := range []string{"buffered-content-length", "buffered-chunked", "flushed-delayed"} {
+		t.Run(mode, func(t *testing.T) {
+			first := `{"model":"qwen3.5:9b","message":{"content":"Hello"},"done":false}` + "\n"
+			rest := `{"model":"qwen3.5:9b","message":{"content":" world"},"done":false}` + "\n" +
+				`{"model":"qwen3.5:9b","message":{"content":""},"done":true}` + "\n"
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/x-ndjson")
+				switch mode {
+				case "buffered-content-length":
+					w.Header().Set("Content-Length", fmt.Sprint(len(first)+len(rest)))
+					fmt.Fprint(w, first+rest)
+				case "buffered-chunked":
+					w.(http.Flusher).Flush()
+					fmt.Fprint(w, first+rest)
+					w.(http.Flusher).Flush()
+				case "flushed-delayed":
+					fmt.Fprint(w, first)
+					w.(http.Flusher).Flush()
+					time.Sleep(500 * time.Millisecond)
+					fmt.Fprint(w, rest)
+					w.(http.Flusher).Flush()
+				}
+			}))
+			defer server.Close()
+			out := qualifyChat(context.Background(), server.Client(), server.URL, "qwen3.5:9b", "text", nil)
+			if mode == "flushed-delayed" {
+				if out.Error != "" {
+					t.Fatalf("incremental receipt was not recognized: %+v", out)
+				}
+			} else if !strings.Contains(out.Error, "inconclusive") {
+				t.Fatalf("buffered records must not certify streaming: %+v", out)
+			}
+			encoded, _ := json.Marshal(out)
+			var fields map[string]any
+			json.Unmarshal(encoded, &fields)
+			want := "inconclusive"
+			if mode == "flushed-delayed" {
+				want = "incremental-receipt-observed"
+			}
+			if fields["delivery"] != want {
+				t.Fatalf("missing/incorrect receipt evidence: %s", encoded)
+			}
+		})
+	}
+}
+
+func TestImageTranslationRequiresUnambiguousFixtureMeaning(t *testing.T) {
+	for _, tc := range []struct {
+		name, answer string
+		accept       bool
+	}{
+		{"uppercase punctuation", "HELLO, WORLD!", true},
+		{"quoted translation", "“Hello world.”", true},
+		{"legitimate variant", "Hello to the world!", true},
+		{"explicit translation label", "English translation: Hello, world!", true},
+		{"refusal", "I cannot read this image; hello world is only a guess.", false},
+		{"negation", "The image does not say hello world.", false},
+		{"guessing", "Maybe it says hello world?", false},
+		{"uncertain bare answer", "Hello world?", false},
+		{"unrelated mention", "The words hello and world are examples, not the translation.", false},
+		{"ambiguous explanation", "I see hello world but the rest is unreadable.", false},
+		{"ambiguous modifier", "Hello world, perhaps.", false},
+		{"wrong recorded Qwen 1024", "MUNICH", false},
+		{"untranslated recorded Qwen 2048", "BONJOUR LE MONDE", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]any{"model": "qwen3.5:9b", "message": map[string]any{"content": tc.answer}, "done": true})
+			}))
+			defer server.Close()
+			out := qualifyChat(context.Background(), server.Client(), server.URL, "qwen3.5:9b", "image", []byte("fixture"))
+			if tc.accept && out.Error != "" {
+				t.Fatalf("unambiguous translation rejected: %+v", out)
+			}
+			if !tc.accept && !strings.Contains(out.Error, "explicit review required") {
+				t.Fatalf("must not auto-certify refusal/ambiguity/wrong answer: %+v", out)
+			}
+		})
+	}
+}
+
+func TestImageSemanticsDoesNotRequireStreaming(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, `{"model":"qwen3.5:9b","message":{"content":"Hello world"},"done":true}`)
+	}))
+	defer server.Close()
+	out := qualifyChat(context.Background(), server.Client(), server.URL, "qwen3.5:9b", "image", []byte("fixture"))
+	if out.Error != "" {
+		t.Fatalf("short correct translation should pass semantics independently: %+v", out)
+	}
+	encoded, _ := json.Marshal(out)
+	var fields map[string]any
+	json.Unmarshal(encoded, &fields)
+	if fields["delivery"] != "inconclusive" {
+		t.Fatalf("short translation must not certify streaming: %s", encoded)
 	}
 }
 

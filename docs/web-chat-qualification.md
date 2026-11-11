@@ -2,7 +2,9 @@
 
 ## Status: BLOCKED (useful runtime scaffolding committed)
 
-The **small-image** live gate passes for both exact required models. The broader
+The current-code **small-image semantic** gate and the independent longer-text
+incremental-receipt gate pass for both exact required models. Short-image stream
+delivery is **inconclusive**, not certified by NDJSON record counts. The broader
 image gate does not: `qwen3.5:9b` returned **“MUNICH”** for the clearly readable
 1024×1024 French fixture and returned untranslated **“BONJOUR LE MONDE”** for the
 2048×2048 fixture. Gemma translated all three sizes correctly. Do not interpret
@@ -49,7 +51,76 @@ Vendor metadata was queried on 2026-11-11, rather than guessing release numbers:
   unchanged. Actual Go and shared Ollama versions were checked. No Go toolchain
   upgrade was attempted.
 
-## Live model evidence
+## Fix round 1: qualification assertion corrections
+
+Review reproduced two false positives in the original runner: fully buffered
+multiple NDJSON records passed as streaming, and an explicit refusal containing
+“hello world” passed as a translation. The original automatic certification was
+too permissive; the historical recordings below are **not** evidence collected
+by the corrected code. Original Qwen failure recordings remain unchanged.
+
+The corrected runner distinguishes:
+
+- **Protocol framing** (`chunks`, `text_chunks`) from **body receipt observation**
+  (`text_receipts`, `text_receipt_span_ms`, `delivery`). The receipt trace records
+  the body-read index and elapsed arrival time completing each non-final text
+  record, deduplicating records completed by the same read. An unknown-length
+  response with at least two text-bearing reads spanning a broad **250ms
+  observation window** can be labeled `incremental-receipt-observed`. Known-length,
+  fast, and coalesced observations remain `inconclusive`; multiple protocol
+  records alone never establish streaming. The longer text probe exits nonzero
+  if inconclusive. This is deliberately conservative and may require another
+  observation of a fast genuine stream; it is not a provider failure diagnosis.
+- **Receipt is not generation.** The window is an observation sufficiency rule,
+  not an inference-speed/GPU heuristic. Network buffering, server pacing and
+  client scheduling remain possible explanations; even positive evidence does
+  not prove when the provider generated the tokens or released GPU work.
+- **Short-image semantics** are independent of delivery: an unambiguous correct
+  one-record translation can report `image_semantics: accepted` while its
+  `delivery` remains `inconclusive`. The longer text probe separately establishes
+  incremental-receipt evidence for each exact model; short translations are not
+  forced to have multiple records or an arbitrary minimum generation duration.
+- **Fixture-specific semantic acceptance** normalizes case, whitespace, common
+  quotation/punctuation and optional `Translation:` / `English translation:`
+  labels. It accepts only “hello world” or “hello to the world.” All other words
+  remain significant; question marks and ellipses do not disappear. Refusals,
+  negation, guesses, extra explanations and unrecognized variants return
+  `image_semantics: review-required` and a nonzero result requiring explicit
+  review. This is not a general-purpose semantic classifier or an automatic
+  rejection of every legitimate translation outside the small acceptance set.
+
+### Current-code live rerun (one small-image run, unchanged prompts/tags)
+
+Command: `go run ./scripts/qualify-chat-models.go`, **exit 0**, nine probes.
+New evidence:
+[`qualification/2026-11-11-fix-1-small-image.jsonl`](qualification/2026-11-11-fix-1-small-image.jsonl).
+This was collected with the fix-round-1 code, not retroactively derived from the
+three original evidence files:
+
+- Qwen longer text: **29 text-bearing body reads across 1,058ms**, observed
+  incremental receipt. Gemma: **27 reads across 465ms**, observed incremental
+  receipt. Both were unknown-length HTTP responses.
+- Qwen small image: **HELLO WORLD**, semantic acceptance; body-read span **0ms**,
+  delivery **inconclusive**. Gemma: **Hello world**, semantic acceptance; span
+  **20ms**, delivery **inconclusive**. These results do not certify image-stream
+  timing or the supported image envelope.
+- Both tool schemas, active HTTP cancellation and explicit missing-model checks
+  passed. No larger-image, combined-budget, or broad provider investigation was
+  run in this fix round. No prompt/tag changes or downloads.
+
+Regression RED caught both buffered-multiple-record variants (Content-Length
+and chunked framing) passing, absence of receipt evidence for a genuinely
+flushed/delayed provider, and incorrect rejection of a semantic-only short image.
+Separate RED caught refusals, negation, guessing and ambiguous answers passing
+substring checks. GREEN: `go test ./scripts -count=1 -v`, repeated
+`go test -race ./scripts -count=5`, full uncached serialized
+`go test -p 1 -count=1 ./...`, and `go vet -p 1 ./...` all pass.
+
+**Overall acceptance remains BLOCKED:** larger-Qwen semantics and combined
+image/text/multi-image admission are still unqualified. The PDF font-data warning
+remains deferred to the bounded parser helper; it is not resolved by this fix.
+
+## Historical live model evidence (original runner at `24157b6`)
 
 These are actual HTTP calls to shared `http://127.0.0.1:11434`, **not mocks**.
 Both models are MLX/safetensors on this host. Model digests are recorded in the
@@ -60,14 +131,16 @@ Existing Gemma is **9,461,576,343 bytes**. Neither model was substituted or dele
 Committed raw evidence:
 
 - [`qualification/2026-11-11-small-image.jsonl`](qualification/2026-11-11-small-image.jsonl):
-  default runner, exit 0, nine probes. Text first-chunk/total: Qwen
+  original runner, exit 0, nine probes (its streaming/semantic assertions were
+  later found too permissive, as described above). Text first-chunk/total: Qwen
   **16.785s / 18.649s**, Gemma **6.429s / 6.999s** (cold/model-switch costs included).
   Qwen produced 56 non-final text chunks, Gemma 39. Both generated exactly the
   schema-valid `web_fetch({"url":"https://example.com/"})` call. Nothing fetched
   the URL; this is a model tool-selection test, not tool execution.
 - Both translated the 640×160 fixture's **BONJOUR LE MONDE** to English
-  **hello world**. Assertions check semantic keywords, not capitalization or
-  punctuation; recorded answers were also manually inspected.
+  **hello world**. The original assertion only checked two keywords and could
+  incorrectly accept refusals; it has been replaced. These particular recorded
+  answers were also manually inspected, but that does not repair the old gate.
 - Cancellation waited for an active streamed token before cancelling the HTTP
   request. Both read loops returned `context.Canceled`, without a completion
   event, in less than 1ms after cancellation (millisecond-resolution `cancel_ms`
@@ -269,4 +342,5 @@ Remaining blocking work: resolve/requalify Qwen image quality on the representat
 fixtures and establish enforceable image+text/multiple-image reservations. A
 transport cancellation check is not proof of server compute cleanup. Final
 parser sandboxing and final lifecycle/UI remain explicitly later tasks. The
-controller supplies independent review; only implementer self-review occurred here.
+controller's independent review identified the two assertion defects corrected
+above. The fix was self-reviewed here and awaits the controller's scoped re-review.
