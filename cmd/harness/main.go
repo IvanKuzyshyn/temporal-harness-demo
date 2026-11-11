@@ -20,7 +20,9 @@ func execute(args []string, out io.Writer) error {
 		return err
 	}
 	switch args[0] {
-	case "demo", "tui", "worker", "run", "doctor", "session", "approve", "deny", "wait":
+	case "doctor":
+		return doctor(args[1:], out)
+	case "demo", "tui", "worker", "run", "session", "approve", "deny", "wait":
 		return fmt.Errorf("%s: not implemented at this scaffold stack position", args[0])
 	default:
 		return fmt.Errorf("unknown command %q (use --help)", args[0])

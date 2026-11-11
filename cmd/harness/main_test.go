@@ -31,8 +31,25 @@ func TestUnknownCommandFails(t *testing.T) {
 		t.Errorf("unknown command treated as scaffold command: %v", err)
 	}
 }
+func TestDoctorFlags(t *testing.T) {
+	var out bytes.Buffer
+	if err := execute([]string{"doctor", "--help"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "fix") {
+		t.Fatal("missing fix flag")
+	}
+	err := execute([]string{"doctor", "--unknown"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
+		t.Fatalf("unknown flag: %v", err)
+	}
+	if err := execute([]string{"doctor", "unexpected"}, &out); err == nil {
+		t.Fatal("positional argument accepted")
+	}
+}
+
 func TestUnimplementedCommandsFailHonestly(t *testing.T) {
-	for _, name := range []string{"demo", "tui", "worker", "run", "doctor", "session", "approve", "deny", "wait"} {
+	for _, name := range []string{"demo", "tui", "worker", "run", "session", "approve", "deny", "wait"} {
 		t.Run(name, func(t *testing.T) {
 			err := execute([]string{name}, &bytes.Buffer{})
 			if err == nil {
