@@ -14,6 +14,30 @@ type SessionCommand struct {
 	Payload                          CommandPayload
 	Sequence                         int64
 }
+
+// CommandIdentity is bounded admission carry. Payload was validated by the
+// original Update; the digest and every identity are rechecked against SQL.
+type CommandIdentity struct {
+	CommandID                        CommandID
+	RequestID                        string
+	ConversationID                   ConversationID
+	TurnID                           TurnID
+	WorkflowID, Model, PayloadDigest string
+	Kind                             CommandKind
+	Sequence                         int64
+}
+
+func (c SessionCommand) Identity() CommandIdentity {
+	return CommandIdentity{CommandID: c.CommandID, RequestID: c.RequestID, ConversationID: c.ConversationID, TurnID: c.TurnID, WorkflowID: c.WorkflowID, Model: c.Model, PayloadDigest: c.PayloadDigest, Kind: c.Kind, Sequence: c.Sequence}
+}
+
+type AdmissionCheckpoint struct {
+	Command  CommandIdentity
+	Phase    string // check or receipt; receipt implies the enqueue decision is replayable
+	Eligible bool
+	Result   AdmissionResult
+}
+
 type AdmissionResult struct {
 	State string `json:"state"`
 	Code  string `json:"code,omitempty"`

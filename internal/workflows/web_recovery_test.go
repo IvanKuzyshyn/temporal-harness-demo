@@ -13,6 +13,7 @@ import (
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/workflow"
 )
 
 func TestWebPersistenceExhaustionRetainsAdmittedInbox(t *testing.T) {
@@ -108,28 +109,24 @@ func TestWebAdmissionStorageExhaustionRetainsUpdate(t *testing.T) {
 			e.RegisterDelayedCallback(func() {
 				e.UpdateWorkflow("message", string(cmd.CommandID), &testsuite.TestUpdateCallback{OnReject: func(err error) { t.Error(err) }, OnComplete: func(v any, err error) {
 					require.NoError(t, err)
-					require.Equal(t, chat.AdmissionResult{State: "accepted"}, v)
+					require.Equal(t, chat.AdmissionResult{State: "pending"}, v)
 					accepted = true
 				}}, cmd)
 			}, 0)
-			e.RegisterDelayedCallback(func() {
-				require.False(t, accepted)
-				v, err := e.QueryWorkflow("state")
-				require.NoError(t, err)
-				var s w.WebSessionState
-				require.NoError(t, v.Get(&s))
-				require.Equal(t, 1, s.RecoveringAdmissions)
-			}, 16*time.Second)
 			e.RegisterDelayedCallback(func() { e.CancelWorkflow() }, time.Minute)
 			e.ExecuteWorkflow(w.WebChatSessionWorkflow, w.WebSessionInput{ConversationID: c})
-			require.True(t, accepted)
-			require.EqualValues(t, 6, calls.Load())
+			require.True(t, accepted, "handler completed the durable pending handoff")
+			var next *workflow.ContinueAsNewError
+			require.ErrorAs(t, e.GetWorkflowError(), &next)
+			require.EqualValues(t, 5, calls.Load())
 			v, err := e.QueryWorkflow("state")
 			require.NoError(t, err)
 			var s w.WebSessionState
 			require.NoError(t, v.Get(&s))
-			require.EqualValues(t, 1, s.Completed)
-			require.Zero(t, s.RecoveringAdmissions)
+			require.Len(t, s.PendingAdmissions, 1)
+			require.Equal(t, stage, s.PendingAdmissions[0].Phase)
+			require.Equal(t, cmd.Identity(), s.PendingAdmissions[0].Command)
+			require.Equal(t, 1, s.RecoveringAdmissions)
 		})
 	}
 }

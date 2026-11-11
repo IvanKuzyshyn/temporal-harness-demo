@@ -18,6 +18,22 @@ Task4 adds migration `000003`, direct `GetTurn`/bounded `RecentChatExchanges`,
 receipt ordering, bounded carry and completion authority. Domain types are in
 `internal/chat/execution.go`; the source interfaces remain authoritative.
 
+Admission recovery uses bounded `CommandIdentity`/`AdmissionCheckpoint` values,
+not command payloads. `ResumeChatAdmission(ctx, checkpoint)` rechecks all stored
+identities and the original digest, then either reads the receipt (`check`) or
+persists the workflow's already replayable decision (`receipt`). It never decides
+whether to enqueue. The original full-command activity path still recomputes the
+payload digest before using the shared identity helpers.
+
+`ResolveClosedChatCommand(ctx, command, enqueued)` is terminal reconciliation,
+called only after confirming closure and querying that exact run's replayed
+active turn/inbox. A missing receipt alone proves nothing. Under the conversation
+lock, existing receipts win; enqueue evidence or durable execution state implies
+accepted admission, otherwise the command is rejected `conversation_closed`.
+The resolved receipt is persisted before returning, fencing late conflicting
+admission writers. Accepted here is not a completion claim or a session restart.
+The method changes neither turn projections nor Task3 dispatcher claim fencing.
+
 ## Entry points
 
 Use `storage.New(pool *pgxpool.Pool) *storage.Repository`; the caller owns the

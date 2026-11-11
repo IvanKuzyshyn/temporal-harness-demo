@@ -12,21 +12,23 @@ import (
 	tc "go.temporal.io/sdk/client"
 )
 
-// AdmissionReader resolves permanent admission receipts, not turn completion.
-// The caller owns its connection; the gateway never writes database state.
-type AdmissionReader interface {
+// AdmissionRepository resolves permanent admission receipts, not turn completion.
+// Terminal reconciliation serializes its receipt with outstanding activity writes.
+type AdmissionRepository interface {
 	CheckChatCommand(context.Context, chat.SessionCommand) (chat.AdmissionResult, error)
+	ResolveClosedChatCommand(context.Context, chat.SessionCommand, bool) (chat.AdmissionResult, error)
 }
 
-// WebGateway uses workflow identity, never a pinned run ID. It owns no model,
-// database writer or agent loop. The caller owns the SDK client and observation loop.
+// WebGateway submits by workflow identity, never a pinned run ID. Terminal
+// reconciliation queries the exact closed run. It borrows the SDK client and
+// admission repository; the caller owns connections and the observation loop.
 type WebGateway struct {
 	sdk                tc.Client
-	receipts           AdmissionReader
+	receipts           AdmissionRepository
 	reachable, polling atomic.Bool
 }
 
-func NewWebGateway(c tc.Client, receipts AdmissionReader) *WebGateway {
+func NewWebGateway(c tc.Client, receipts AdmissionRepository) *WebGateway {
 	return &WebGateway{sdk: c, receipts: receipts}
 }
 func (g *WebGateway) Submit(ctx context.Context, c dispatch.Command) (dispatch.CommandResult, error) {
@@ -66,7 +68,26 @@ func (g *WebGateway) resolveClosed(ctx context.Context, c dispatch.Command, caus
 		if result.State != "" {
 			return result, nil
 		}
-		return dispatch.CommandResult{State: "rejected", Code: "conversation_closed"}, nil
+		// A committed enqueue may precede its receipt indefinitely. Query the
+		// pinned TERMINAL run, then reconcile against durable turn evidence.
+		if desc.WorkflowExecutionInfo.Execution == nil || desc.WorkflowExecutionInfo.Execution.RunId == "" {
+			return empty, cause
+		}
+		v, err := g.sdk.QueryWorkflow(ctx, c.WorkflowID, desc.WorkflowExecutionInfo.Execution.RunId, "state")
+		if err != nil {
+			return empty, err
+		}
+		var state workflows.WebSessionState
+		if err = v.Get(&state); err != nil {
+			return empty, err
+		}
+		enqueued := c.TurnID != "" && state.ActiveTurn == c.TurnID
+		for _, ref := range state.Inbox {
+			if ref.ConversationID == c.ConversationID && ref.TurnID == c.TurnID {
+				enqueued = true
+			}
+		}
+		return g.receipts.ResolveClosedChatCommand(ctx, c, enqueued)
 	default:
 		return empty, cause
 	}

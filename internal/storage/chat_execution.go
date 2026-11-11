@@ -17,6 +17,9 @@ func (r *Repository) CheckChatCommand(ctx context.Context, c chat.SessionCommand
 	if err != nil || hash != c.PayloadDigest || !chat.ValidID(string(c.CommandID)) {
 		return out, ErrConflict
 	}
+	return r.checkChatCommandIdentity(ctx, c.Identity())
+}
+func (r *Repository) checkChatCommandIdentity(ctx context.Context, c chat.CommandIdentity) (out chat.AdmissionResult, err error) {
 	var raw []byte
 	err = r.pool.QueryRow(ctx, `SELECT c.execution_receipt FROM commands c JOIN conversations v ON v.id=c.conversation_id
  WHERE c.id=$1 AND c.conversation_id=$2 AND c.request_id=$3 AND coalesce(c.turn_id::text,'')=$4 AND c.payload_digest=$5 AND c.kind=$6 AND c.sequence=$7 AND v.workflow_id=$8 AND v.model=$9`, c.CommandID, c.ConversationID, c.RequestID, c.TurnID, c.PayloadDigest, c.Kind, c.Sequence, c.WorkflowID, c.Model).Scan(&raw)
@@ -39,9 +42,18 @@ func (r *Repository) RecordChatAdmission(ctx context.Context, a chat.Admission) 
 	if _, err := r.CheckChatCommand(ctx, a.Command); err != nil {
 		return err
 	}
-	raw, _ := json.Marshal(a.Result)
-	return r.withConversation(ctx, a.Command.ConversationID, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE commands SET execution_receipt=$2 WHERE id=$1 AND (execution_receipt IS NULL OR execution_receipt=$2::jsonb)`, a.Command.CommandID, raw)
+	return r.recordChatAdmissionIdentity(ctx, a.Command.Identity(), a.Result)
+}
+func (r *Repository) recordChatAdmissionIdentity(ctx context.Context, c chat.CommandIdentity, result chat.AdmissionResult) error {
+	if result.State != "accepted" && !(result.State == "rejected" && result.Code == "invalid_command") {
+		return chat.ErrInvalid
+	}
+	if _, err := r.checkChatCommandIdentity(ctx, c); err != nil {
+		return err
+	}
+	raw, _ := json.Marshal(result)
+	return r.withConversation(ctx, c.ConversationID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE commands SET execution_receipt=$2 WHERE id=$1 AND (execution_receipt IS NULL OR execution_receipt=$2::jsonb)`, c.CommandID, raw)
 		if err != nil {
 			return err
 		}
@@ -49,11 +61,24 @@ func (r *Repository) RecordChatAdmission(ctx context.Context, a chat.Admission) 
 			return ErrConflict
 		}
 		// An unsupported replacement/attachment still has a queued intent turn.
-		if a.Result.State == "rejected" && a.Command.TurnID != "" {
-			_, err = tx.Exec(ctx, `UPDATE turns SET status='failed',reason='invalid_command',updated_at=clock_timestamp() WHERE id=$1 AND status='queued'`, a.Command.TurnID)
+		if result.State == "rejected" && c.TurnID != "" {
+			_, err = tx.Exec(ctx, `UPDATE turns SET status='failed',reason='invalid_command',updated_at=clock_timestamp() WHERE id=$1 AND status='queued'`, c.TurnID)
 		}
 		return err
 	})
+}
+
+// ResumeChatAdmission does no adjudication or enqueue: only the workflow can
+// move check -> receipt after recording its decision in history/carry.
+func (r *Repository) ResumeChatAdmission(ctx context.Context, c chat.AdmissionCheckpoint) (chat.AdmissionResult, error) {
+	switch c.Phase {
+	case "check":
+		return r.checkChatCommandIdentity(ctx, c.Command)
+	case "receipt":
+		return c.Result, r.recordChatAdmissionIdentity(ctx, c.Command, c.Result)
+	default:
+		return chat.AdmissionResult{}, chat.ErrInvalid
+	}
 }
 func (r *Repository) GetTurn(ctx context.Context, ref chat.TurnRef) (chat.Turn, error) {
 	out := chat.Turn{TurnRef: ref}

@@ -12,6 +12,7 @@ import (
 
 // ChatRepository is the activity seam, not a workflow database dependency.
 type ChatRepository interface {
+	ResumeChatAdmission(context.Context, chat.AdmissionCheckpoint) (chat.AdmissionResult, error)
 	CheckChatCommand(context.Context, chat.SessionCommand) (chat.AdmissionResult, error)
 	RecordChatAdmission(context.Context, chat.Admission) error
 	StartChatTurn(context.Context, chat.TurnRef) error
@@ -33,6 +34,10 @@ func chatStorageError(err error) error {
 		return temporal.NewNonRetryableApplicationError("invalid chat persistence identity", "InvalidRequest", nil)
 	}
 	return err
+}
+func (a *ChatActivities) ResumeChatAdmission(ctx context.Context, c chat.AdmissionCheckpoint) (chat.AdmissionResult, error) {
+	r, err := a.Repository.ResumeChatAdmission(ctx, c)
+	return r, chatStorageError(err)
 }
 func (a *ChatActivities) CheckChatCommand(ctx context.Context, c chat.SessionCommand) (chat.AdmissionResult, error) {
 	r, e := a.Repository.CheckChatCommand(ctx, c)

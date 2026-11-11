@@ -45,6 +45,7 @@ func startWeb(ctx context.Context, address string, a *activities.ChatActivities,
 		if q == workflows.WebAgentsQueue {
 			w.RegisterWorkflow(workflows.WebChatSessionWorkflow)
 			w.RegisterActivity(a.CheckChatCommand)
+			w.RegisterActivity(a.ResumeChatAdmission)
 			w.RegisterActivity(a.RecordChatAdmission)
 			w.RegisterActivity(a.StartChatTurn)
 			w.RegisterActivity(a.PersistTurnResult)

@@ -28,7 +28,8 @@ ready** until a real child is implemented. Child/tool registration is not done
 here. Updates are named `message`, `stop`, `replace`, `decide`, `revoke`; query
 `state` returns `WebSessionState` without database/network access. Controls and
 attachment messages currently return typed `invalid_command` rejection, not fake
-success. Rejected message/replacement intent turns become failed projections.
+success. Workflow `invalid_command` rejection marks message/replacement intent
+turns failed; terminal receipt reconciliation does not rewrite turn projections.
 
 ## Admission protocol: no lost enqueue window
 
@@ -36,13 +37,23 @@ The gateway implements `dispatch.SessionGateway.Submit(ctx, Command)` using
 Update-With-Start, persisted **CommandID as UpdateID**, original request/digest/
 turn, and workflow ID `web-chat/<conversation UUID>`, never a pinned run ID.
 It reuses an open execution and refuses to silently restart a closed one.
-`client.NewWebGateway(sdk, AdmissionReader)` also borrows a read-only permanent
-receipt lookup. After a submission error, a confirmed terminal execution plus a
-successful receipt read resolves an old command to its saved receipt (even from
-an earlier run), or a new command to `rejected/conversation_closed`. Unknown,
-running, and Continue-As-New status or unavailable receipt storage remain
-ambiguous/retryable. Reuse rejection and Task3 receipt/claim fencing are unchanged.
-This does not repair terminal workflows or rewrite their turn projections.
+`client.NewWebGateway(sdk, AdmissionRepository)` borrows permanent receipt lookup
+and terminal reconciliation. After a submission error, confirmed terminal status
+and an existing receipt replay that receipt, including from an older run.
+**Receipt absence is not proof of non-admission.** For an absent marker, query the
+exact closed run's replayed active turn/inbox, then call
+`ResolveClosedChatCommand(ctx, command, enqueued)`. Its conversation-locked
+transaction combines that enqueue evidence with durable execution state, rechecks
+any late receipt, and saves the truthful resolution before dispatch settlement.
+An enqueued/executed command stays `accepted` (not necessarily completed); only a
+command with neither enqueue nor execution evidence gets
+`rejected/conversation_closed`. Late admission writers must agree with this
+immutable receipt or conflict. No watermark-only inference is used.
+Unknown/running/CAN status, unavailable terminal query or unavailable SQL remains
+ambiguous/retryable. A worker must be available for missing-receipt terminal
+queries; there is no unsafe negative answer when that evidence is unavailable.
+Reuse rejection and Task3 receipt/claim fencing are unchanged. Reconciliation
+does not repair terminal workflows or rewrite their turn projections.
 `dispatch.Command`/`CommandResult` are aliases for transport-neutral
 `chat.SessionCommand`/`AdmissionResult`, avoiding a workflow→storage import cycle.
 
@@ -61,8 +72,23 @@ workflow never appends that user message again. For each serialized handler:
    and deterministic enqueue are committed in the same workflow task before the
    activity can write `commands.execution_receipt`.
 4. Wait for the durable receipt activity, then return the admission result.
-   Dispatch acknowledgement is a separate fenced `SettleClaim` write. Its loss
-   does not lose the execution receipt or change the Update identity.
+   If a check/receipt batch exhausts transient retries, record a bounded
+   `AdmissionCheckpoint` **before** completing the Update as `pending` and force
+   Continue-As-New. This checkpoint holds validated command identity/digest,
+   eligibility, phase (`check`/`receipt`) and decision, never prompt text. At most
+   100 already accepted handlers can hand off; new Updates are backpressured.
+5. The next run resumes checkpoints through `ResumeChatAdmission`. A successful
+   check precedes workflow adjudication/enqueue; only a replayable receipt-phase
+   checkpoint can write the receipt. Each batch/phase consumes the run budget,
+   permitting repeated rollover even while SQL remains unavailable. The same
+   Update ID is retried by the dispatcher in the new run to obtain its durable
+   outcome. A pending result is never a final acceptance or rejection.
+
+Dispatch acknowledgement is a separate fenced `SettleClaim` write. Its loss
+does not lose the execution receipt or change the Update identity. Handoff
+completion and checkpoint creation share a workflow task; no handler is simply
+abandoned. The forced rollover prevents the old run's cached pending outcome from
+being permanent.
 
 This is not a cross-database transaction. A crash before the admission activity
 is scheduled leaves no DB receipt and replay repeats the handler. A crash after
@@ -73,14 +99,16 @@ their existing locking/fencing semantics; execution receipt storage is separate.
 
 Continue-As-New occurs between joined turns or exhausted persistence batches,
 waits for all update handlers, and carries pending turn IDs, the last accepted
-normal sequence and scalar counters. An active recovery checkpoint adds only its
+normal sequence and scalar counters, plus at most 100 reference-only admission checkpoints. An active
+recovery checkpoint adds only its
 turn ID, `start`/`settle` phase, bounded backoff and intended settlement metadata
 (status/reason, no answer text). A settled model call is not repeated on recovery.
 There are no live children in this slice. Inbox limit is 64; a run rolls after
 100 handled commands/recovery batches (or server suggestion). A pure validator
 backpressures new Updates once that run budget is reached while inference is still
-active; the dispatcher retries the SAME Update ID after rollover. Unlike a
-completed `pending` receipt, this pre-admission rejection is not cached forever.
+active; the dispatcher retries the SAME Update ID after rollover. A validator
+rejection is not cached. An already accepted handler may complete pending only
+with the explicit checkpoint/forced-rollover protocol above.
 Handlers count against the budget before yielding to their serialization mutex.
 No transcript,
 image, provider response or growing receipt list is carried. Rejections at the
@@ -140,12 +168,12 @@ with deterministic backoff (5s, doubling up to 1m), retaining the active checkpo
 and admitted inbox. Batches remain bounded; recovery continues after storage is
 restored, including across Continue-As-New. Query state exposes the phase and
 backoff; completion counters do not advance before committed settlement.
-Admission storage failures likewise keep the accepted Update handler replayable,
-rather than cache a permanent error under its stable ID. `RecoveringAdmissions`
-is visible in the query; new Updates receive pre-admission backpressure during
-recovery. CAN still waits for those handlers, so a prolonged outage during an
-outstanding Update can continue to add retry history until it finishes; bounded
-carry is not a promise of unlimited Temporal history retention.
+Admission handlers perform at most one bounded batch per phase, then transfer
+recovery to their recorded checkpoint and finish pending. `RecoveringAdmissions`
+is the bounded pending-checkpoint count visible in the query. CAN still waits for
+all handlers, but their completion no longer depends on restoration of SQL.
+Checkpoint recovery consumes budget in the new run and can roll repeatedly during
+a prolonged outage; backoff bounds retry rate and rollover bounds per-run history.
 Cancellation, declared nonretryable failures and panics are NOT swallowed.
 There is **no automatic reset/restart of a terminal session**. Operator recovery
 must preserve admitted history; resetting before recorded enqueues is unsupported.
@@ -206,7 +234,12 @@ rollover, retry after durable provider output, restart workers during inference,
 pause the actual test Postgres during final persistence, and read history through
 the Go API after worker restart. Fix-round coverage additionally exhausts five
 actual SQL settlement attempts, carries the active checkpoint/inbox across CAN,
-and admits a third command through the real dispatcher after restoration. A
+and admits a third command through the real dispatcher after restoration. It also
+keeps both admission check and receipt SQL failing across two low-budget CAN
+boundaries before restoring storage; retries retain one command/user/answer/event.
+Closure barriers hold admission before SQL while execution completes, or while
+start SQL is still blocked: dispatcher resolution stays accepted without falsely
+reporting turn completion, and delayed admission writes agree with the receipt. A
 short-timeout test workflow and two real workers force both overlapping model
 attempt interleavings with barriers; the production model/storage activities
 produce exactly one answer/event linked to the correct winning attempt.

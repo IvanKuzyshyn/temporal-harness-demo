@@ -10,15 +10,16 @@ import (
 )
 
 const (
-	WebSessionName          = "WebChatSessionWorkflow"
-	WebAgentsQueue          = "web-chat-agents"
-	WebLLMQueue             = "web-chat-llm"
-	WebDocumentsQueue       = "web-chat-documents" // reserved; no child worker before Task8
-	WebCheckCommandActivity = "CheckChatCommand"
-	WebAdmissionActivity    = "RecordChatAdmission"
-	WebStartTurnActivity    = "StartChatTurn"
-	WebModelActivity        = "ChatModel"
-	WebPersistTurnActivity  = "PersistTurnResult"
+	WebSessionName             = "WebChatSessionWorkflow"
+	WebAgentsQueue             = "web-chat-agents"
+	WebLLMQueue                = "web-chat-llm"
+	WebDocumentsQueue          = "web-chat-documents" // reserved; no child worker before Task8
+	WebCheckCommandActivity    = "CheckChatCommand"
+	WebAdmissionActivity       = "RecordChatAdmission"
+	WebResumeAdmissionActivity = "ResumeChatAdmission"
+	WebStartTurnActivity       = "StartChatTurn"
+	WebModelActivity           = "ChatModel"
+	WebPersistTurnActivity     = "PersistTurnResult"
 )
 
 type WebSessionInput struct {
@@ -39,6 +40,7 @@ type WebSessionState struct {
 	PendingResult        *chat.TurnResult
 	RecoveryDelay        time.Duration
 	RecoveringAdmissions int
+	PendingAdmissions    []chat.AdmissionCheckpoint
 }
 
 func webStorageContext(ctx workflow.Context) workflow.Context {
@@ -72,7 +74,15 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 			validCheckpoint = state.RecoveryPhase == "settle" && r.TurnID == state.ActiveTurn && r.ConversationID == in.ConversationID && (r.Status == "completed" || r.Status == "failed")
 		}
 	}
-	if len(state.Inbox) > in.MaxInbox || !validCheckpoint || state.RecoveringAdmissions != 0 || state.RecoveryDelay < 0 || state.RecoveryDelay > time.Minute {
+	for _, cp := range state.PendingAdmissions {
+		c := cp.Command
+		kindValid := c.Kind == chat.CommandMessage || c.Kind == chat.CommandStop || c.Kind == chat.CommandReplace || c.Kind == chat.CommandDecide || c.Kind == chat.CommandRevoke
+		resultValid := cp.Phase == "check" && cp.Result == (chat.AdmissionResult{}) || cp.Phase == "receipt" && (cp.Result == (chat.AdmissionResult{State: "accepted"}) || cp.Result == (chat.AdmissionResult{State: "rejected", Code: "invalid_command"}))
+		if c.ConversationID != in.ConversationID || c.Model != in.Model || c.WorkflowID != "web-chat/"+string(in.ConversationID) || !chat.ValidID(string(c.CommandID)) || !chat.ValidID(c.RequestID) || (c.TurnID != "" && !chat.ValidID(string(c.TurnID))) || !chat.ValidHash(c.PayloadDigest) || c.Sequence <= 0 || !kindValid || !resultValid || (cp.Eligible && (c.Kind != chat.CommandMessage || !chat.ValidID(string(c.TurnID)))) {
+			validCheckpoint = false
+		}
+	}
+	if len(state.Inbox) > in.MaxInbox || len(state.PendingAdmissions) > 100 || !validCheckpoint || state.RecoveringAdmissions != len(state.PendingAdmissions) || state.RecoveryDelay < 0 || state.RecoveryDelay > time.Minute {
 		return temporal.NewNonRetryableApplicationError("invalid carry", "InvalidRequest", nil)
 	}
 	if err := workflow.SetQueryHandler(ctx, "state", func() (WebSessionState, error) { return state, nil }); err != nil {
@@ -81,32 +91,25 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 	mutex := workflow.NewMutex(ctx)
 	operations := 0
 	var admissionErr error
-	// An accepted Update must not finish with a transient storage error: that
-	// outcome would be cached forever under its stable ID. Retain the replayable
-	// handler and backpressure new admissions while retrying bounded batches.
-	admissionStorage := func(u workflow.Context, name string, arg, out any) error {
-		recovering := false
-		defer func() {
-			if recovering {
-				state.RecoveringAdmissions--
-			}
-		}()
-		delay := time.Duration(0)
-		for {
-			err := workflow.ExecuteActivity(webStorageContext(u), name, arg).Get(u, out)
-			if err == nil || u.Err() != nil || !retryWebStorage(err) {
-				return err
-			}
-			if !recovering {
-				state.RecoveringAdmissions++
-				recovering = true
-			}
-			operations++
-			delay = webRecoveryDelay(delay)
-			if err = workflow.Sleep(u, delay); err != nil {
-				return err
-			}
+	// A handler performs at most one bounded batch per storage phase. On
+	// exhaustion it records a reference-only handoff BEFORE completing pending,
+	// and forces CAN. The same Update ID can then obtain its durable outcome in
+	// the new run; no transient failure is permanently cached or handler abandoned.
+	handoff := func(c chat.SessionCommand, phase string, eligible bool, result chat.AdmissionResult) (chat.AdmissionResult, error) {
+		state.PendingAdmissions = append(state.PendingAdmissions, chat.AdmissionCheckpoint{Command: c.Identity(), Phase: phase, Eligible: eligible, Result: result})
+		state.RecoveringAdmissions = len(state.PendingAdmissions)
+		operations = in.ContinueAfter
+		return chat.AdmissionResult{State: "pending"}, nil
+	}
+	admit := func(c chat.CommandIdentity, eligible bool) chat.AdmissionResult {
+		result := chat.AdmissionResult{State: "rejected", Code: "invalid_command"}
+		if eligible && c.Sequence > state.LastMessageSequence && len(state.Inbox) < in.MaxInbox {
+			// No yield: persist a receipt only AFTER this replayable enqueue decision.
+			state.Inbox = append(state.Inbox, chat.TurnRef{ConversationID: in.ConversationID, TurnID: c.TurnID})
+			state.LastMessageSequence = c.Sequence
+			result = chat.AdmissionResult{State: "accepted"}
 		}
+		return result
 	}
 	handler := func(u workflow.Context, c chat.SessionCommand) (chat.AdmissionResult, error) {
 		reject := chat.AdmissionResult{State: "rejected", Code: "invalid_command"}
@@ -116,32 +119,32 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 		}
 		defer mutex.Unlock()
 		hash, err := (chat.CommandInput{ConversationID: c.ConversationID, RequestID: c.RequestID, Kind: c.Kind, Payload: c.Payload}).Digest()
-		if err != nil || hash != c.PayloadDigest || c.ConversationID != in.ConversationID || c.Model != in.Model || c.WorkflowID != "web-chat/"+string(in.ConversationID) || !chat.ValidID(string(c.CommandID)) || c.Sequence <= 0 {
+		if err != nil || hash != c.PayloadDigest || c.ConversationID != in.ConversationID || c.Model != in.Model || c.WorkflowID != "web-chat/"+string(in.ConversationID) || !chat.ValidID(string(c.CommandID)) || (c.TurnID != "" && !chat.ValidID(string(c.TurnID))) || c.Sequence <= 0 {
 			return reject, nil
 		}
 		if info := workflow.GetCurrentUpdateInfo(u); info != nil && info.ID != string(c.CommandID) {
 			return reject, nil
 		}
+		eligible := c.Kind == chat.CommandMessage && len(c.Payload.AttachmentIDs) == 0 && c.Payload.Text != "" && len(c.Payload.Text) <= 65536 && chat.ValidID(string(c.TurnID))
+		if len(state.PendingAdmissions) > 0 {
+			return handoff(c, "check", eligible, chat.AdmissionResult{})
+		}
 		var saved chat.AdmissionResult
-		if err = admissionStorage(u, WebCheckCommandActivity, c, &saved); err != nil {
+		if err = workflow.ExecuteActivity(webStorageContext(u), WebCheckCommandActivity, c).Get(u, &saved); err != nil {
+			if u.Err() == nil && retryWebStorage(err) {
+				return handoff(c, "check", eligible, chat.AdmissionResult{})
+			}
 			admissionErr = err
 			return chat.AdmissionResult{}, err
 		}
 		if saved.State != "" {
 			return saved, nil
 		}
-		result := reject
-		if c.Kind == chat.CommandMessage && len(c.Payload.AttachmentIDs) == 0 && c.Payload.Text != "" && len(c.Payload.Text) <= 65536 && chat.ValidID(string(c.TurnID)) {
-			// Only a durable receipt certifies old acceptance; the sequence is a fence.
-			if c.Sequence > state.LastMessageSequence && len(state.Inbox) < in.MaxInbox {
-				// No yield between enqueue and watermark. Admission persistence is only
-				// scheduled AFTER enqueue's workflow task can be durably replayed.
-				state.Inbox = append(state.Inbox, chat.TurnRef{ConversationID: in.ConversationID, TurnID: c.TurnID})
-				state.LastMessageSequence = c.Sequence
-				result = chat.AdmissionResult{State: "accepted"}
+		result := admit(c.Identity(), eligible)
+		if err = workflow.ExecuteActivity(webStorageContext(u), WebAdmissionActivity, chat.Admission{Command: c, Result: result}).Get(u, nil); err != nil {
+			if u.Err() == nil && retryWebStorage(err) {
+				return handoff(c, "receipt", eligible, result)
 			}
-		}
-		if err = admissionStorage(u, WebAdmissionActivity, chat.Admission{Command: c, Result: result}, nil); err != nil {
 			admissionErr = err
 			return chat.AdmissionResult{}, err
 		}
@@ -155,8 +158,8 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 			}
 			return handler(u, c)
 		}, workflow.UpdateHandlerOptions{Validator: func(workflow.Context, chat.SessionCommand) error {
-			// Rejection BEFORE admission is retryable with the same ID; never return a
-			// completed pending outcome or abandon an admitted handler on rollover.
+			// Rejection before admission is retryable with the same ID. Accepted
+			// handlers can return pending only after recording a forced-CAN handoff.
 			if operations >= in.ContinueAfter || workflow.GetInfo(ctx).GetContinueAsNewSuggested() || state.Status == "recovering" || state.RecoveringAdmissions > 0 {
 				return errors.New("session recovery or rollover pending; retry command")
 			}
@@ -177,7 +180,7 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 	}
 	for {
 		if err := workflow.Await(ctx, func() bool {
-			return state.ActiveTurn != "" || len(state.Inbox) > 0 || admissionErr != nil || operations >= in.ContinueAfter || workflow.GetInfo(ctx).GetContinueAsNewSuggested()
+			return len(state.PendingAdmissions) > 0 || state.ActiveTurn != "" || len(state.Inbox) > 0 || admissionErr != nil || operations >= in.ContinueAfter || workflow.GetInfo(ctx).GetContinueAsNewSuggested()
 		}); err != nil {
 			return err
 		}
@@ -195,6 +198,28 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 			}
 			in.Carry = &state
 			return workflow.NewContinueAsNewError(ctx, WebSessionName, in)
+		}
+		if len(state.PendingAdmissions) > 0 {
+			cp := &state.PendingAdmissions[0]
+			var saved chat.AdmissionResult
+			if err := workflow.ExecuteActivity(webStorageContext(ctx), WebResumeAdmissionActivity, *cp).Get(ctx, &saved); err != nil {
+				if err = recoverTurn(err); err != nil {
+					return err
+				}
+				continue
+			}
+			operations++
+			if cp.Phase == "check" && saved.State == "" {
+				cp.Result = admit(cp.Command, cp.Eligible)
+				cp.Phase = "receipt"
+			} else {
+				state.PendingAdmissions = state.PendingAdmissions[1:]
+				state.RecoveringAdmissions = len(state.PendingAdmissions)
+			}
+			if state.ActiveTurn == "" {
+				state.Status = "idle"
+			}
+			continue
 		}
 		if state.ActiveTurn == "" {
 			state.ActiveTurn = state.Inbox[0].TurnID
