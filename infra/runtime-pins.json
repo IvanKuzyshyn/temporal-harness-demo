@@ -1,0 +1,39 @@
+{
+  "verifiedOn": "2026-11-11",
+  "scope": "Task 1 runtime qualification; not final lifecycle or parser sandbox",
+  "tools": {
+    "go": "1.27.3",
+    "node": "24.21.0",
+    "pnpm": "12.18.0",
+    "ollama": "0.40.15",
+    "temporalCLI": "1.10.0"
+  },
+  "futureGoDependencies": {
+    "github.com/jackc/pgx/v5": "v5.11.0",
+    "github.com/golang-migrate/migrate/v4": "v4.20.1"
+  },
+  "images": {
+    "postgres": "postgres:16.14-bookworm@sha256:64154d0babcb1741988719e703419af0382b19953706149f9872fbd0f438efa8",
+    "temporal": "temporalio/server:1.32.2@sha256:7bf69188a6232fea14869b9cef3d94aa82a1601d99517f7e86c71f22da4e0670",
+    "temporalSchemaTools": "temporalio/admin-tools:1.32.2@sha256:4a95866efba29d7e17ab012df5232795e8b0ad0f7d5f9d1ec4df321f7792a754",
+    "temporalUI": "temporalio/ui:2.58.1@sha256:ac3c13eddb4547d830991bb5eee93a5d97140134522b7297fdb2be1fe25ef925"
+  },
+  "models": {
+    "qwen3.5:9b": { "digest": "d63f830f28d515fefea546f213fca7a75e9dd5176ef51a6deabc952d1c99a911", "default": true },
+    "gemma4:e4b": { "digest": "eb2177adf7646d15faead94fdad6d3e170dc8015653418a3b7d5d52a6380be5b", "default": false }
+  },
+  "parsers": {
+    "pdfjs-dist": { "version": "6.5.438", "license": "Apache-2.0", "purpose": "embedded PDF text only" },
+    "yauzl": { "version": "3.4.0", "license": "MIT", "purpose": "bounded lazy DOCX ZIP entry streams" },
+    "saxes": { "version": "6.0.0", "license": "ISC", "purpose": "strict streaming DOCX XML and SVG prevalidation; reject DOCTYPE" },
+    "@resvg/resvg-js": { "version": "2.6.2", "license": "MPL-2.0", "purpose": "SVG rasterization in a constrained process" }
+  },
+  "context": {
+    "numCtx": 16384,
+    "maxEstimatedTextInput": 12000,
+    "numPredict": 2000,
+    "baseReserve": 2384,
+    "imageAdmissionQualified": false,
+    "reason": "Qwen fails known-phrase translation on 1024-square and 2048-square probes; image reservation needs combined-context/multi-image qualification before shipping"
+  }
+}

@@ -3,5 +3,12 @@ bin/
 /harness
 .env
 .env.*
+!.env.example
+web/node_modules/
+web/.next/
+web/*.tsbuildinfo
+web/playwright-report/
+web/test-results/
+.runtime/
 .worktrees/
 .superpowers/
