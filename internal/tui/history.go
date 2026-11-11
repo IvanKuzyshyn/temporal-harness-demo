@@ -61,7 +61,9 @@ func (m *Model) syncHistory(session *workflows.SessionInfo, query uint64) tea.Cm
 		m.history = historyState{dir: dir, generation: m.history.generation + 1}
 		m.journalParts = nil
 		m.followLive, m.unread = true, 0
-		m.selectedID, m.anchorID = "", ""
+		m.selectedID = ""
+		m.anchor = readingAnchor{}
+		m.showPatterns = false
 		m.log = logState{}
 	}
 	if !filepath.IsAbs(dir) {
@@ -84,14 +86,15 @@ func (m *Model) loadHistory(before int) tea.Cmd {
 	}
 	m.history.pending = false
 	m.history.detailID = ""
-	m.selectedID, m.anchorID = "", ""
+	m.selectedID = ""
+	m.anchor = readingAnchor{}
+	m.showPatterns = false
 	m.history.explicit = true
 	m.log = logState{}
 	if before > 0 {
 		m.browse()
 	} else {
-		m.followLive = true
-		m.unread = 0
+		m.resumeFollowing()
 	}
 	m.history.jumpLatest = before == 0
 	return m.loadHistoryForQuery(before, m.queryID)
@@ -148,7 +151,7 @@ func (m *Model) acceptHistory(msg historyMsg) {
 		m.history.err = ""
 		m.rebuildJournal()
 		m.refreshViewport(false)
-		if changedWindow || m.history.jumpLatest {
+		if !m.showPatterns && (changedWindow || m.history.jumpLatest) {
 			if m.history.older {
 				m.viewport.GotoTop()
 			} else {

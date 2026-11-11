@@ -29,8 +29,13 @@ func (m *Model) chrome() (top []string, bottom string) {
 	if !m.followLive {
 		nav = fmt.Sprintf("Journal · BROWSING · %d unseen updates · End latest", m.unread)
 	}
+	if m.log.ref != "" {
+		nav = fmt.Sprintf("Captured command log · %d unseen updates · End latest", m.unread)
+	} else if m.history.detailID != "" {
+		nav = fmt.Sprintf("Record detail · %d unseen updates · End latest", m.unread)
+	}
 	if m.showPatterns {
-		nav = "Pattern log · Tab journal"
+		nav = fmt.Sprintf("Pattern log · Tab return · %d unseen updates", m.unread)
 	}
 	top = []string{identity}
 	if m.height >= 14 {
@@ -72,15 +77,8 @@ func (m *Model) resize(w, h int) {
 	m.viewport.SetWidth(max(1, m.width))
 	m.viewport.SetHeight(max(0, m.height-reserved))
 	m.refreshViewport(false)
-	if !m.followLive && m.anchorID != "" && m.history.detailID == "" && m.log.ref == "" {
-		row := 0
-		for i, part := range m.journalParts {
-			if i > 0 && i <= len(m.history.page.Entries) && m.history.page.Entries[i-1].ID == m.anchorID {
-				m.viewport.SetYOffset(row + m.anchorRow)
-				break
-			}
-			row += len(strings.Split(ansi.Hardwrap(part, max(1, m.width), true), "\n"))
-		}
+	if !m.followLive {
+		m.restoreAnchor()
 	}
 }
 func (m *Model) View() tea.View {

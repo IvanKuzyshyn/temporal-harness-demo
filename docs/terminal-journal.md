@@ -23,8 +23,11 @@ available. Mismatch comparison uses raw values, not their sanitized rendering.
   Selection is separate from normal Up/Down and ordinary text, which still edit
   the composer. Detail content uses the same scroll keys/wheel.
 - **Ctrl+T** collapses tool bodies without hiding captured outcome labels.
-  **Tab** switches the secondary pattern log. `/older` replaces the window with
-  the preceding page; it is not a claim that truncated output can be recovered.
+  **Tab** visits the secondary pattern log and returns to the same journal,
+  detail, or captured-log view. It does not enable follow-latest or clear unseen
+  updates. Pattern visits start at the top; scrolling patterns does not change
+  the underlying journal's follow policy. `/older` replaces the window with the
+  preceding page; it is not a claim that truncated output can be recovered.
 - **Ctrl+L** or `/log` opens a selected command's validated captured log.
   **Ctrl+Left/Right** or `/logprev` / `/lognext` page backward/forward through bytes;
   PgUp/PgDn/wheel scroll inside that page. Ctrl+O returns to the journal.
@@ -34,13 +37,29 @@ available. Mismatch comparison uses raw values, not their sanitized rendering.
 
 Browsing freezes the bounded display window and its durable page, preserving
 stream drafts even when snapshots retire/rebuild live entries. A durable record ID
-and within-record wrapped row anchor preserve position across resize where a
-record is available. Legacy/live-only text retains its bounded viewport offset.
+plus logical line and display-cell position preserve the actual reading content
+across resize. Reflow uses the pinned viewport's cell-sliced wrapping, including
+wide and combining characters, and bounds restoration inside the anchored record.
+The original cell is retained across repeated width changes rather than rounded
+down anew at each width. Legacy/live-only text uses a position in the same bounded
+frozen display window, without inventing a durable identity.
+
+There is one underlying journal/detail/log window, not a cache of panel visits.
+While patterns are visible it remains retained, including a frozen journal's old
+page or a log's byte page and read position. Patterns take precedence in both
+chrome and body. Returning restores the underlying anchor at the current width;
+a deliberately requested log/history page that finishes while hidden is ready on
+return, without taking over the pattern view. Session/directory identity changes
+and explicit latest navigation discard the prior secondary-view state.
 Polling still observes the latest total without evicting the reading page. The
 indicator counts **updates**, not unique messages: new stream events plus newly
 observed durable records can both contribute. It saturates at 999999; repeated
 identical history reads do not increment it. There is no unbounded scrollback
 cache or exact unseen-message claim. The window can be stale until End is used.
+Existing explicit submission and information-command behavior is unchanged:
+sending/steering or displaying `/help`, `/metadata`, or `/sessions` resumes follow
+policy. Rendering/repositioning alone and Tab do not; End or `/latest` additionally
+exit secondary views and explicitly request the newest durable page.
 
 ## Progress and evidence
 
@@ -112,7 +131,12 @@ For final manual/PTy qualification on an owned private server/worker:
 1. Use temporary projects and a fresh ID; connect at 80×24, then 120×40. Keep a
    multiline draft while a run streams; confirm prompt, identity and progress.
 2. Page up and scroll with the wheel; allow new output/snapshots; confirm stable
-   reading, BROWSING/unseen updates, then End/LIVE and unchanged draft.
+   reading, BROWSING/unseen updates, then End/LIVE and unchanged draft. Browse deep
+   inside a long wrapped record with following records; resize 80→120→80 and
+   confirm the actual visible content, not only a stored selection. Visit patterns
+   from `/older` while new history arrives, and return to the same old page and
+   unseen count. Repeat from scrolled detail and captured-log byte pages; verify
+   truthful chrome/body, preserved offset, and End or `/latest` as the reset.
 3. Select/expand a tool result. For a known long captured command log, page to a
    middle sentinel beyond its tail. Reconnect and repeat using persisted records.
 4. On a disposable guided fixture, review actual approvals. Resize below 40×12,

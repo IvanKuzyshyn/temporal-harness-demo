@@ -1,12 +1,233 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/activities"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
+	"github.com/charmbracelet/x/ansi"
 )
+
+// Assert rendered content, not just retained navigation metadata. The following
+// records deliberately keep the viewport far from global bottom clamping.
+func TestResizeKeepsActualIntraRecordPosition(t *testing.T) {
+	for _, unicode := range []bool{false, true} {
+		t.Run(fmt.Sprint(unicode), func(t *testing.T) {
+			m, _ := testModel(t)
+			records := durableRecords(12)
+			var body strings.Builder
+			for i := 0; i < 80; i++ {
+				if unicode {
+					fmt.Fprintf(&body, "%03d界e\u0301%s", i, strings.Repeat("x", 30))
+				} else {
+					fmt.Fprintf(&body, "%03d%s", i, strings.Repeat("x", 33))
+				}
+			}
+			records[0].Message.Content = body.String()
+			for i := 1; i < len(records); i++ {
+				records[i].Message.Content = strings.Repeat("FOLLOWING-RECORD\n", 20)
+			}
+			m.history.page.Entries = records
+			m.history.loaded = true
+			m.rebuildJournal()
+			m.browse()
+			m.prompt.SetValue("draft\nkept")
+			// One history header row, one record heading, then cell 2320.
+			m.viewport.SetYOffset(2 + 29)
+			before, frozen := m.viewport.View(), m.viewport.GetContent()
+			line := "You: " + body.String()
+			if !strings.HasPrefix(ansi.Strip(before), ansi.Cut(line, 2320, 2400)) {
+				t.Fatal("fixture did not reach intended content")
+			}
+			// Frozen rendered content must not be reconstructed on resize.
+			m.history.page.Entries[0].Message.Content = "REPLACED"
+			for _, width := range []int{120, 80, 81, 119, 80} {
+				m.Update(tea.WindowSizeMsg{Width: width, Height: 24})
+				start := 2320 / width * width
+				want := ansi.Cut(line, start, start+width)
+				if got := ansi.Strip(m.viewport.View()); !strings.HasPrefix(got, want) {
+					t.Fatalf("width %d visible top escaped anchored content: want %q, got %q", width, want, strings.Split(got, "\n")[0])
+				}
+				if view := ansi.Strip(m.View().Content); !strings.Contains(view, want) || !strings.Contains(view, "draft") || !strings.Contains(view, "kept") {
+					t.Fatal("anchored content or composer not visible in terminal frame")
+				}
+				if m.viewport.GetContent() != frozen || m.prompt.Value() != "draft\nkept" {
+					t.Fatal("resize changed frozen content or draft")
+				}
+			}
+			if m.viewport.View() != before {
+				t.Fatal("round-trip resize drifted")
+			}
+			m.patterns = []string{"PATTERN-ONLY"}
+			for i := 0; i < 20; i++ {
+				m.Update(key(tea.KeyTab, 0))
+				m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+				m.Update(key(tea.KeyPgDown, 0))
+				m.Update(key(tea.KeyTab, 0))
+				if !strings.HasPrefix(ansi.Strip(m.viewport.View()), ansi.Cut(line, 2280, 2400)) {
+					t.Fatal("hidden base view did not reflow to anchored content")
+				}
+				m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+				if m.viewport.View() != before || len(m.journalParts) != len(records)+1 {
+					t.Fatal("repeated panel visits changed retained window/position")
+				}
+			}
+		})
+	}
+}
+
+func TestPatternsPreserveOlderWindowAcrossReconnect(t *testing.T) {
+	m, _ := testModel(t)
+	dir := t.TempDir()
+	saveHistory(t, dir, m.opts.SessionID, durableRecords(140))
+	historySnapshot(t, m, dir)
+	m.Update(m.loadHistory(m.history.page.Before)())
+	m.Update(key(tea.KeyPgDown, 0))
+	m.patterns = []string{"PATTERN-ONLY"}
+	m.unread = 3
+	m.prompt.SetValue("unsent draft")
+	before, offset, page := m.viewport.View(), m.viewport.YOffset(), m.history.page.Before
+	m.Update(key(tea.KeyTab, 0))
+	if m.followLive || m.unread != 3 {
+		t.Errorf("Tab changed follow/unseen policy: follow=%v unseen=%d", m.followLive, m.unread)
+	}
+	if !strings.Contains(m.View().Content, "PATTERN-ONLY") || !strings.Contains(m.View().Content, "Pattern log") {
+		t.Fatal("pattern panel not actually visible")
+	}
+	saveHistory(t, dir, m.opts.SessionID, durableRecords(145))
+	historySnapshot(t, m, dir)
+	m.Update(key(tea.KeyTab, 0))
+	if m.history.page.Before != page || m.viewport.YOffset() != offset || m.viewport.View() != before || m.followLive || m.unread != 8 {
+		t.Fatalf("panel visit lost frozen older state: page=%d offset=%d follow=%v unseen=%d", m.history.page.Before, m.viewport.YOffset(), m.followLive, m.unread)
+	}
+	if m.prompt.Value() != "unsent draft" {
+		t.Fatal("Tab changed draft")
+	}
+	_, cmd := m.Update(key(tea.KeyEnd, 0))
+	m.Update(cmd())
+	if !m.followLive || m.unread != 0 || m.history.older || m.showPatterns {
+		t.Fatal("End failed to reset")
+	}
+}
+
+func TestPatternsRestoreDetailAndLogPosition(t *testing.T) {
+	for _, panel := range []string{"detail", "log"} {
+		t.Run(panel, func(t *testing.T) {
+			m, _ := testModel(t)
+			m.history.page.Entries = durableRecords(1)
+			m.history.page.Entries[0].Message.Content = strings.Repeat("DETAIL-EVIDENCE\n", 80)
+			m.selectedID = m.history.page.Entries[0].ID
+			m.toggleDetail()
+			if panel == "log" {
+				m.log = logState{ref: "captured-ref", recordID: m.selectedID}
+				m.log.page.Offset = 16384
+				m.log.page.Text = strings.Repeat("LOG-EVIDENCE\n", 80)
+				m.rebuildJournal()
+			}
+			m.Update(key(tea.KeyPgDown, 0))
+			before, offset := m.viewport.View(), m.viewport.YOffset()
+			m.patterns = []string{"PATTERN-ONLY"}
+			m.unread = 7
+			m.Update(key(tea.KeyTab, 0))
+			view := m.View().Content
+			if !strings.Contains(view, "Pattern log") || !strings.Contains(view, "PATTERN-ONLY") || strings.Contains(view, "EVIDENCE") {
+				t.Errorf("pattern chrome/body disagree: %s", view)
+			}
+			m.refreshViewport(false)
+			m.Update(key(tea.KeyTab, 0))
+			if m.viewport.View() != before || m.viewport.YOffset() != offset || m.followLive || m.unread != 7 {
+				t.Fatal("Tab lost underlying reading state")
+			}
+			if panel == "log" && (m.log.page.Offset != 16384 || !strings.Contains(m.View().Content, "Captured command log")) {
+				t.Fatal("log page/chrome not restored")
+			}
+		})
+	}
+}
+
+func TestPatternsDoNotConsumeHiddenLogReplyOrChangePolicy(t *testing.T) {
+	m, _ := testModel(t)
+	m.browse()
+	m.log = logState{ref: "ref", recordID: "record", generation: 4, pending: true}
+	m.log.page.Text = strings.Repeat("OLD\n", 80)
+	m.rebuildJournal()
+	m.patterns = []string{strings.Repeat("PATTERN\n", 80)}
+	m.unread = 6
+	m.Update(key(tea.KeyTab, 0))
+	m.Update(key(tea.KeyPgDown, 0))
+	before, offset := m.viewport.View(), m.viewport.YOffset()
+	current := logMsg{epoch: m.epoch, generation: 4, ref: "ref", recordID: "record", page: activities.CommandLogPage{Offset: 16384, Text: "NEW-PAGE"}}
+	stale := current
+	stale.generation--
+	m.Update(stale)
+	if !m.log.pending {
+		t.Fatal("secondary view bypassed generation guard")
+	}
+	m.Update(current)
+	if m.viewport.View() != before || m.viewport.YOffset() != offset || !m.showPatterns || m.followLive || m.unread != 6 {
+		t.Fatal("hidden log response disturbed pattern reading/policy")
+	}
+	m.Update(key(tea.KeyTab, 0))
+	if m.log.page.Offset != 16384 || !strings.Contains(m.viewport.View(), "NEW-PAGE") || m.viewport.YOffset() != 0 {
+		t.Fatal("explicit pending log page not ready on return")
+	}
+	m.Update(key(tea.KeyTab, 0))
+	m.switchSession("new-session")
+	m.Update(current)
+	if m.showPatterns || m.log.ref != "" || m.anchor.valid || !m.followLive || m.unread != 0 {
+		t.Fatal("secondary state leaked across session identity")
+	}
+}
+
+func TestPatternsPreserveFollowingAndRefreshDoesNotResetBrowsing(t *testing.T) {
+	m, _ := testModel(t)
+	m.history.page.Entries = durableRecords(64)
+	m.rebuildJournal()
+	m.patterns = []string{strings.Repeat("PATTERN\n", 80)}
+	m.Update(key(tea.KeyTab, 0))
+	m.Update(key(tea.KeyPgDown, 0))
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	if !m.followLive {
+		t.Fatal("scrolling secondary panel changed underlying follow policy")
+	}
+	m.Update(key(tea.KeyTab, 0))
+	if !m.followLive || !m.viewport.AtBottom() {
+		t.Fatal("return did not preserve following")
+	}
+	m.browse()
+	m.unread = 9
+	m.refreshViewport(true)
+	if m.followLive || m.unread != 9 || !m.viewport.AtBottom() {
+		t.Fatal("render repositioning mutated journal policy")
+	}
+	m.Update(key(tea.KeyTab, 0))
+	m.prompt.SetValue("/latest")
+	m.Update(key(tea.KeyEnter, 0))
+	if m.showPatterns || !m.followLive || m.unread != 0 {
+		t.Fatal("/latest did not reset secondary state")
+	}
+}
+
+func TestLiveRegionAnchorIsNotAssignedToLastDurableRecord(t *testing.T) {
+	m, _ := testModel(t)
+	m.history.page.Entries = durableRecords(1)
+	m.stream = []streamEntry{{text: strings.Repeat("LIVE-ONLY\n", 80)}}
+	m.rebuildJournal()
+	m.browse()
+	m.viewport.SetYOffset(10)
+	before := m.viewport.View()
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	if m.anchor.recordID != "" {
+		t.Fatal("live content attributed to preceding durable record")
+	}
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	if m.viewport.View() != before {
+		t.Fatal("live-only frozen content moved")
+	}
+}
 
 func TestReadingWindowSurvivesTailEvictionAndResize(t *testing.T) {
 	m, _ := testModel(t)
@@ -34,7 +255,7 @@ func TestReadingWindowSurvivesTailEvictionAndResize(t *testing.T) {
 		t.Fatal("same snapshot double-counted")
 	}
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	if m.anchorID == "" {
+	if m.anchor.recordID == "" {
 		t.Fatal("no durable record anchor")
 	}
 	_, cmd := m.Update(key(tea.KeyEnd, 0))

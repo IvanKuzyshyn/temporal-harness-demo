@@ -107,8 +107,13 @@ func TestSendSteerStopContinueAndMultiline(t *testing.T) {
 		text, mode string
 		mod        tea.KeyMod
 	}{{"hello", "followUp", 0}, {"redirect", "steer", tea.ModAlt}, {"/steer change course", "steer", 0}, {"/explore internal", "followUp", 0}, {"/run go test ./...", "followUp", 0}} {
+		m.browse()
+		m.unread = 4
 		msg := runCommand(t, m, tc.text, tc.mod)
 		m.Update(msg)
+		if !m.followLive || m.unread != 0 {
+			t.Fatal("explicit submission no longer resumes following")
+		}
 		got := f.messages[len(f.messages)-1]
 		if got.WhenBusy != tc.mode || got.RequestID == "" {
 			t.Fatalf("bad submission: %+v", got)

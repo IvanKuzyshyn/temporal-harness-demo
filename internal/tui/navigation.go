@@ -9,30 +9,118 @@ import (
 
 // Browsing freezes one bounded rendered window as well as its durable page.
 // This preserves live drafts too when a snapshot reconstructs or retires them.
-// anchorID + anchorRow describe the top durable record across width changes.
-func (m *Model) browse() { m.followLive = false }
-func (m *Model) jumpLatest() tea.Cmd {
-	m.showPatterns = false
+// Positions use logical lines and display cells, matching the pinned viewport's
+// cell-sliced SoftWrap (not ansi.Hardwrap's grapheme-aware line breaking).
+// Keep the original cell through successive resizes: re-capturing a projected
+// row at each width would round it down repeatedly and cause reading drift.
+type readingAnchor struct {
+	recordID                 string
+	part, line, cell, offset int
+	valid                    bool
+}
+
+func wrappedRows(line string, width int) int {
+	return max(1, (ansi.StringWidth(line)+max(1, width)-1)/max(1, width))
+}
+func partRows(part string, width int) int {
+	rows := 0
+	for _, line := range strings.Split(part, "\n") {
+		rows += wrappedRows(line, width)
+	}
+	return rows
+}
+func (m *Model) browse() {
+	if !m.showPatterns {
+		m.followLive = false
+		m.anchor = readingAnchor{} // A navigation gesture chooses a new visible top.
+	}
+}
+
+// Explicit user actions own policy. Rendering and secondary-panel switches do
+// not call this; submission/info commands retain their original follow behavior.
+func (m *Model) resumeFollowing() {
 	m.followLive = true
 	m.unread = 0
+}
+func (m *Model) jumpLatest() tea.Cmd {
+	m.showPatterns = false
+	m.resumeFollowing()
 	m.history.detailID = ""
 	m.selectedID = ""
 	m.log = logState{}
 	m.refreshViewport(true)
 	return m.loadHistory(0)
 }
+func (m *Model) recordForPart(part int) string {
+	if m.log.ref != "" {
+		return m.log.recordID
+	}
+	if m.history.detailID != "" {
+		return m.history.detailID
+	}
+	if part > 0 && part <= len(m.history.page.Entries) {
+		return m.history.page.Entries[part-1].ID
+	}
+	return ""
+}
 func (m *Model) captureAnchor() {
-	m.anchorID = ""
-	m.anchorRow = 0
+	if m.showPatterns || m.followLive || (m.anchor.valid && m.anchor.offset == m.viewport.YOffset()) {
+		return
+	}
+	m.anchor = readingAnchor{}
 	row := 0
 	for i, part := range m.journalParts {
-		n := len(strings.Split(ansi.Hardwrap(part, max(1, m.width), true), "\n"))
-		if row <= m.viewport.YOffset() && i > 0 && i <= len(m.history.page.Entries) {
-			m.anchorID = m.history.page.Entries[i-1].ID
-			m.anchorRow = m.viewport.YOffset() - row
+		for j, line := range strings.Split(part, "\n") {
+			n := wrappedRows(line, m.width)
+			if y := m.viewport.YOffset(); y >= row && y < row+n {
+				m.anchor = readingAnchor{recordID: m.recordForPart(i), part: i, line: j, cell: (y - row) * max(1, m.width), offset: y, valid: true}
+				return
+			}
+			row += n
 		}
-		row += n
 	}
+}
+func (m *Model) restoreAnchor() {
+	a := &m.anchor
+	if m.showPatterns || !a.valid || a.part >= len(m.journalParts) || m.recordForPart(a.part) != a.recordID {
+		return
+	}
+	row := 0
+	for _, part := range m.journalParts[:a.part] {
+		row += partRows(part, m.width)
+	}
+	lines := strings.Split(m.journalParts[a.part], "\n")
+	line := min(a.line, len(lines)-1)
+	for _, text := range lines[:line] {
+		row += wrappedRows(text, m.width)
+	}
+	// Clamp inside the anchored part/line, not just the whole viewport.
+	row += min(a.cell/max(1, m.width), wrappedRows(lines[line], m.width)-1)
+	m.viewport.SetYOffset(row)
+	a.offset = m.viewport.YOffset()
+}
+
+// Patterns are a secondary view over the one retained journal/detail/log
+// window, not another history cache or a transition into follow-latest.
+func (m *Model) togglePatterns() {
+	if !m.showPatterns {
+		m.captureAnchor()
+		m.showPatterns = true
+		m.renderPatterns()
+		m.viewport.GotoTop()
+		return
+	}
+	m.showPatterns = false
+	m.renderJournal()
+	if m.followLive {
+		m.viewport.GotoBottom()
+	} else {
+		m.viewport.GotoTop()
+		m.restoreAnchor()
+	}
+}
+func (m *Model) renderPatterns() {
+	m.viewport.SetContent(boundedJournal(m.patterns))
 }
 func (m *Model) selectRecord(direction int) {
 	records := m.history.page.Entries
@@ -40,8 +128,8 @@ func (m *Model) selectRecord(direction int) {
 		m.notice = "No loaded records; /latest retries history"
 		return
 	}
-	m.browse()
 	m.showPatterns = false
+	m.browse()
 	m.log = logState{}
 	index := -1
 	for i, r := range records {
@@ -65,7 +153,7 @@ func (m *Model) selectRecord(direction int) {
 	if m.history.detailID == "" {
 		row := 0
 		for i := 0; i <= index && i < len(m.journalParts); i++ {
-			row += len(strings.Split(ansi.Hardwrap(m.journalParts[i], max(1, m.width), true), "\n"))
+			row += partRows(m.journalParts[i], m.width)
 		}
 		m.viewport.SetYOffset(row)
 	}
@@ -93,10 +181,9 @@ func (m *Model) toggleDetail() {
 	m.viewport.GotoTop()
 }
 func (m *Model) rebuildJournal() {
+	m.anchor = readingAnchor{}
 	if m.log.ref != "" {
 		m.journalParts = []string{m.logView()}
-	} else if m.showPatterns {
-		m.journalParts = []string{strings.Join(m.patterns, "\n")}
 	} else {
 		m.journalParts = m.journalLines()
 	}
@@ -112,10 +199,16 @@ func (m *Model) rebuildJournal() {
 		}
 		budget -= len(part) + 1
 	}
+	m.renderJournal()
+}
+func (m *Model) renderJournal() {
+	if m.showPatterns {
+		return
+	}
 	content := boundedJournal(m.journalParts)
 	// Style only validated durable outcome markers, never words in assistant or
 	// repository text. The canonical journal/parser remains plain text.
-	if m.log.ref == "" && !m.showPatterns {
+	if m.log.ref == "" {
 		styled := append([]string(nil), m.journalParts...)
 		for i, r := range m.history.page.Entries {
 			index := i + 1

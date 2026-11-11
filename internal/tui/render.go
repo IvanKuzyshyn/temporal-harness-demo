@@ -242,15 +242,16 @@ func (m *Model) applyEvent(e streamEvent) {
 	}
 }
 
+// Rendering/repositioning never changes journal follow or unseen policy.
 func (m *Model) refreshViewport(forceBottom bool) {
-	if forceBottom {
-		m.followLive = true
-		m.unread = 0
-	}
-	if m.followLive || m.journalParts == nil {
+	if forceBottom || m.followLive || m.journalParts == nil {
 		m.rebuildJournal()
 	}
-	if m.followLive {
+	if m.showPatterns {
+		m.renderPatterns()
+		return
+	}
+	if forceBottom || m.followLive {
 		m.viewport.GotoBottom()
 	}
 }

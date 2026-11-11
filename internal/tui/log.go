@@ -60,6 +60,7 @@ func (m *Model) openSelectedLog() tea.Cmd {
 			m.notice = "No validated command log on selected record"
 			return nil
 		}
+		m.showPatterns = false
 		m.browse()
 		m.log = logState{ref: ref, recordID: r.ID, generation: m.log.generation + 1}
 		return m.loadLog(0)
@@ -79,6 +80,7 @@ func (m *Model) pageLog(direction int) tea.Cmd {
 		}
 		offset = m.log.page.Next
 	}
+	m.showPatterns = false
 	return m.loadLog(offset)
 }
 func (m *Model) loadLog(offset int64) tea.Cmd {
@@ -112,7 +114,9 @@ func (m *Model) acceptLog(msg logMsg) {
 		m.log.page = msg.page
 	}
 	m.rebuildJournal()
-	m.viewport.GotoTop()
+	if !m.showPatterns {
+		m.viewport.GotoTop()
+	}
 }
 func (m *Model) logView() string {
 	p := m.log.page

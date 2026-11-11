@@ -79,8 +79,8 @@ type Model struct {
 	configMismatch                  bool
 	followLive                      bool
 	unread                          uint64
-	selectedID, anchorID            string
-	anchorRow                       int
+	selectedID                      string
+	anchor                          readingAnchor
 	journalParts                    []string
 	log                             logState
 	logGeneration                   uint64
@@ -175,8 +175,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.insertPrompt("\n")
 			return m, nil
 		case "tab":
-			m.showPatterns = !m.showPatterns
-			m.refreshViewport(true)
+			m.togglePatterns()
 			return m, nil
 		case "ctrl+t":
 			m.collapseTools = !m.collapseTools
@@ -357,6 +356,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.commands = appendBounded(m.commands, m.notice)
 		if msg.label == "sessions" {
 			m.transcript = appendBounded(m.transcript, m.notice)
+			m.resumeFollowing()
 			m.refreshViewport(true)
 		}
 		// The periodic snapshot also covers updates that complete after this query.
@@ -460,7 +460,9 @@ func (m *Model) switchSession(id string) tea.Cmd {
 	m.history = historyState{}
 	m.followLive = true
 	m.unread = 0
-	m.selectedID, m.anchorID = "", ""
+	m.selectedID = ""
+	m.anchor = readingAnchor{}
+	m.showPatterns = false
 	m.journalParts = nil
 	m.log = logState{}
 	m.heartbeat = time.Time{}

@@ -27,6 +27,7 @@ func (m *Model) submitPrompt(steer bool) tea.Cmd {
 		m.showPatterns = false
 		m.transcript = appendBounded(m.transcript, helpText)
 		m.prompt.Reset()
+		m.resumeFollowing()
 		m.refreshViewport(true)
 		return nil
 	case "/metadata":
@@ -37,6 +38,7 @@ func (m *Model) submitPrompt(steer bool) tea.Cmd {
 			m.transcript = appendBounded(m.transcript, line)
 		}
 		m.prompt.Reset()
+		m.resumeFollowing()
 		m.refreshViewport(true)
 		return nil
 	case "/log", "/lognext", "/logprev":
@@ -55,8 +57,8 @@ func (m *Model) submitPrompt(steer bool) tea.Cmd {
 			m.notice = "Use /detail <record number> from the loaded history window"
 			return nil
 		}
-		m.browse()
 		m.showPatterns = false
+		m.browse()
 		m.history.detailID = m.history.page.Entries[i].ID
 		m.selectedID = m.history.detailID
 		m.log = logState{}
@@ -125,6 +127,7 @@ func (m *Model) submitPrompt(steer bool) tea.Cmd {
 	// conversation row that cannot later be reconciled by identity.
 	m.notice = "Submitting " + mode + "; awaiting durable history"
 	m.prompt.Reset()
+	m.resumeFollowing()
 	m.refreshViewport(true)
 	return m.submitCmd(text, mode, demo)
 }
