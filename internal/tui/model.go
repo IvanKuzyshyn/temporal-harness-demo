@@ -74,6 +74,7 @@ type Model struct {
 	offsets                         map[string]int64
 	sessionOrder                    []string
 	state                           workflows.State
+	approval                        approvalModal
 	transcript, patterns, commands  []string
 	stream                          []streamEntry
 	notice                          string
@@ -141,6 +142,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize(msg.Width, msg.Height)
 		return m, nil
 	case tea.KeyPressMsg:
+		if m.state.PendingApproval != nil && msg.Keystroke() != "ctrl+c" && msg.Keystroke() != "esc" {
+			return m, m.approvalKey(msg)
+		}
 		switch msg.Keystroke() {
 		case "ctrl+c":
 			m.quitting = true
@@ -238,6 +242,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if strings.HasPrefix(m.notice, "Stream") || strings.HasPrefix(m.notice, "Snapshot:") {
 			m.notice = ""
 		}
+		m.syncApproval(msg.state.PendingApproval)
 		m.state = displayState(msg.state)
 		m.lastSeq = msg.state.LastSeq
 		m.stream = nil
@@ -259,6 +264,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.refreshViewport(false)
+		return m, nil
+	case approvalMsg:
+		if msg.epoch != m.epoch || msg.requestID != m.approval.requestID || msg.hash != m.approval.hash {
+			return m, nil
+		}
+		m.approval.pending = false
+		if msg.err != nil {
+			m.notice = "Approval: " + bounded(safeText(msg.err.Error()), maxText)
+		} else {
+			m.approval.sent = true
+			m.notice = "Approval decision recorded"
+		}
+		if m.started && !m.queryPending {
+			return m, m.beginQuery()
+		}
 		return m, nil
 	case operationMsg:
 		if msg.epoch != m.epoch {
@@ -301,9 +321,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = "Clipboard: " + bounded(safeText(msg.err.Error()), maxText)
 			return m, nil
 		}
-		m.insertPrompt(msg.text)
+		if m.state.PendingApproval == nil {
+			m.insertPrompt(msg.text)
+		}
 		return m, nil
 	case tea.PasteMsg:
+		if m.state.PendingApproval != nil {
+			if m.approval.denying && !m.approval.pending && !m.approval.sent {
+				m.approval.reason = bounded(m.approval.reason+singleLine(msg.Content), 4096)
+			}
+			return m, nil
+		}
 		m.insertPrompt(msg.Content)
 		return m, nil
 	}
@@ -364,6 +392,7 @@ func (m *Model) switchSession(id string) tea.Cmd {
 	m.pending = nil
 	m.newMessage = false
 	m.state = workflows.State{}
+	m.approval = approvalModal{}
 	m.started = false
 	m.queryPending = false
 	m.reconnect = events.NewReconnect()

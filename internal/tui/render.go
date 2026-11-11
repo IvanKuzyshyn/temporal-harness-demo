@@ -66,7 +66,7 @@ func displayState(s workflows.State) workflows.State {
 		p.Preview = bounded(safeText(p.Preview), maxText)
 		p.Call.ID = bounded(safeText(p.Call.ID), 256)
 		p.Call.Name = bounded(safeText(p.Call.Name), 256)
-		p.Call.Args = nil
+		p.Call.Args = []byte(bounded(safeText(string(p.Call.Args)), maxText))
 		p.Decision = nil
 		out.PendingApproval = &p
 	}
@@ -223,6 +223,11 @@ func (m *Model) View() tea.View {
 	if m.width == 0 || m.height == 0 {
 		return tea.NewView("")
 	}
+	if m.state.PendingApproval != nil {
+		view := tea.NewView(m.approvalScreen())
+		view.AltScreen = true
+		return view
+	}
 	title := lipgloss.NewStyle().Bold(true)
 	panel := "Transcript (Tab: patterns)"
 	if m.showPatterns {
@@ -260,9 +265,10 @@ func (m *Model) View() tea.View {
 	if m.opts.Demo {
 		banner = "Harness · /demo: guided demo · /help · Esc stop · Ctrl+C quit"
 	}
+	transcriptPane := m.viewport.View()
 	content := strings.Join([]string{
 		title.Render(banner),
-		title.Render(panel), m.viewport.View(),
+		title.Render(panel), transcriptPane,
 		title.Render("Commands (Ctrl+T collapse)"), commandPane,
 		m.approvalView(), m.prompt.View(), footer, link,
 	}, "\n")

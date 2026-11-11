@@ -26,7 +26,9 @@ func execute(args []string, out io.Writer) error {
 		return workerCommand(args[1:], out)
 	case "demo", "tui":
 		return interactive(args[1:], out, args[0] == "demo")
-	case "run", "session", "approve", "deny", "wait":
+	case "approve", "deny":
+		return approvalCommand(args[1:], out, args[0] == "approve")
+	case "run", "session", "wait":
 		return fmt.Errorf("%s: not implemented at this scaffold stack position", args[0])
 	default:
 		return fmt.Errorf("unknown command %q (use --help)", args[0])

@@ -170,8 +170,12 @@ func TestMultilineApprovalDoesNotHideStatus(t *testing.T) {
 	m, _ := testModel(t)
 	m.state = displayState(workflows.State{Status: "waiting", PendingApproval: &workflows.PendingApproval{Preview: "line one\nline two\nline three"}})
 	view := m.View().Content
-	if !strings.Contains(view, "session:one") || !strings.Contains(view, "UI:") {
-		t.Fatal("multiline approval hid the status footer")
+	// A blocked session now dedicates the screen to review, not transcript
+	// chrome. Its own status and safety/navigation controls must stay visible.
+	for _, text := range []string{"Approval blocked", "expired", "PgUp/PgDn", "a approve", "d deny", "Esc stop", "Ctrl+C quit"} {
+		if !strings.Contains(view, text) {
+			t.Fatalf("multiline approval hid %q: %s", text, view)
+		}
 	}
 }
 
