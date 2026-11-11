@@ -98,12 +98,12 @@ func run() error {
 		return errors.New("cannot initialize Temporal transport")
 	}
 	defer sdk.Close()
-	gateway := chatclient.NewWebGateway(sdk)
+	repo := storage.New(pool)
+	gateway := chatclient.NewWebGateway(sdk, repo)
 	var reconciling atomic.Bool
 	cfg.GatewayConnected = gateway.Connected
 	cfg.WorkersPolling = gateway.WorkersPolling
 	cfg.ReconciliationReady = reconciling.Load
-	repo := storage.New(pool)
 	dispatcher, err := dispatch.New(repo, gateway, dispatch.Options{})
 	if err != nil {
 		return errors.New("cannot initialize dispatcher")

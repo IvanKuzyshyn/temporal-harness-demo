@@ -97,6 +97,20 @@ func (r *Repository) SaveChatModelResult(ctx context.Context, a chat.ChatModelRe
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
+		if a.AttemptID != "" {
+			// Publication and registration serialize on this conversation lock.
+			// Timed-out attempts cannot publish after a newer attempt registers,
+			// even if their provider has not learned of cancellation yet.
+			var owns bool
+			if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM model_steps s JOIN turns t ON t.id=s.turn_id AND t.conversation_id=s.conversation_id
+ WHERE s.id=$1 AND s.conversation_id=$2 AND s.turn_id=$3 AND s.logical_step=0 AND s.status='running' AND t.status IN ('queued','running')
+ AND NOT EXISTS(SELECT 1 FROM model_steps newer WHERE newer.turn_id=s.turn_id AND newer.logical_step=0 AND newer.attempt>s.attempt))`, a.AttemptID, a.ConversationID, a.TurnID).Scan(&owns); err != nil {
+				return err
+			}
+			if !owns {
+				return ErrStaleChatAttempt
+			}
+		}
 		_, err = tx.Exec(ctx, `INSERT INTO chat_model_results(conversation_id,turn_id,text,tokens,attempt_id,limited_history,payload_digest) VALUES($1,$2,$3,$4,$5,$6,$7)`, a.ConversationID, a.TurnID, a.Text, a.Tokens, nullable(a.AttemptID), a.LimitedHistory, hash)
 		return err
 	})
@@ -161,8 +175,12 @@ func (r *Repository) PersistTurnResult(ctx context.Context, a chat.TurnResult) e
 			}
 			if attempt != "" {
 				usage, _ := json.Marshal(map[string]int{"tokens": tokens})
-				if _, err = tx.Exec(ctx, `UPDATE model_steps SET status='completed',result_entry_id=$2,usage=$3 WHERE id=$1 AND turn_id=$4 AND status='running'`, attempt, entry, usage, a.TurnID); err != nil {
+				tag, err := tx.Exec(ctx, `UPDATE model_steps SET status='completed',result_entry_id=$2,usage=$3 WHERE id=$1 AND turn_id=$4 AND status='running'`, attempt, entry, usage, a.TurnID)
+				if err != nil {
 					return err
+				}
+				if tag.RowsAffected() != 1 {
+					return ErrConflict
 				}
 			}
 		}

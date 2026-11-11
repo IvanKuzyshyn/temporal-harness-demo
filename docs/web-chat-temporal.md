@@ -36,6 +36,13 @@ The gateway implements `dispatch.SessionGateway.Submit(ctx, Command)` using
 Update-With-Start, persisted **CommandID as UpdateID**, original request/digest/
 turn, and workflow ID `web-chat/<conversation UUID>`, never a pinned run ID.
 It reuses an open execution and refuses to silently restart a closed one.
+`client.NewWebGateway(sdk, AdmissionReader)` also borrows a read-only permanent
+receipt lookup. After a submission error, a confirmed terminal execution plus a
+successful receipt read resolves an old command to its saved receipt (even from
+an earlier run), or a new command to `rejected/conversation_closed`. Unknown,
+running, and Continue-As-New status or unavailable receipt storage remain
+ambiguous/retryable. Reuse rejection and Task3 receipt/claim fencing are unchanged.
+This does not repair terminal workflows or rewrite their turn projections.
 `dispatch.Command`/`CommandResult` are aliases for transport-neutral
 `chat.SessionCommand`/`AdmissionResult`, avoiding a workflow→storage import cycle.
 
@@ -64,10 +71,13 @@ in the database and then enqueue in a later workflow task: that ordering could
 suppress an unexecuted command. `RecordCommandResult` and `SettleClaim` retain
 their existing locking/fencing semantics; execution receipt storage is separate.
 
-Continue-As-New occurs only between joined turns, waits for all update handlers,
-and carries all pending turn IDs, the last accepted normal sequence and scalar
-counters. There are no live children in this slice. Inbox limit is 64; a run
-rolls after at most 100 handled commands (or server suggestion). A pure validator
+Continue-As-New occurs between joined turns or exhausted persistence batches,
+waits for all update handlers, and carries pending turn IDs, the last accepted
+normal sequence and scalar counters. An active recovery checkpoint adds only its
+turn ID, `start`/`settle` phase, bounded backoff and intended settlement metadata
+(status/reason, no answer text). A settled model call is not repeated on recovery.
+There are no live children in this slice. Inbox limit is 64; a run rolls after
+100 handled commands/recovery batches (or server suggestion). A pure validator
 backpressures new Updates once that run budget is reached while inference is still
 active; the dispatcher retries the SAME Update ID after rollover. Unlike a
 completed `pending` receipt, this pre-admission rejection is not cached forever.
@@ -90,10 +100,20 @@ response there before returning. The stable logical key is the turn ID (one
 model step in this text-only slice). Same candidate is idempotent; changed
 candidate conflicts. Response text does not enter activity results/Temporal carry.
 
-`BeginChatModelAttempt` registers each real attempt, then marks abandoned lower
-attempt projections interrupted. Activity retries reuse an already saved model
-result without generating another answer. Heartbeats run independently of token
-arrival and DB writes. Provider 400/422/invalid input and missing-model errors
+`BeginChatModelAttempt(ctx, ModelAttempt) (cached bool, err error)` checks the
+candidate, registers the attempt, and marks abandoned lower attempts interrupted
+in ONE conversation-locked transaction. `cached=true` skips registration and
+inference, retaining the winner's owning attempt. The fast cache read alone is
+not an ownership fence. For attempt-owned candidates, `SaveChatModelResult` uses
+the same lock and only permits a running, latest registered attempt to publish;
+a stale remote publisher gets `ErrStaleChatAttempt`. Production `ChatModel` always
+supplies that attempt identity (the existing optional-attempt storage contract
+for standalone records is unchanged). A losing activity may adopt a different
+attempt's canonical result, never overwrite it. Changed payload from the same
+owner remains a nonretryable conflict. Final settlement must update/link exactly
+one winning running attempt or roll back, rather than report false completion.
+Activity retries reuse an already saved model result without another answer.
+Heartbeats run independently of token arrival and DB writes. Provider 400/422/invalid input and missing-model errors
 are nonretryable; EOF without a final stream-completion record is still an error.
 Provider output is capped at 64KiB; unrequested tool calls are rejected.
 
@@ -115,13 +135,22 @@ this slice. Completion counters advance only after settlement activity success.
 
 Storage activities use up to 5 attempts, 10s per attempt, 2m total; model
 activities use up to 2 attempts, 10m per attempt, 25m total, 15s heartbeat timeout.
-If persistence exhausts that budget, the workflow fails honestly, retaining its
-history/query state rather than claiming completion or clearing pending intent.
-There is **no automatic reset/restart of a failed session**. Operator recovery
-must preserve admitted history; resetting before recorded enqueues is not
-supported by this receipt protocol. A projected running turn may lag after such
-terminal infrastructure failure. This limitation
-is distinct from the tested short outage/retry recovery.
+Exhausted transient persistence batches enter a cancellable `recovering` state,
+with deterministic backoff (5s, doubling up to 1m), retaining the active checkpoint
+and admitted inbox. Batches remain bounded; recovery continues after storage is
+restored, including across Continue-As-New. Query state exposes the phase and
+backoff; completion counters do not advance before committed settlement.
+Admission storage failures likewise keep the accepted Update handler replayable,
+rather than cache a permanent error under its stable ID. `RecoveringAdmissions`
+is visible in the query; new Updates receive pre-admission backpressure during
+recovery. CAN still waits for those handlers, so a prolonged outage during an
+outstanding Update can continue to add retry history until it finishes; bounded
+carry is not a promise of unlimited Temporal history retention.
+Cancellation, declared nonretryable failures and panics are NOT swallowed.
+There is **no automatic reset/restart of a terminal session**. Operator recovery
+must preserve admitted history; resetting before recorded enqueues is unsupported.
+Projections can still lag after permanent defects/termination; new admission gets
+an explicit closed-session result, not an endless ambiguous FIFO-head retry.
 
 ## Explicit context bounds (before Task 10 summaries)
 
@@ -175,6 +204,14 @@ Tests inspect real workflow histories (7 rollovers/70 model tasks), simulate
 lost gateway/DB acknowledgement, lose admission activity acknowledgement before
 rollover, retry after durable provider output, restart workers during inference,
 pause the actual test Postgres during final persistence, and read history through
-the Go API after worker restart. This is not a mocked Temporal durability claim.
+the Go API after worker restart. Fix-round coverage additionally exhausts five
+actual SQL settlement attempts, carries the active checkpoint/inbox across CAN,
+and admits a third command through the real dispatcher after restoration. A
+short-timeout test workflow and two real workers force both overlapping model
+attempt interleavings with barriers; the production model/storage activities
+produce exactly one answer/event linked to the correct winning attempt.
+This is not a mocked Temporal durability claim. Optional
+`WEBCHAT_TEST_STORAGE_RUN`/`WEBCHAT_TEST_CHAT_RUN` regexes select targeted tests;
+without them, the runner retains its full default suites.
 The runner stops/removes only its own child, container/network and verified test
 volume; it never touches `.data`, shared services, developer volumes or models.

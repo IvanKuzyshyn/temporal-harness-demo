@@ -20,7 +20,7 @@ type ChatRepository interface {
 	RecentChatExchanges(context.Context, chat.TurnRef) ([]chat.Exchange, error)
 	GetChatModelResult(context.Context, chat.TurnRef) (chat.ChatModelResult, error)
 	SaveChatModelResult(context.Context, chat.ChatModelResult) error
-	BeginChatModelAttempt(context.Context, chat.ModelAttempt) error
+	BeginChatModelAttempt(context.Context, chat.ModelAttempt) (bool, error)
 	CompleteModelAttempt(context.Context, chat.ConversationID, string, string, []byte, string, string) error
 }
 type ChatActivities struct {

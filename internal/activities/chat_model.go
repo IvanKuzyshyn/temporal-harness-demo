@@ -119,9 +119,13 @@ func (a *ChatActivities) ChatModel(ctx context.Context, ref chat.TurnRef) (retEr
 		attempt = int(activity.GetInfo(ctx).Attempt)
 	}
 	attemptID := chat.LogicalID(ref.TurnID, fmt.Sprintf("model/0/attempt/%d", attempt))
-	if err = a.Repository.BeginChatModelAttempt(ctx, chat.ModelAttempt{ID: attemptID, ConversationID: ref.ConversationID, TurnID: ref.TurnID, Attempt: attempt, Status: "running"}); err != nil {
+	cached, err := a.Repository.BeginChatModelAttempt(ctx, chat.ModelAttempt{ID: attemptID, ConversationID: ref.ConversationID, TurnID: ref.TurnID, Attempt: attempt, Status: "running"})
+	if err != nil {
 		return err
 	}
+	if cached {
+		return nil
+	} // A winner may have committed after the fast cache read.
 	if a.Model == nil {
 		return errors.New("chat model not configured")
 	}
@@ -157,5 +161,17 @@ func (a *ChatActivities) ChatModel(ctx context.Context, ref chat.TurnRef) (retEr
 		}
 		return err
 	}
-	return a.Repository.SaveChatModelResult(ctx, chat.ChatModelResult{TurnRef: ref, Text: response.Message.Content, Tokens: response.Tokens, AttemptID: attemptID, LimitedHistory: true})
+	err = a.Repository.SaveChatModelResult(ctx, chat.ChatModelResult{TurnRef: ref, Text: response.Message.Content, Tokens: response.Tokens, AttemptID: attemptID, LimitedHistory: true})
+	if errors.Is(err, storage.ErrConflict) || errors.Is(err, storage.ErrStaleChatAttempt) {
+		// Never overwrite a canonical response. A different attempt's committed
+		// winner is reusable; changed output from THIS owner is still a defect.
+		winner, readErr := a.Repository.GetChatModelResult(ctx, ref)
+		if readErr == nil && winner.AttemptID != "" && winner.AttemptID != attemptID {
+			return nil
+		}
+		if readErr != nil && !errors.Is(readErr, storage.ErrNotFound) {
+			return readErr
+		}
+	}
+	return err
 }

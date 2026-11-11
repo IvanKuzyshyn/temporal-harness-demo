@@ -101,6 +101,15 @@ status/text/derived-image metadata for the later authorized processing task.
 
 ### Worker projection records
 
+- `BeginChatModelAttempt(ctx, chat.ModelAttempt) (cached bool, err error)` is the
+  text-chat registration path. It atomically checks the canonical candidate,
+  registers the new running attempt and fences older attempts under the same
+  conversation lock used for candidate publication. A cached winner skips new
+  registration/inference; its owning attempt remains available for settlement.
+  `SaveChatModelResult` rejects stale attempt publication with
+  `ErrStaleChatAttempt`; immutable changed-payload conflicts remain `ErrConflict`.
+  `PersistTurnResult` verifies that exactly one winning running attempt was
+  completed/linked, rolling back all final output on a mismatched projection.
 - `RecordModelAttempt(ctx, chat.ModelAttempt) error` registers a running attempt
   or an already-settled snapshot; `(turn, logical step, attempt)` is unique.
 - `CompleteModelAttempt(ctx, conversationID, id, status string, usage []byte,

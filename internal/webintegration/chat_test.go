@@ -65,7 +65,8 @@ func setup(t *testing.T) *fixture {
 	sdk, err := tc.DialContext(ctx, tc.Options{HostPort: addr})
 	require.NoError(t, err)
 	t.Cleanup(sdk.Close)
-	return &fixture{ctx: ctx, repo: storage.New(p), pool: p, sdk: sdk, gateway: chatclient.NewWebGateway(sdk), address: addr}
+	repo := storage.New(p)
+	return &fixture{ctx: ctx, repo: repo, pool: p, sdk: sdk, gateway: chatclient.NewWebGateway(sdk, repo), address: addr}
 }
 func (f *fixture) start(t *testing.T, repo activities.ChatRepository, m llm.Model) *worker.Runner {
 	t.Helper()
