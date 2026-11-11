@@ -1,4 +1,4 @@
-# Web-chat application storage (Task 2)
+# Web-chat application storage (Tasks 2–4)
 
 This package persists application content and **intent**, not execution authority.
 Only Temporal can adjudicate active-turn freshness, replacement races, tool
@@ -8,8 +8,15 @@ successful `AcceptCommand` or a projection row as authorization.
 Task 3 adds idempotent creation, stable sidebar snapshots, projection reads and
 fenced command claims in migration `000002`. See [the private API contract](web-api.md)
 for those exported interfaces, dispatch ordering/backoff, and runtime configuration.
-Production dispatch should use `ClaimCommands`/`SettleClaim`, not the older
+Production dispatch uses `ClaimCommands`/`SettleClaim`, not the older
 unleased `ListPendingCommands` read helper.
+
+Task4 adds migration `000003`, direct `GetTurn`/bounded `RecentChatExchanges`,
+`CheckChatCommand`/`RecordChatAdmission`, `StartChatTurn`,
+`BeginChatModelAttempt`, `GetChatModelResult`/`SaveChatModelResult`, and atomic
+`PersistTurnResult`. See [web-chat-temporal.md](web-chat-temporal.md) for exact
+receipt ordering, bounded carry and completion authority. Domain types are in
+`internal/chat/execution.go`; the source interfaces remain authoritative.
 
 ## Entry points
 
@@ -123,10 +130,11 @@ content conflicts. JSONB projection results are compared using database JSONB
 equality, including equivalent numeric notation. Live/attempt events are not
 completed logical responses. Events have a 64KiB per-row cap; event retention,
 semantic payload filtering (no image bytes), SSE buffering, and expiry/snapshot
-policy belong to the transport task. This is not yet an atomic final
-message/turn-status/event activity; Task 4 must provide that transaction before
-certifying workflow completion. Conversation sidebar paging and workflow-state
-projection queries likewise belong to later consumers, not placeholder APIs.
+policy belong to the transport task. Task4's `PersistTurnResult` now atomically
+writes final message/turn-status/event and fences changed terminal outcomes;
+standalone `AppendMessage`/`AppendEvent` calls do not certify completion.
+Task3 provides sidebar paging and projection reads; these remain projections,
+not authorization or live workflow confirmation.
 
 ## Ordering and constraints
 

@@ -83,6 +83,15 @@ func (m *Model) Chat(ctx context.Context, req llm.Request, emit func(llm.Delta) 
 	}
 	stream := true
 	wire := &api.ChatRequest{Model: req.Model, Stream: &stream}
+	if req.ContextWindow > 0 || req.MaxOutputTokens > 0 {
+		wire.Options = map[string]any{}
+		if req.ContextWindow > 0 {
+			wire.Options["num_ctx"] = req.ContextWindow
+		}
+		if req.MaxOutputTokens > 0 {
+			wire.Options["num_predict"] = req.MaxOutputTokens
+		}
+	}
 	for _, msg := range req.Messages {
 		out := api.Message{Role: msg.Role, Content: msg.Content, ToolCallID: msg.ToolCallID, ToolName: msg.ToolName}
 		for _, call := range msg.ToolCalls {
@@ -109,6 +118,14 @@ func (m *Model) Chat(ctx context.Context, req llm.Request, emit func(llm.Delta) 
 			return err
 		}
 		done = chunk.Done
+		if req.MaxResponseBytes > 0 && len(req.Tools) == 0 && len(chunk.Message.ToolCalls) > 0 {
+			callbackErr = &InvalidRequestError{fmt.Errorf("unrequested tool output")}
+			return callbackErr
+		}
+		if req.MaxResponseBytes > 0 && len(res.Message.Content)+len(chunk.Message.Content) > req.MaxResponseBytes {
+			callbackErr = &InvalidRequestError{fmt.Errorf("response byte budget exceeded")}
+			return callbackErr
+		}
 		res.Message.Content += chunk.Message.Content
 		for _, call := range chunk.Message.ToolCalls {
 			args, err := json.Marshal(call.Function.Arguments)

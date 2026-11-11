@@ -1,8 +1,10 @@
-# Private web-chat API (Task 3)
+# Private web-chat API (Tasks 3–4)
 
 This is the **Next.js server-to-Go contract**, without an `/api` prefix. The
 browser talks only to Next.js; Next.js adds `/api` to its public route names.
-Postgres owns content and intent. Temporal will own execution/admission in Task 4.
+Postgres owns content and intent. Temporal owns execution/admission in Task 4.
+See [the text-chat runtime](web-chat-temporal.md) for execution, durable receipt
+handshake, failure bounds and verification.
 **202 means durable intent, never an assistant answer, cancellation completion,
 or permission to access an attachment.**
 
@@ -24,26 +26,26 @@ Export configuration explicitly (the binary does not automatically source `.env`
   passwords; edit credentials deliberately rather than reinitializing volumes.
 
 `bin/web-api -migrate` applies embedded migrations and exits. `bin/web-api` requires
-schema version 2 and serves HTTP. Effective pgx user/database/startup parameters
+schema version 3 and serves HTTP. Effective pgx user/database/startup parameters
 are validated before connecting, including query/environment/service overrides;
 only the validated config is used. Application identity must be `webchat`, never
 Temporal's database/role. Runtime connection hosts and fallback hosts must be
 literal loopback IPs. Errors never echo the URL/password. Migrations retain the
 Task 2 effective-configuration safety checks.
 
-There is **no production gateway in this task**. The executable accepts DB-backed
-queued commands and explicitly reports dispatcher unavailable. It does not start
-a fake worker, contact Ollama, or imply execution. `WEBCHAT_EXECUTION_BACKEND` is
-rejected if set; fake gateways exist only in tests. Task 4 must wire the gateway
-and an honest live `Config.GatewayConnected` check. This callback must be fast,
-nonblocking, and concurrency-safe (e.g. read an atomic health observation).
+The executable supervises the real Temporal gateway/dispatcher. Set
+`WEBCHAT_TEMPORAL_ADDRESS` (default `127.0.0.1:7233`); run `web-worker` separately.
+`WEBCHAT_EXECUTION_BACKEND` is rejected if set. The API never runs a model itself.
+Atomic health observations populate `Config.GatewayConnected`, `WorkersPolling`
+and `ReconciliationReady`; no request blocks on a Temporal health probe.
 
 All routes, including health, require the private header contract below:
 
 - `GET /healthz`: 200 if the process responds; includes DB/dispatcher status.
-- `GET /readyz`: 200 only if storage **and** the gateway are ready; otherwise 503
-  with the same health JSON. At this task boundary it intentionally returns 503
-  and `acceptingCommands:true` when storage is available.
+- `GET /readyz`: 200 only if storage, actual Temporal transport, recent active-queue
+  worker pollers, and reconciliation are ready; otherwise 503 with the same JSON.
+  `acceptingCommands:true` still means DB-backed intent can be queued, not executed.
+  Poller observations can be stale for up to 90s and do not prove model availability.
 - DB availability does not prove workers/models are available. `/models` reports
   availability and capabilities as `unknown`/`unverified`, not invented probes.
 - HTTP request operations have a 5-second context; connections have 5-second
@@ -143,8 +145,10 @@ Stale active targets and approval decisions are **not** authorized/adjudicated b
 Postgres. They can receive 202 and later `resultState:"rejected"` with e.g.
 `result:{"state":"rejected","code":"stale_target"}`. Display rejection rather
 than an endless spinner; never treat queued user text as an assistant answer.
-Accepted admission still does not mean the turn is complete. With no gateway,
-pending commands remain pending indefinitely and readiness says why.
+Accepted admission still does not mean the turn is complete. During gateway
+outages commands remain durably pending and readiness says why. In Task4,
+controls and attachment messages are explicitly rejected with `invalid_command`;
+only ordinary text messages execute. They are not silently treated as controls.
 
 Metadata is a repeatable-read Postgres projection. `observedAt` is an API read
 observation, **not a workflow confirmation**. `authoritative:false` and
@@ -192,7 +196,7 @@ message content, digest equality, freshness) are enforced/described above.
     "Freshness":{"type":"object","additionalProperties":false,"required":["source","authoritative","observedAt","workflowConfirmedAt"],"properties":{"source":{"const":"postgres_projection"},"authoritative":{"const":false},"observedAt":{"$ref":"#/$defs/Time"},"workflowConfirmedAt":{"type":"null"}}},
     "Metadata":{"type":"object","additionalProperties":false,"required":["conversation","activeTurn","pendingApproval","policy","freshness","dispatcherConnected"],"properties":{"conversation":{"$ref":"#/$defs/Conversation"},"activeTurn":{"anyOf":[{"$ref":"#/$defs/ActiveTurn"},{"type":"null"}]},"pendingApproval":{"anyOf":[{"$ref":"#/$defs/PendingApproval"},{"type":"null"}]},"policy":{"type":"object","additionalProperties":false,"required":["revision","approvalAll"],"properties":{"revision":{"type":"integer","minimum":0},"approvalAll":{"const":"unknown"}}},"freshness":{"$ref":"#/$defs/Freshness"},"dispatcherConnected":{"type":"boolean"}}},
     "Models":{"type":"object","additionalProperties":false,"required":["models"],"properties":{"models":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"object","additionalProperties":false,"required":["id","default","availability","capabilities"],"properties":{"id":{"$ref":"#/$defs/Model"},"default":{"type":"boolean"},"availability":{"const":"unknown"},"capabilities":{"type":"object","additionalProperties":false,"required":["text","tools","images","imageAdmissionQualified"],"properties":{"text":{"const":"unverified"},"tools":{"const":"unverified"},"images":{"const":"unverified"},"imageAdmissionQualified":{"const":false}}}}}}}},
-    "Health":{"type":"object","additionalProperties":false,"required":["alive","storageReady","acceptingCommands","dispatcher"],"properties":{"alive":{"const":true},"storageReady":{"type":"boolean"},"acceptingCommands":{"type":"boolean"},"dispatcher":{"enum":["unavailable","connected"]}}},
+    "Health":{"type":"object","additionalProperties":false,"required":["alive","storageReady","acceptingCommands","dispatcher","workersPolling","reconciliationReady"],"properties":{"alive":{"const":true},"storageReady":{"type":"boolean"},"acceptingCommands":{"type":"boolean"},"dispatcher":{"enum":["unavailable","connected"]},"workersPolling":{"type":"boolean"},"reconciliationReady":{"type":"boolean"}}},
     "Error":{"type":"object","additionalProperties":false,"required":["error"],"properties":{"error":{"type":"object","additionalProperties":false,"required":["code"],"properties":{"code":{"enum":["forbidden","invalid_request","invalid_json","invalid_query","not_found","reference_not_found","conflict","body_too_large","prompt_too_large","unsupported_media_type","storage_unavailable","not_implemented","method_not_allowed"]}}}}},
     "Event":{"type":"object","additionalProperties":false,"required":["id","conversationId","turnId","logicalStep","attempt","sequence","type","payload"],"properties":{"id":{"$ref":"#/$defs/ID"},"conversationId":{"$ref":"#/$defs/ID"},"turnId":{"$ref":"#/$defs/NullableID"},"logicalStep":{"type":["integer","null"],"minimum":0},"attempt":{"type":["integer","null"],"minimum":1},"sequence":{"type":"integer","minimum":1},"type":{"type":"string","minLength":1},"payload":{"type":"object","description":"Type-specific bounded lifecycle data, not raw attachment/image bytes. Event names and payload variants are owned by the later workflow/transport tasks."}}}
   }
@@ -259,7 +263,11 @@ successful DB Ping does not prove claim/ack SQL is working. Track the supervisor
 reconciliation state separately and include it in future overall readiness; the
 queue-only executable in this task still has no running production dispatcher.
 
-New repository methods: `CreateConversationOnce`, `ListConversations`,
+Task4 implements the supervisor obligation above by failing service supervision
+on the sanitized sentinel, joining HTTP/dispatcher/health goroutines before
+closing clients. It does not silently restart reconciliation.
+
+New Task3 repository methods: `CreateConversationOnce`, `ListConversations`,
 `GetConversationProjection`, `GetCommand`, `Ping`, `ClaimCommands`, `SettleClaim`,
 and `RuntimePoolConfig`. See their Go signatures for exact types. Claim tokens
 are fencing/ownership identities only, never Temporal identities. SQL selects due

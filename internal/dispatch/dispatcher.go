@@ -16,25 +16,13 @@ import (
 // ambiguous timeout or Continue-As-New. RequestID is the original application
 // deduplication identity; neither it nor the digest may be regenerated.
 // Sequence is per-conversation acceptance order (not execution priority).
-type Command struct {
-	CommandID                        chat.CommandID
-	RequestID                        string
-	ConversationID                   chat.ConversationID
-	TurnID                           chat.TurnID
-	WorkflowID, Model, PayloadDigest string
-	Kind                             chat.CommandKind
-	Payload                          chat.CommandPayload
-	Sequence                         int64
-}
+type Command = chat.SessionCommand
 
 // CommandResult describes workflow admission, NOT turn completion. A nil error
 // requires a valid result. Pending means accepted delivery but adjudication is
 // still unknown; the same Update identity will be queried/submitted again.
 // Code is a bounded public reason, never a raw upstream error or SQL message.
-type CommandResult struct {
-	State string `json:"state"`
-	Code  string `json:"code,omitempty"`
-}
+type CommandResult = chat.AdmissionResult
 type SessionGateway interface {
 	Submit(context.Context, Command) (CommandResult, error)
 }

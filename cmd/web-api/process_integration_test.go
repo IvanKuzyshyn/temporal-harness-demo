@@ -41,6 +41,11 @@ func TestExecutableQueuedMode(t *testing.T) {
 	require.NoError(t, e)
 	address := reservation.Addr().String()
 	require.NoError(t, reservation.Close())
+	// An unavailable test-owned address, never an inherited/shared Temporal queue.
+	temporalReservation, e := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, e)
+	temporalAddress := temporalReservation.Addr().String()
+	defer temporalReservation.Close()
 	exe, e := os.Executable()
 	require.NoError(t, e)
 	key := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -59,7 +64,7 @@ func TestExecutableQueuedMode(t *testing.T) {
 	}
 	start := func() func() {
 		cmd := exec.Command(exe, "-test.run=^TestExecutableProcess$")
-		cmd.Env = append(os.Environ(), "WEBCHAT_TEST_API_PROCESS=1", "WEBCHAT_DATABASE_URL="+raw, "WEBCHAT_API_LISTEN="+address, "WEBCHAT_BROWSER_ORIGIN=http://localhost:3000", "WEBCHAT_PROXY_SECRET="+key, "WEBCHAT_EXECUTION_BACKEND=")
+		cmd.Env = append(os.Environ(), "WEBCHAT_TEST_API_PROCESS=1", "WEBCHAT_DATABASE_URL="+raw, "WEBCHAT_API_LISTEN="+address, "WEBCHAT_BROWSER_ORIGIN=http://localhost:3000", "WEBCHAT_PROXY_SECRET="+key, "WEBCHAT_EXECUTION_BACKEND=", "WEBCHAT_TEMPORAL_ADDRESS="+temporalAddress)
 		log, e := os.CreateTemp(t.TempDir(), "api-*.log")
 		require.NoError(t, e)
 		t.Cleanup(func() { _ = log.Close() })
