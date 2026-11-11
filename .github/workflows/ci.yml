@@ -13,6 +13,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: jdx/mise-action@v3
+      - name: Assert mock model for tests
+        run: test "$HARNESS_MODEL" = mock
       - name: Validate tool installations
         run: |
           go version

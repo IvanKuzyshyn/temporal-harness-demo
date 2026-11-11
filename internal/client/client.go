@@ -41,7 +41,11 @@ func (c *Client) Submit(ctx context.Context, id string, input workflows.Input, m
 	}
 	op := c.sdk.NewWithStartWorkflowOperation(temporalclient.StartWorkflowOptions{
 		ID: id, TaskQueue: workflows.AgentsQueue,
+		// Reuse an open session (including Continue-As-New), but never restart a
+		// closed session and reset its counters. Choose a fresh ID after closure;
+		// the server's reuse rejection is propagated to the caller below.
 		WorkflowIDConflictPolicy: enumspb.WORKFLOW_ID_CONFLICT_POLICY_USE_EXISTING,
+		WorkflowIDReusePolicy:    enumspb.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE,
 	}, workflows.SessionName, input)
 	handle, err := c.sdk.UpdateWithStartWorkflow(ctx, temporalclient.UpdateWithStartWorkflowOptions{
 		StartWorkflowOperation: op,

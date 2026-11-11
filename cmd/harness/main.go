@@ -28,8 +28,12 @@ func execute(args []string, out io.Writer) error {
 		return interactive(args[1:], out, args[0] == "demo")
 	case "approve", "deny":
 		return approvalCommand(args[1:], out, args[0] == "approve")
-	case "run", "session", "wait":
-		return fmt.Errorf("%s: not implemented at this scaffold stack position", args[0])
+	case "run":
+		return runCommand(args[1:], out)
+	case "session":
+		return sessionCommand(args[1:], out)
+	case "wait":
+		return waitCommand(args[1:], out)
 	default:
 		return fmt.Errorf("unknown command %q (use --help)", args[0])
 	}
