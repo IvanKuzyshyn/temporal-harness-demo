@@ -15,9 +15,12 @@ import (
 // unbounded session cache; /older walks backward, /latest returns to the tail.
 type historyState struct {
 	dir                    string // ORIGINAL metadata, never the sanitized display copy
+	cancel                 context.CancelFunc
 	generation, query      uint64
 	pending, older, loaded bool
 	jumpLatest             bool
+	explicit               bool
+	observedTotal          int
 	page                   activities.TranscriptPage
 	err                    string
 	detailID               string   // selection follows durable identity, not a row offset
@@ -52,7 +55,16 @@ func (m *Model) syncHistory(session *workflows.SessionInfo, query uint64) tea.Cm
 				m.reconnect = events.NewReconnect()
 			}
 		}
+		if m.history.cancel != nil {
+			m.history.cancel()
+		}
 		m.history = historyState{dir: dir, generation: m.history.generation + 1}
+		m.journalParts = nil
+		m.followLive, m.unread = true, 0
+		m.selectedID = ""
+		m.anchor = readingAnchor{}
+		m.showPatterns = false
+		m.log = logState{}
 	}
 	if !filepath.IsAbs(dir) {
 		m.history.err = "unavailable: original session DataDir is missing or relative; client directory is not a fallback"
@@ -61,18 +73,39 @@ func (m *Model) syncHistory(session *workflows.SessionInfo, query uint64) tea.Cm
 	// Do not invalidate a read on every two-second status poll. Its captured
 	// query generation remains valid until it completes or metadata/window/session
 	// changes. This is distinct from queryID (the newest status request).
-	if m.history.pending || m.history.older {
+	if m.history.pending {
 		return nil
 	}
 	return m.loadHistoryForQuery(0, query)
 }
 func (m *Model) loadHistory(before int) tea.Cmd {
-	if m.history.pending {
-		return nil
+	// Explicit navigation supersedes an in-flight poll/window. Generation guards
+	// discard the old reply; End must not be swallowed by a pending older read.
+	if m.history.cancel != nil {
+		m.history.cancel()
 	}
+	m.history.pending = false
 	m.history.detailID = ""
+	m.selectedID = ""
+	m.anchor = readingAnchor{}
+	m.showPatterns = false
+	m.history.explicit = true
+	m.log = logState{}
+	if before > 0 {
+		m.browse()
+	} else {
+		m.resumeFollowing()
+	}
 	m.history.jumpLatest = before == 0
-	return m.loadHistoryForQuery(before, m.queryID)
+	cmd := m.loadHistoryForQuery(before, m.queryID)
+	// Explicit navigation must replace the previous panel immediately, even
+	// when the reader cannot start or later fails. Rebuild from the cached page,
+	// not the retained parts, which may still contain a detail or captured log.
+	if before > 0 {
+		m.rebuildJournal()
+		m.viewport.GotoTop()
+	}
+	return cmd
 }
 func (m *Model) loadHistoryForQuery(before int, query uint64) tea.Cmd {
 	if m.history.pending {
@@ -80,6 +113,8 @@ func (m *Model) loadHistoryForQuery(before int, query uint64) tea.Cmd {
 	}
 	if !filepath.IsAbs(m.history.dir) {
 		m.history.err = "unavailable: original session DataDir is missing or relative"
+		m.history.explicit = false
+		m.history.jumpLatest = false
 		m.refreshViewport(false)
 		return nil
 	}
@@ -87,9 +122,12 @@ func (m *Model) loadHistoryForQuery(before int, query uint64) tea.Cmd {
 	m.history.query = query
 	m.history.pending = true
 	m.refreshViewport(false)
-	epoch, generation, dir, id, parent := m.epoch, m.history.generation, m.history.dir, m.opts.SessionID, m.ctx
+	readCtx, stopRead := context.WithCancel(m.ctx)
+	m.history.cancel = stopRead
+	epoch, generation, dir, id := m.epoch, m.history.generation, m.history.dir, m.opts.SessionID
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(parent, requestTimeout)
+		defer stopRead()
+		ctx, cancel := context.WithTimeout(readCtx, requestTimeout)
 		defer cancel()
 		page, err := activities.ReadTranscriptPage(ctx, dir, id, before, activities.MaxTranscriptPage)
 		return historyMsg{epoch: epoch, generation: generation, query: query, before: before, page: page, err: err}
@@ -103,6 +141,15 @@ func (m *Model) acceptHistory(msg historyMsg) {
 	if msg.err != nil {
 		m.history.err = bounded(safeText(msg.err.Error()), maxText)
 	} else {
+		if !m.followLive && m.history.loaded && !m.history.explicit {
+			if msg.page.Total > m.history.observedTotal {
+				m.unread = min(999999, m.unread+uint64(msg.page.Total-m.history.observedTotal))
+			}
+			m.history.observedTotal = max(m.history.observedTotal, msg.page.Total)
+			m.history.err = ""
+			return // Keep the exact page/reading anchor, even if the new tail evicts it.
+		}
+		m.history.observedTotal = msg.page.Total
 		changedWindow := m.history.older != (msg.before > 0) || (msg.before > 0 && m.history.page.Before != msg.page.Before)
 		m.history.page = msg.page
 		m.reconcileStreams()
@@ -112,8 +159,9 @@ func (m *Model) acceptHistory(msg historyMsg) {
 		m.history.loaded = true
 		m.history.older = msg.before > 0
 		m.history.err = ""
+		m.rebuildJournal()
 		m.refreshViewport(false)
-		if changedWindow || m.history.jumpLatest {
+		if !m.showPatterns && (changedWindow || m.history.jumpLatest) {
 			if m.history.older {
 				m.viewport.GotoTop()
 			} else {
@@ -121,6 +169,7 @@ func (m *Model) acceptHistory(msg historyMsg) {
 			}
 		}
 	}
+	m.history.explicit = false
 	m.history.jumpLatest = false
 	m.refreshViewport(false)
 }

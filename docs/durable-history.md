@@ -68,8 +68,10 @@ Query generation. A response must match all three and the pending request.
 Session switches, authoritative directory changes, and superseding window reads
 invalidate old results. Repeated same-directory status Queries do not invalidate
 an in-flight read: otherwise a slow read could starve on every two-second poll.
-Only one history read is scheduled at a time for an unchanged directory/session;
-repeated navigation while it is pending waits for that read. Errors retain the
+Periodic refresh waits for the current history read. Explicit navigation can
+supersede and cancel that read; its generation invalidates the older reply so End
+cannot be swallowed by a pending older-page request. Cancellation is cooperative
+around reads, not a guarantee that an already blocked filesystem syscall exits. Errors retain the
 last valid window and the independent Query status/approval. `/latest` retries.
 
 Durable records are ordered and identified by message ID, never text or tool-call
@@ -108,15 +110,18 @@ optimistic user row. Before real history is available, a Query answer is labeled
 as a **fallback, not a journal record**. Once a nonempty durable window is loaded,
 that fallback is suppressed rather than matched by message content.
 
-## Minimal history controls (not the visual redesign)
+## History controls
 
 - `/older`: replace the current page with the preceding one, anchored at its top.
 - `/latest`: leave record details, read the newest window, and jump to its bottom.
 - `/detail <record number>`: select a numbered record from the loaded window and
   show its captured content/arguments/result metadata in the scrollable viewport.
 - `/journal`: return from selected detail to the loaded journal.
-- PgUp/PgDn: scroll the journal or selected detail. Ctrl+T: collapse/expand tool
-  details in the overview. Selected record detail is expanded independently.
+- PgUp/PgDn or mouse wheel: browse the journal or selected detail; End follows
+  latest and clears unseen updates. Ctrl+Up/Down selects, Ctrl+O expands/collapses.
+  Ctrl+T collapses tool bodies in the overview without hiding outcome labels.
+- Ctrl+L or `/log`: open a validated command log. Ctrl+Left/Right or
+  `/logprev` / `/lognext` page captured bytes. See [log bounds](terminal-journal.md#safe-full-log-browsing).
 - Tab retains the optional pattern log. `/help` lists the controls. Existing
   Enter, Alt+Enter, Esc, Ctrl+C and exact approval bindings are unchanged.
 
@@ -163,6 +168,8 @@ values, malformed/null output, details and log references (subject to the normal
 terminal sanitization/display bounds). No workflow writer or artifact schema is
 changed.
 
-Task 4 still owns the visual redesign, phase styling, pinned-prompt layout,
-follow/unread presentation, stable record-level scroll anchoring, mouse scrolling,
-and final real PTY/live-service qualification. This change does not claim them.
+The [native terminal journal](terminal-journal.md) adds measured pinned-composer
+layout, phase/mode/timing, explicit follow/unseen updates, frozen reading windows,
+record-level resize anchors, mouse scrolling and bounded command-log paging.
+Private real PTY/live-service qualification and independent final review remain
+controller-owned; deterministic rendering tests do not establish that evidence.

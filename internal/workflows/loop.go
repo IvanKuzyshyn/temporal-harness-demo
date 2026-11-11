@@ -69,6 +69,11 @@ func toolMessageContent(name string, res tools.Result) string {
 func (r *runtime) run(ctx workflow.Context, msg MessageInput) error {
 	legacyDemo := workflow.GetVersion(ctx, "explicit-demo-routing", workflow.DefaultVersion, 1) == workflow.DefaultVersion
 	scenario := scenarioForRun(r.cfg.Scenario, r.state.RunCounter, msg, legacyDemo)
+	r.state.Mode = "normal"
+	if strings.EqualFold(scenario, "demo") {
+		r.state.Mode = "demo"
+	}
+	r.phase(ctx, "context")
 	if err := r.emit(ctx, events.AgentStart, events.None, events.AgentData{InputID: r.inputID, Status: "working"}); err != nil {
 		return err
 	}
@@ -91,6 +96,7 @@ func (r *runtime) run(ctx workflow.Context, msg MessageInput) error {
 		if err := r.emit(ctx, events.TurnStart, events.None, events.TurnData{Turn: r.state.Turn}); err != nil {
 			return err
 		}
+		r.phase(ctx, "generating")
 		llmCtx := workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 			TaskQueue: LLMQueue, StartToCloseTimeout: 10 * time.Minute, ScheduleToCloseTimeout: 30 * time.Minute,
 			HeartbeatTimeout: 15 * time.Second, WaitForCancellation: true,
@@ -141,6 +147,7 @@ func (r *runtime) run(ctx workflow.Context, msg MessageInput) error {
 		}
 		r.pruneChildren()
 		r.state.ActiveTools = result.ToolCalls
+		r.phase(ctx, "tools")
 		batch, err := r.executeBatch(ctx, result.ToolCalls)
 		if err != nil {
 			return err

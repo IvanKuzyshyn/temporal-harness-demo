@@ -177,7 +177,12 @@ func (m *Model) actionCmd(action string) tea.Cmd {
 // unused payloads. The on-disk stream remains the complete diagnostic record.
 func compactEvent(e events.Event) streamEvent {
 	workflowKey, parentKey := optionalIdentity(e.WorkflowID), optionalIdentity(e.ParentWorkflowID)
-	e.TS, e.RunID = "", ""
+	e.RunID = ""
+	if at, err := time.Parse(time.RFC3339Nano, e.TS); err == nil {
+		e.TS = at.UTC().Format(time.RFC3339Nano)
+	} else {
+		e.TS = ""
+	}
 	e.WorkflowID = bounded(safeText(e.WorkflowID), 256)
 	e.ParentWorkflowID = bounded(safeText(e.ParentWorkflowID), 256)
 	e.Type = events.Type(bounded(safeText(string(e.Type)), 128))

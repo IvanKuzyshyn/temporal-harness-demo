@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -87,7 +88,12 @@ func runSession(ctx context.Context, b cliBackend, cfg config.Config, o runOptio
 	input := sessionInput(cfg)
 	// Establish the tail cursor BEFORE Submit. Subsequent bounded reads include even
 	// a run that starts and settles while the enqueue Update is returning.
-	path, err := events.NewStore(cfg.DataDir).Path(o.session)
+	dataDir := cfg.DataDir
+	if haveBaseline && baseline.Session != nil {
+		// Use raw metadata, never the sanitized diagnostic or reconnecting client's root.
+		dataDir = baseline.Session.DataDir
+	}
+	path, err := events.NewStore(dataDir).Path(o.session)
 	if err != nil {
 		return err
 	}
@@ -101,11 +107,24 @@ func runSession(ctx context.Context, b cliBackend, cfg config.Config, o runOptio
 	configurationReported := haveBaseline
 	var offset int64
 	streamOK := true
-	if st, e := os.Stat(path); e == nil {
-		offset = st.Size()
-	} else if !errors.Is(e, os.ErrNotExist) {
-		fmt.Fprintf(diag, "warning: event stream unavailable; recovering via state query: %v\n", e)
-		streamOK = false
+	if haveBaseline && baseline.Session != nil {
+		// Missing event files are normal; missing/invalid authoritative roots are not.
+		// Disable optional display rather than silently switching to client storage.
+		st, e := os.Stat(dataDir)
+		if !filepath.IsAbs(dataDir) || e != nil || !st.IsDir() {
+			fmt.Fprintln(diag, "warning: event stream unavailable: original session DataDir is invalid or unavailable; no client-directory fallback; recovering via state query")
+			streamOK = false
+		}
+	} else if haveBaseline {
+		fmt.Fprintln(diag, "note: original event source unknown (legacy metadata unavailable); using client-selected DataDir for optional events only")
+	}
+	if streamOK {
+		if st, e := os.Stat(path); e == nil {
+			offset = st.Size()
+		} else if !errors.Is(e, os.ErrNotExist) {
+			fmt.Fprintf(diag, "warning: event stream unavailable; recovering via state query: %v\n", e)
+			streamOK = false
+		}
 	}
 	var actor string
 	if o.autoApprove {

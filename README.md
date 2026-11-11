@@ -48,6 +48,23 @@ The guided scenario makes actual provider calls, then **replaces the parent's ac
 - New workflow runs select the guided script only via an explicit `/demo` message or explicit initial `Scenario=demo`; ordinary natural-language fixture prompts do not opt in, even with mock. Old recorded workflow histories retain their natural-language alias behavior through a Temporal version gate.
 - Defaults: Temporal `localhost:7233`, UI `localhost:8233`, Ollama `127.0.0.1:11434`, workdir current directory, artifacts `.data/`. See [all settings and service ownership](docs/operations.md).
 
+## Terminal journal
+
+The native TUI reserves bottom rows for your draft at 80×24 and 120×40. PgUp/PgDn
+or the mouse wheel browse without following new output; **End** returns live.
+Ctrl+Up/Down selects a record, Ctrl+O expands it, and Ctrl+L opens a captured
+command log (Ctrl+Left/Right pages beyond the model tail). `/help`, `/detail N`,
+`/lognext`, `/older`, `/latest`, and `/metadata` provide discoverable fallbacks.
+Original model/project, actual per-run mode, real phase/timing, active counts and
+observed heartbeat freshness are labeled honestly; read evidence is not test
+verification. Approval preempts drafting; below 40×12 decision dispatch is blocked
+with a resize warning. See [native terminal behavior and qualification limits](docs/terminal-journal.md)
+and [controlled real-model, durability and PTY qualification](docs/project-assistant-qualification.md).
+
+Fresh ordinary runs gather **one bounded project-evidence activity**, not the old
+four parallel context gatherers. Parallel tool batches and the explicit guided
+demo still demonstrate parallel execution; old replay histories keep their schedule.
+
 ## Noninteractive example
 
 Using the temporary copy above, this **explicitly risky** option approves every current tool request observed while the command waits, including the separate verification request:
@@ -78,7 +95,7 @@ Pins: Go **1.27.3**, Temporal CLI **1.10.0**, Ollama **0.40.15**. Exact SDK/Char
 - [Architecture, Mermaid diagrams, and source map](docs/architecture.md)
 - [Operations: commands, TUI keys, isolation, troubleshooting](docs/operations.md)
 - [Testing and evidence boundaries](docs/testing.md)
-- [18-position draft PR stack table (CSV)](docs/pr-stack.csv) — bases, scope, validation focus, and live check links
+- [Draft PR stack inventory through intended position 22 (CSV)](docs/pr-stack.csv) — bases, scope, validation focus, and live check links
 - [Event protocol](docs/events.md)
 
 ## Trust boundary

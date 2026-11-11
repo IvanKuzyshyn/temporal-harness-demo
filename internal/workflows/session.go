@@ -1,6 +1,8 @@
 package workflows
 
 import (
+	"time"
+
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/events"
 	"go.temporal.io/sdk/workflow"
 )
@@ -25,6 +27,10 @@ func SessionWorkflow(ctx workflow.Context, input Input) error {
 		r.state = *input.Carry
 		r.state.Status = "idle"
 		r.state.MaxTurns = input.MaxTurns
+		if r.state.RunFinishedAt.IsZero() {
+			r.state.Phase = ""
+			r.state.PhaseStartedAt, r.state.RunStartedAt = time.Time{}, time.Time{}
+		}
 	}
 	// Carry is run state, never an authority for session configuration.
 	r.state.Session = &SessionInfo{Model: input.Model, Workdir: input.Workdir, DataDir: input.DataDir, Scenario: input.Scenario}
@@ -56,6 +62,8 @@ func SessionWorkflow(ctx workflow.Context, input Input) error {
 		r.deferringSteers = false
 		r.steerCounter = 0
 		r.state.Status = "working"
+		r.state.RunStartedAt = workflow.Now(ctx)
+		r.state.RunFinishedAt = time.Time{}
 		r.state.RunCounter++
 		r.state.Turn = 0
 		r.state.Answer = ""
@@ -74,7 +82,7 @@ func SessionWorkflow(ctx workflow.Context, input Input) error {
 		err = r.run(runCtx, msg)
 		if r.toolPersistenceErr != nil {
 			cancel()
-			return r.failToolPersistence()
+			return r.failToolPersistence(ctx)
 		}
 		r.deferringSteers = true
 		if runCtx.Err() != nil {
@@ -96,7 +104,7 @@ func SessionWorkflow(ctx workflow.Context, input Input) error {
 		// precedence over cancellation and must never enter normal settlement.
 		if r.toolPersistenceErr != nil {
 			cancel()
-			return r.failToolPersistence()
+			return r.failToolPersistence(ctx)
 		}
 		if runCtx.Err() != nil {
 			r.fail("aborted", runCtx.Err())
@@ -128,7 +136,9 @@ func SessionWorkflow(ctx workflow.Context, input Input) error {
 
 // failToolPersistence projects terminal state without claiming the unresolved
 // transcript tail was settled. Both joined run seams use the same fatal error.
-func (r *runtime) failToolPersistence() error {
+func (r *runtime) failToolPersistence(ctx workflow.Context) error {
+	r.state.RunFinishedAt = workflow.Now(ctx)
+	r.phase(ctx, "failed")
 	r.fail("interrupted", r.toolPersistenceErr)
 	r.state.Status = "failed"
 	r.state.QueuePaused = true
@@ -138,6 +148,11 @@ func (r *runtime) failToolPersistence() error {
 }
 
 func (r *runtime) settle(ctx workflow.Context) {
+	r.state.RunFinishedAt = workflow.Now(ctx)
+	r.phase(ctx, "settled")
+	if r.state.LastRunFailure != nil {
+		r.phase(ctx, "failed")
+	}
 	status := "done"
 	r.state.Status = "settled"
 	if r.state.LastRunFailure != nil {
