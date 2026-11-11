@@ -5,6 +5,12 @@ Only Temporal can adjudicate active-turn freshness, replacement races, tool
 consent, policy revision, cancellation, and completion. Never interpret a
 successful `AcceptCommand` or a projection row as authorization.
 
+Task 3 adds idempotent creation, stable sidebar snapshots, projection reads and
+fenced command claims in migration `000002`. See [the private API contract](web-api.md)
+for those exported interfaces, dispatch ordering/backoff, and runtime configuration.
+Production dispatch should use `ClaimCommands`/`SettleClaim`, not the older
+unleased `ListPendingCommands` read helper.
+
 ## Entry points
 
 Use `storage.New(pool *pgxpool.Pool) *storage.Repository`; the caller owns the

@@ -72,11 +72,20 @@ func migrationConfig(databaseURL string) (*pgx.ConnConfig, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateApplicationIdentity(config); err != nil {
+		return nil, err
+	}
+	return config, nil
+}
+
+// Validate the exact configuration later used to connect, not a separately
+// parsed or reconstructed URI. Shared by migrations and the private API pool.
+func validateApplicationIdentity(config *pgx.ConnConfig) error {
 	if config.User != "webchat" {
-		return nil, fmt.Errorf("application migrations require effective webchat role")
+		return fmt.Errorf("application migrations require effective webchat role")
 	}
 	if config.Database == "" || config.Database == "temporal" || config.Database == "temporal_visibility" {
-		return nil, fmt.Errorf("application migrations require an explicit non-Temporal database")
+		return fmt.Errorf("application migrations require an explicit non-Temporal database")
 	}
 	// Startup GUCs can change the session role independently of Config.User.
 	// Do not interpret the server's options grammar here; reject that escape
@@ -84,8 +93,8 @@ func migrationConfig(databaseURL string) (*pgx.ConnConfig, error) {
 	for key := range config.RuntimeParams {
 		key = strings.ToLower(key)
 		if key == "role" || key == "session_authorization" || key == "options" || strings.HasPrefix(key, "x-") {
-			return nil, fmt.Errorf("unsupported application migration parameter %q", key)
+			return fmt.Errorf("unsupported application migration parameter %q", key)
 		}
 	}
-	return config, nil
+	return nil
 }
