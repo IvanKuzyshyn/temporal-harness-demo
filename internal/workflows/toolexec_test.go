@@ -266,7 +266,7 @@ func TestCommandApplicationErrorDetails(t *testing.T) {
 			} else if !strings.Contains(result.Output, "command hung") {
 				t.Errorf("lost original error: %+v", result)
 			}
-			wantDetails := map[string]string{"exitCode": fmt.Sprint(tc.want.ExitCode), "logRef": tc.want.LogRef, "truncated": fmt.Sprint(tc.want.Truncated)}
+			wantDetails := map[string]string{"exitCode": fmt.Sprint(tc.want.ExitCode), "logRef": tc.want.LogRef, "truncated": fmt.Sprint(tc.want.Truncated), "executionError": "true"}
 			if result.Interrupted != tc.want.Interrupted || !reflect.DeepEqual(result.Details, wantDetails) {
 				t.Errorf("lost command metadata: %+v, want %+v", result, tc.want)
 			}

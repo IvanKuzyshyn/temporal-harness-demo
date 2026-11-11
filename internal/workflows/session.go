@@ -62,10 +62,12 @@ func SessionWorkflow(ctx workflow.Context, input Input) error {
 		r.inputID = runInputID(r.state.RunCounter, msg.RequestID)
 		if !msg.Internal {
 			r.state.AfterRunCount = 0
+			r.state.VerificationPending = false
 			r.state.OriginInputID = r.inputID
 		} else if msg.OriginInputID != "" {
 			r.state.OriginInputID = msg.OriginInputID
 			r.state.AfterRunCount = msg.AfterRunCount
+			r.state.VerificationPending = msg.VerificationPending
 		}
 		err = r.run(runCtx, msg)
 		if r.toolPersistenceErr != nil {
@@ -103,6 +105,13 @@ func SessionWorkflow(ctx workflow.Context, input Input) error {
 			return ctx.Err()
 		}
 		if r.state.LastRunFailure != nil {
+			// A final answer can clear unanswered context before Stop interrupts
+			// TurnEnd. Preserve verification without running afterRun on failure,
+			// including a first write that afterRun has not yet marked pending.
+			if r.state.VerificationPending || r.state.WroteFile {
+				r.state.VerificationPending = true
+				r.state.HasUnansweredContext = true
+			}
 			r.state.QueuePaused = true
 			// Retained inputs become FIFO next-run work on resume, even if originally steers.
 			for i := range r.state.Inbox {

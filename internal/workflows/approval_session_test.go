@@ -41,6 +41,12 @@ func TestApprovalSessionRealWrite(t *testing.T) {
 				dispatched.Add(1)
 				return a.ExecuteTool(ctx, in)
 			}, activity.RegisterOptions{Name: w.ToolActivity})
+			var commands atomic.Int32
+			env.RegisterActivityWithOptions(func(context.Context, w.ToolInput) (w.CommandResult, error) {
+				commands.Add(1)
+				t.Error("verification command dispatched without its own approval")
+				return w.CommandResult{}, nil
+			}, activity.RegisterOptions{Name: w.CommandActivity})
 			resolutionToken := make(chan []byte, 1)
 			env.RegisterActivityWithOptions(func(ctx context.Context, in w.EmitInput) (uint64, error) {
 				if mode == "stop during resolution" && in.Type == events.ApprovalResolved {
@@ -83,6 +89,7 @@ func TestApprovalSessionRealWrite(t *testing.T) {
 				}
 				env.UpdateWorkflow(w.DecideUpdate, "wrong-hash", &testsuite.TestUpdateCallback{OnReject: func(error) {}, OnComplete: func(any, error) { t.Error("hash mismatch accepted") }}, w.DecisionInput{RequestID: p.RequestID, ActionHash: "wrong", Approved: true, User: "alice"})
 			}, time.Second)
+			var writeRequestID, writeActionHash string
 			env.RegisterDelayedCallback(func() {
 				assertFile("original")
 				if dispatched.Load() != 0 {
@@ -92,6 +99,7 @@ func TestApprovalSessionRealWrite(t *testing.T) {
 				if p == nil {
 					t.Fatal("missing pending request")
 				}
+				writeRequestID, writeActionHash = p.RequestID, p.ActionHash
 				switch mode {
 				case "approve", "deny", "stop during resolution":
 					env.UpdateWorkflow(w.DecideUpdate, "valid", &testsuite.TestUpdateCallback{OnReject: func(err error) { t.Error(err) }, OnComplete: func(_ any, err error) {
@@ -105,6 +113,22 @@ func TestApprovalSessionRealWrite(t *testing.T) {
 					env.UpdateWorkflowNoRejection(w.StopUpdate, "stop", t)
 				}
 			}, 2*time.Second)
+			if mode == "approve" {
+				env.RegisterDelayedCallback(func() {
+					assertFile("approved content")
+					s := query(t, env)
+					p := s.PendingApproval
+					if dispatched.Load() != 1 || commands.Load() != 0 || s.Status != "blocked" || p == nil {
+						t.Fatalf("expected separate blocked verification after write: %+v", s)
+					}
+					if p.Call.Name != "run_command" || string(p.Call.Args) != `{"cmd":"go","args":["test","./..."]}` || p.RequestID == writeRequestID || p.ActionHash == writeActionHash {
+						t.Fatalf("verification reused write authorization: %+v", p)
+					}
+					// Approving the write does not authorize afterRun. Explicitly
+					// deny this separate request; no command may be dispatched.
+					env.UpdateWorkflowNoRejection(w.DecideUpdate, "deny-verification", t, w.DecisionInput{RequestID: p.RequestID, ActionHash: p.ActionHash, Approved: false, User: "alice", Reason: "verification not authorized"})
+				}, 3*time.Second)
+			}
 			if mode == "stop during resolution" {
 				var token []byte
 				env.RegisterDelayedCallback(func() {
@@ -142,8 +166,15 @@ func TestApprovalSessionRealWrite(t *testing.T) {
 				if dispatched.Load() != count {
 					t.Errorf("dispatch=%d want=%d", dispatched.Load(), count)
 				}
-				if state := query(t, env); state.PendingApproval != nil || state.Status == "blocked" {
+				if commands.Load() != 0 {
+					t.Errorf("unapproved verification dispatch=%d", commands.Load())
+				}
+				state := query(t, env)
+				if state.PendingApproval != nil || state.Status == "blocked" {
 					t.Errorf("approval leaked: %+v", state)
+				}
+				if mode == "approve" && (state.LastRunFailure == nil || state.LastRunFailure.Reason != "interrupted" || !state.QueuePaused || !state.VerificationPending || !state.HasUnansweredContext || state.AfterRunCount != 0 || len(state.Inbox) != 0 || len(state.ActiveTools) != 0) {
+					t.Errorf("denied verification did not fail closed: %+v", state)
 				}
 				env.CancelWorkflow()
 			}, 5*time.Second)

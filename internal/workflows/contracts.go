@@ -49,8 +49,9 @@ type MessageInput struct {
 	Internal      bool   `json:"internal,omitempty"`
 	OriginInputID string `json:"originInputId,omitempty"`
 	ContextOnly   bool   `json:"contextOnly,omitempty"`
-	// Snapshot of the origin's already-consumed restart budget (0..2).
-	AfterRunCount int `json:"afterRunCount,omitempty"`
+	// Snapshot of the origin's consumed restart budget (0..2) and verification obligation.
+	AfterRunCount       int  `json:"afterRunCount,omitempty"`
+	VerificationPending bool `json:"verificationPending,omitempty"`
 }
 
 // RetainedReceipt is a bounded FIFO retry window, carried across Continue-As-New.
@@ -105,6 +106,7 @@ type State struct {
 	AfterRunCount        int               `json:"afterRunCount"`
 	ContextGathered      bool              `json:"contextGathered"`
 	WroteFile            bool              `json:"wroteFile"`
+	VerificationPending  bool              `json:"verificationPending"` // Sticky for this origin until verification succeeds.
 	HasUnansweredContext bool              `json:"hasUnansweredContext"`
 	QueuePaused          bool              `json:"queuePaused"`
 	ContinueRequested    bool              `json:"continueRequested"`

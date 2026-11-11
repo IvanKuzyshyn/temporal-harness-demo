@@ -3,15 +3,66 @@ package workflows
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/events"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/tools"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
 
+// scenarioForRun never mutates the session configuration: UpdateWithStart does
+// not replace it in an existing session. Legacy demo configuration applies only
+// to the first logical run, including across Continue-As-New via RunCounter.
+func scenarioForRun(configured string, run int, msg MessageInput) string {
+	if !msg.Internal && !msg.ContextOnly {
+		text := strings.ToLower(strings.TrimSpace(msg.Text))
+		text = strings.ReplaceAll(text, "’", "'")
+		text = strings.TrimRight(text, ".!?")
+		switch text {
+		case "/demo",
+			"find what is broken in the sample project and verify the fix",
+			"find what's broken in the sample project and verify the fix",
+			"inspect calc and its tests, delegate a read-only review, propose correcting add with approval, then run go test ./... and summarize the result":
+			return "demo"
+		}
+		if strings.EqualFold(configured, "demo") && run == 1 {
+			return "demo"
+		}
+	}
+	if strings.EqualFold(configured, "demo") {
+		return ""
+	}
+	return configured
+}
+
+// Successful reads retain exact source bytes for fixture validation. Everything
+// else carries explicit outcome metadata, especially silent nonzero commands and
+// denials (which have no exitCode). Never infer success from an empty output.
+func toolMessageContent(name string, res tools.Result) string {
+	if name == "read_file" {
+		// Retain the established recovered-read interruption marker, too.
+		if res.Interrupted {
+			return "[interrupted]\n" + res.Output
+		}
+		if !res.IsError {
+			return res.Output
+		}
+	}
+	content, err := json.Marshal(res)
+	if err != nil {
+		// Structured is optional tool-owned JSON. Retain all outcome fields even
+		// if a restored/mocked result contains malformed structured data.
+		res.Structured = nil
+		content, _ = json.Marshal(res)
+	}
+	return string(content)
+}
+
 func (r *runtime) run(ctx workflow.Context, msg MessageInput) error {
+	scenario := scenarioForRun(r.cfg.Scenario, r.state.RunCounter, msg)
 	if err := r.emit(ctx, events.AgentStart, events.None, events.AgentData{InputID: r.inputID, Status: "working"}); err != nil {
 		return err
 	}
@@ -42,7 +93,7 @@ func (r *runtime) run(ctx workflow.Context, msg MessageInput) error {
 		var result LLMResult
 		// A canceled run must still join activity cleanup before the next run.
 		waitCtx, _ := workflow.NewDisconnectedContext(ctx)
-		err := workflow.ExecuteActivity(llmCtx, LLMActivity, LLMInput{Scope: r.scope, Model: r.cfg.Model, DataDir: r.cfg.DataDir, TranscriptRef: r.state.TranscriptRef, Turn: turn, Scenario: r.cfg.Scenario, InputID: r.inputID, Tools: r.modelTools()}).Get(waitCtx, &result)
+		err := workflow.ExecuteActivity(llmCtx, LLMActivity, LLMInput{Scope: r.scope, Model: r.cfg.Model, DataDir: r.cfg.DataDir, TranscriptRef: r.state.TranscriptRef, Turn: turn, Scenario: scenario, InputID: r.inputID, Tools: r.modelTools()}).Get(waitCtx, &result)
 		if err != nil {
 			reason := "model_error"
 			if temporal.IsCanceledError(err) || ctx.Err() != nil {
@@ -91,10 +142,7 @@ func (r *runtime) run(ctx workflow.Context, msg MessageInput) error {
 		r.recordSeq(batch.LastSeq)
 		messages := make([]llm.Message, 0, len(batch.Results))
 		for i, res := range batch.Results {
-			content := res.Output
-			if res.Interrupted {
-				content = "[interrupted]\n" + content
-			}
+			content := toolMessageContent(result.ToolCalls[i].Name, res)
 			messages = append(messages, llm.Message{Role: "tool", ToolCallID: res.ToolCallID, ToolName: result.ToolCalls[i].Name, Content: content})
 		}
 		if err = r.persistJoinedToolResults(ctx, fmt.Sprintf("%s/turn/%d/tools", r.inputID, turn), messages...); err != nil {

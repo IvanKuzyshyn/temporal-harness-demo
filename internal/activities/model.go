@@ -113,6 +113,11 @@ func (a *Activities) LLMStream(ctx context.Context, in workflows.LLMInput) (resu
 				displayMu.Unlock()
 			}
 		})
+		if in.Scenario == "demo" {
+			if err := emit(events.MessageUpdate, events.MessageData{Role: "assistant", MessageRef: ref, Delta: demoLabel + "Provider commentary below is an unverified draft.\n"}); err != nil {
+				return zero, err
+			}
+		}
 		res, err := a.Model.Chat(ctx, llm.Request{Model: in.Model, Messages: messages, Tools: in.Tools, Scenario: in.Scenario, Turn: in.Turn}, func(d llm.Delta) error {
 			if _, err := partial.WriteString(d.Text); err != nil {
 				return err
@@ -136,6 +141,12 @@ func (a *Activities) LLMStream(ctx context.Context, in workflows.LLMInput) (resu
 		}
 		if err := partial.Sync(); err != nil {
 			return zero, err
+		}
+		if in.Scenario == "demo" {
+			res.Message = demoPlan(in, entries)
+			if err := emit(events.MessageUpdate, events.MessageData{Role: "assistant", MessageRef: ref, Delta: "\n" + res.Message.Content}); err != nil {
+				return zero, err
+			}
 		}
 		if len(res.Message.ToolCalls) > 32 {
 			return zero, fmt.Errorf("model tool-call limit exceeded")
