@@ -1,0 +1,7 @@
+.data/
+bin/
+/harness
+.env
+.env.*
+.worktrees/
+.superpowers/
