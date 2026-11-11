@@ -20,14 +20,23 @@ import (
 // the project changes, and activity history contains only the artifact reference.
 func (a *Activities) GatherContext(ctx context.Context, in workflows.GatherInput) (workflows.AppendResult, error) {
 	switch in.Kind {
-	case "git", "tree", "readme", "todo":
+	case "git", "tree", "readme", "todo", "evidence":
 	default:
 		return workflows.AppendResult{}, fmt.Errorf("unknown context kind %q", in.Kind)
 	}
 	ref := TranscriptRef(in.Scope.WorkflowID)
 	key := "context/" + in.Kind
+	if in.InputID != "" {
+		key = in.InputID + "/" + key
+	}
 	id := entryKey(in.Scope, key+"/0/system")
-	message := llm.Message{Role: "system", Content: "Project context (" + in.Kind + "):\n" + toolBound(gatherProject(ctx, in))}
+	content := gatherProject(ctx, in)
+	if in.Kind != "evidence" {
+		content = toolBound(content)
+	}
+	// Keep the historical stored role and key suffix for first-writer identity.
+	// agentMessages demotes these snapshots to quoted data only at request time.
+	message := llm.Message{Role: "system", Content: "Project context (" + in.Kind + "):\n" + content}
 	err := mutateTranscript(ctx, in.DataDir, ref, func(entries *[]transcriptEntry) error {
 		for _, entry := range *entries {
 			if entry.ID == id {
@@ -45,6 +54,9 @@ func (a *Activities) GatherContext(ctx context.Context, in workflows.GatherInput
 }
 
 func gatherProject(ctx context.Context, in workflows.GatherInput) string {
+	if in.Kind == "evidence" {
+		return projectEvidence(ctx, in.Workdir)
+	}
 	registry, err := tools.New(in.Workdir)
 	if err != nil {
 		return "Context unavailable: " + err.Error()
@@ -55,6 +67,9 @@ func gatherProject(ctx context.Context, in workflows.GatherInput) string {
 		res := registry.Execute(ctx, llm.ToolCall{Name: name, Args: raw})
 		if res.IsError {
 			return "Context unavailable: " + res.Output
+		}
+		if res.Details["truncated"] == "true" {
+			return "[context truncated]\n" + res.Output
 		}
 		return res.Output
 	}
@@ -84,11 +99,25 @@ func gatherProject(ctx context.Context, in workflows.GatherInput) string {
 		// Sort before selecting bounded README content.
 		sort.Strings(names)
 		var out strings.Builder
+		reads := 0
 		for _, name := range names {
 			if strings.HasPrefix(strings.ToUpper(name), "README") {
-				out.WriteString(name + ":\n" + run("read_file", tools.FileArgs{Path: name}) + "\n")
-				if out.Len() >= 8192 {
+				if reads == evidenceFiles {
+					out.WriteString("[context truncated: file limit]\n")
 					break
+				}
+				reads++
+				data, err := readEvidenceFile(root, name, evidenceFileBytes)
+				if err != nil {
+					fmt.Fprintf(&out, "%q: read failed: %v\n", name, err)
+					continue
+				}
+				if data.truncated {
+					out.WriteString("[file truncated at 8192 bytes]\n")
+				}
+				out.WriteString(name + ":\n" + string(data.bytes) + "\n")
+				if out.Len() >= 8192 {
+					return "[context truncated]\n" + toolBound(out.String())
 				}
 			}
 		}

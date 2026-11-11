@@ -1,6 +1,16 @@
 # Testing and evidence
 
-[Quickstart](../README.md) · [Operations](operations.md) · [Architecture](architecture.md)
+[Quickstart](../README.md) · [Operations](operations.md) · [Architecture](architecture.md) · [Project grounding](project-grounding.md)
+
+Grounding regression tests use temporary unrelated projects and capturing fake models, not live model inference:
+
+```sh
+go test ./internal/activities -run 'TestGrounded|TestProjectEvidence|TestAgentMessages|TestEvidenceBudgets|TestAutomaticReadme' -count=1
+go test ./internal/workflows -run 'TestContextRefreshVersionBranches|TestGatherContextFutures|TestRecordedReplay' -count=1
+go test ./internal/tools -run TestDiscoveryExcludes -count=1
+```
+
+The non-Go weather fixture is inspection-only; these tests must not execute it. Live Ollama ordinary-mode analysis is a separate acceptance step, not established by capturing-model assertions.
 
 Distinguish unit/test-environment results, live Temporal tests, real provider calls, replay, and hard-worker-loss exercises. Passing one does not establish the others. The original 18-item plan is a design/execution reference; the evidence below states what was actually verified.
 

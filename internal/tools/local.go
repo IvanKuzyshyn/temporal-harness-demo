@@ -55,7 +55,7 @@ func (r *LocalRegistry) Lookup(name string) (Definition, bool) {
 	case "read_file":
 		desc = "Read up to 8 KiB of a project-local regular file."
 	case "list_dir":
-		desc = "List sorted project-local directory entries, excluding .git and .data (8 KiB maximum)."
+		desc = "List sorted project-local directory entries, excluding hidden and dependency/build entries (8 KiB maximum)."
 	case "grep":
 		desc = "Search bounded project-local text with a Go regular expression (8 KiB maximum)."
 		properties["pattern"] = map[string]string{"type": "string"}
@@ -131,6 +131,21 @@ func (r *LocalRegistry) readFile(path string, limit int) ([]byte, error) {
 	}
 	return io.ReadAll(io.LimitReader(f, int64(limit)))
 }
+
+// SkipDiscoveryEntry excludes hidden/sensitive and common generated/dependency
+// entries from automatic listings and recursive discovery. Explicit guarded
+// read_file operations remain separate; this is not an OS sandbox.
+func SkipDiscoveryEntry(name string) bool {
+	if strings.HasPrefix(name, ".") {
+		return true
+	}
+	switch strings.ToLower(name) {
+	case "node_modules", "vendor", "dist", "build", "target", "__pycache__", "coverage", "venv":
+		return true
+	}
+	return false
+}
+
 func (r *LocalRegistry) entries(path string) ([]os.DirEntry, error) {
 	f, err := r.root.Open(path)
 	if err != nil {
@@ -146,7 +161,7 @@ func (r *LocalRegistry) entries(path string) ([]os.DirEntry, error) {
 	}
 	filtered := entries[:0]
 	for _, entry := range entries {
-		if entry.Name() != ".git" && entry.Name() != ".data" {
+		if !SkipDiscoveryEntry(entry.Name()) {
 			filtered = append(filtered, entry)
 		}
 	}

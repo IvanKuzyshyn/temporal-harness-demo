@@ -129,6 +129,7 @@ type LLMInput struct {
 	InputID       string
 	Scope         events.Scope
 	Model         string
+	Workdir       string // Trusted effective project scope for request policy.
 	DataDir       string
 	TranscriptRef string
 	Turn          int
@@ -182,6 +183,8 @@ type PreflightResult struct {
 }
 
 type GatherInput struct {
+	// InputID is stable across retries of one logical run; empty retains legacy keys.
+	InputID string
 	Scope   events.Scope
 	DataDir string
 	Workdir string

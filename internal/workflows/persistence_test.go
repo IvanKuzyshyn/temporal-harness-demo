@@ -22,8 +22,8 @@ func assertSessionTranscript(t *testing.T, messages []llm.Message, prompt, answe
 	for _, message := range messages {
 		byRole[message.Role] = append(byRole[message.Role], message)
 	}
-	if len(messages) != 6 || len(byRole["system"]) != 4 || len(byRole["user"]) != 1 || len(byRole["assistant"]) != 1 {
-		t.Fatalf("want four context snapshots, one user and one assistant: %+v", messages)
+	if len(messages) != 3 || len(byRole["system"]) != 1 || len(byRole["user"]) != 1 || len(byRole["assistant"]) != 1 {
+		t.Fatalf("want one evidence snapshot, one user and one assistant: %+v", messages)
 	}
 	if byRole["user"][0].Content != prompt || byRole["assistant"][0].Content != answer {
 		t.Errorf("messages=%+v", messages)
