@@ -125,6 +125,8 @@ parser safeguards and tiny approval refusal. They are **not real PTY evidence**.
 The controller owns final private-server normal/race durability, ordinary real-model
 repository probes, disposable mock guided demo, actual PTY capture and independent
 reviews. Existing older live evidence must not be relabeled as final-tree testing.
+Completed controlled runs are described in [project-assistant qualification](project-assistant-qualification.md),
+separately from deterministic coverage and with their evidence limits.
 
 For final manual/PTy qualification on an owned private server/worker:
 
