@@ -61,8 +61,25 @@ func TestWorkerFlags(t *testing.T) {
 	}
 }
 
+func TestInteractiveFlags(t *testing.T) {
+	for _, name := range []string{"demo", "tui"} {
+		var out bytes.Buffer
+		if err := execute([]string{name, "--help"}, &out); err != nil {
+			t.Fatal(err)
+		}
+		for _, flag := range []string{"session", "autoplay", "external-worker"} {
+			if !strings.Contains(out.String(), flag) {
+				t.Fatalf("missing %s", flag)
+			}
+		}
+		if err := execute([]string{name, "unexpected"}, &out); err == nil {
+			t.Fatal("positional accepted")
+		}
+	}
+}
+
 func TestUnimplementedCommandsFailHonestly(t *testing.T) {
-	for _, name := range []string{"demo", "tui", "run", "session", "approve", "deny", "wait"} {
+	for _, name := range []string{"run", "session", "approve", "deny", "wait"} {
 		t.Run(name, func(t *testing.T) {
 			err := execute([]string{name}, &bytes.Buffer{})
 			if err == nil {

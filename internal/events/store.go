@@ -23,6 +23,10 @@ const MaxTailRecords = 1024
 
 var ErrTruncated = errors.New("event stream truncated")
 
+// ErrBusy means TryAppend could not immediately acquire the stream lock.
+// No event was appended; callers may drop best-effort display work.
+var ErrBusy = errors.New("event stream busy")
+
 type Store struct{ dataDir string }
 
 func NewStore(dataDir string) *Store { return &Store{dataDir: dataDir} }
@@ -51,7 +55,21 @@ func (s *Store) Path(streamID string) (string, error) {
 	return filepath.Join(s.dataDir, "streams", name), nil
 }
 
+// Append waits for the stream lock, serializing writers without dropping events.
 func (s *Store) Append(scope Scope, typ Type, pattern Pattern, data any) (Event, error) {
+	return s.append(scope, typ, pattern, data, syscall.LOCK_EX)
+}
+
+// TryAppend is Append with nonblocking advisory lock acquisition. It returns
+// ErrBusy rather than waiting for another writer, without starting a goroutine.
+// Validation, sequence allocation and the event envelope are shared with Append.
+// Regular local filesystem syscalls are trusted: this does not impose a hard
+// time bound on a stalled filesystem itself (or on caller-provided marshaling).
+func (s *Store) TryAppend(scope Scope, typ Type, pattern Pattern, data any) (Event, error) {
+	return s.append(scope, typ, pattern, data, syscall.LOCK_EX|syscall.LOCK_NB)
+}
+
+func (s *Store) append(scope Scope, typ Type, pattern Pattern, data any, lockMode int) (Event, error) {
 	var zero Event
 	path, err := s.Path(scope.StreamID)
 	if err != nil {
@@ -69,7 +87,10 @@ func (s *Store) Append(scope Scope, typ Type, pattern Pattern, data any) (Event,
 		return zero, err
 	}
 	defer f.Close()
-	if err = flock(f, syscall.LOCK_EX); err != nil {
+	if err = flock(f, lockMode); err != nil {
+		if lockMode&syscall.LOCK_NB != 0 && (errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN)) {
+			return zero, ErrBusy
+		}
 		return zero, err
 	}
 	defer flock(f, syscall.LOCK_UN)

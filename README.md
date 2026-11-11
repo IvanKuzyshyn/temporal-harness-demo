@@ -4,7 +4,7 @@ A local Go + Bubble Tea + Ollama teaching harness for Temporal's long-running ac
 
 ## Stack status
 
-This stack position includes the scaffold, contracts and environment doctor. Commands are discoverable with `--help`; `doctor [--fix]` checks or starts dependencies, while other runtime commands deliberately return errors until their later PRs. **The demo is not implemented at this stack position.** No draft in this stack should be merged independently without review.
+This stack position includes environment setup, durable basic chat, standalone workers and the Bubble Tea TUI. `tui` starts free chat; `demo` opens the guided banner without autoplay. **The four-pattern scripted scenario, approvals and command execution are not implemented at this stack position.** No draft in this stack should be merged independently without review.
 
 ## Development
 
@@ -19,7 +19,7 @@ mise run test
 mise run lint
 ```
 
-The completed stack will support `mise trust && mise run setup && ./bin/harness demo`. Setup builds the binary, starts dependencies and pulls the model. Standalone `doctor --fix` deliberately leaves services it starts running; later demo invocations reuse them without taking ownership. Demo-owned services will be stopped on exit. `mise setup` is also a supported task shorthand; documentation uses `mise run setup` explicitly.
+The completed stack will support `mise trust && mise run setup && ./bin/harness demo`. Setup builds the binary, starts dependencies and pulls the model. Standalone `doctor --fix` deliberately leaves services it starts running; later demo invocations reuse them without taking ownership. Demo-owned services are stopped on exit. `tui --session <id>` reconnects; `tui --external-worker` uses a separately launched `harness worker` so worker restart can be demonstrated without an embedded worker processing the same queue. `mise setup` is also a supported task shorthand; documentation uses `mise run setup` explicitly.
 
 Pins: Go 1.27.3, Temporal CLI 1.10.0, Ollama 0.40.15. Ollama's macOS arm64 mise installation was verified during scaffolding; CI validates Linux amd64. Model downloads require several GB. No cloud model API keys are needed. Runtime files will live in gitignored `.data/`.
 
