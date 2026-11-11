@@ -3,6 +3,8 @@
 This is the existing Go/Bubble Tea application, not the browser design reference.
 The pinned Charm dependencies, Backend operations, and exact approval binding are
 unchanged. No renderer performs filesystem or network I/O.
+See [conversation-first captures and rebuild instructions](conversation-first.md)
+for the presentation correction and its qualification evidence.
 
 ## Layout and controls
 
