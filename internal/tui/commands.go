@@ -9,7 +9,7 @@ import (
 )
 
 const demoPrompt = "/demo"
-const helpText = "Enter: follow-up | Alt+Enter or /steer <text>: steer | Shift+Enter (Ctrl+J): newline\nEsc: stop | Ctrl+C: detach | Tab: journal/patterns | PgUp/PgDn or wheel: scroll | End: follow latest\nCtrl+Up/Down: select record | Ctrl+O: detail | Ctrl+T: collapse tools\nCtrl+L /log: captured command log | Ctrl+Left/Right /logprev /lognext: byte pages\n/older: previous 64 records | /latest: newest/retry | /detail <record number> | /journal\n/metadata: full original configuration | /continue | /new [id] | /sessions [id] | /help | /demo | /explore <task> | /run <command>"
+const helpText = "Enter: follow-up | Alt+Enter or /steer <text>: steer | Shift+Enter (Ctrl+J): newline\nEsc: stop | Ctrl+C: detach | Tab: journal/patterns | PgUp/PgDn or wheel: scroll | End: follow latest\nCtrl+Up/Down: select visible entry | Ctrl+O: detail | Ctrl+T: toggle selected/latest visible work\nCtrl+L /log: captured command log | Ctrl+Left/Right /logprev /lognext: byte pages\n/older: previous 64 records | /latest: newest/retry | /detail <record number> | /journal\n/metadata: full original configuration | /continue | /new [id] | /sessions [id] | /help | /demo | /explore <task> | /run <command>"
 
 func (m *Model) submitPrompt(steer bool) tea.Cmd {
 	text := strings.TrimSpace(m.prompt.Value())

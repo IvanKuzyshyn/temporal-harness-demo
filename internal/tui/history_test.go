@@ -58,7 +58,7 @@ func TestDurableReconnectSnapshotWithoutDisplayJSONL(t *testing.T) {
 	historySnapshot(t, m, dir)
 	for i := 0; i < 2; i++ {
 		view := m.viewport.GetContent()
-		if !strings.Contains(view, "message-0") || strings.Count(view, "final durable answer") != 1 || !strings.Contains(view, "Context evidence") {
+		if !strings.Contains(view, "message-0") || strings.Count(view, "final durable answer") != 1 || !strings.Contains(view, "▸ Work") || strings.Contains(view, "sentinel") {
 			t.Fatalf("lost/duplicated durable history: %s", view)
 		}
 		historySnapshot(t, m, dir)
@@ -190,6 +190,8 @@ func TestLivePersistedIdentityAndReusedToolCalls(t *testing.T) {
 	if journalEntries(records[1:])[0].parentID != "" {
 		t.Fatal("paired across page boundary")
 	}
+	m.viewport.GotoTop()
+	m.toggleWork()
 	if !strings.Contains(m.viewport.GetContent(), "third") || !strings.Contains(m.viewport.GetContent(), "artifacts/one.log") {
 		t.Fatal("tool details lost")
 	}
@@ -200,6 +202,7 @@ func TestLivePersistedIdentityAndReusedToolCalls(t *testing.T) {
 		t.Fatal("live event mutated durable result")
 	}
 	// Identical content with a different durable ID is a different message.
+	m.resumeFollowing()
 	records = append(records, activities.TranscriptRecord{ID: fmt.Sprintf("%064x", 99), Message: records[4].Message})
 	saveHistory(t, dir, "s", records)
 	historySnapshot(t, m, dir)

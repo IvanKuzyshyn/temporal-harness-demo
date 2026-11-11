@@ -38,7 +38,7 @@ func TestResizeKeepsActualIntraRecordPosition(t *testing.T) {
 			// One history header row, one record heading, then cell 2320.
 			m.viewport.SetYOffset(2 + 29)
 			before, frozen := m.viewport.View(), m.viewport.GetContent()
-			line := "You: " + body.String()
+			line := "  " + body.String()
 			if !strings.HasPrefix(ansi.Strip(before), ansi.Cut(line, 2320, 2400)) {
 				t.Fatal("fixture did not reach intended content")
 			}
@@ -287,7 +287,6 @@ func TestOlderWindowStillReportsNewDurableRecords(t *testing.T) {
 func TestCollapsedOutcomeRetainsMeaning(t *testing.T) {
 	m, _ := testModel(t)
 	m.history.page.Entries = durableRecords(1)
-	m.collapseTools = true
 	m.history.page.Entries[0].Message = llm.Message{Role: "tool", ToolName: "run_command", ToolCallID: "c", Content: `{"toolCallId":"c","isError":false,"output":"","details":{"exitCode":"2"}}`}
 	m.refreshViewport(true)
 	if !strings.Contains(m.viewport.GetContent(), "[failed]") {
@@ -345,6 +344,8 @@ func TestRecordSelectionDetailsAndTyping(t *testing.T) {
 	m.prompt.SetValue("draft")
 	m.Update(key(tea.KeyUp, tea.ModCtrl))
 	m.Update(key(tea.KeyUp, tea.ModCtrl))
+	m.Update(key('t', tea.ModCtrl)) // Expand selected work, then select its source.
+	m.Update(key(tea.KeyDown, tea.ModCtrl))
 	m.Update(key('o', tea.ModCtrl))
 	if m.history.detailID != m.history.page.Entries[1].ID || !strings.Contains(m.viewport.GetContent(), "DETAIL-END") {
 		t.Fatal("selected detail not expanded")

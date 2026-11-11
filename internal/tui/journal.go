@@ -113,73 +113,11 @@ func journalText(s string, limit int) string {
 	return s
 }
 func (m *Model) journalLines() []string {
-	lines := []string{m.historyHeader()}
-	for i, row := range journalEntries(m.history.page.Entries) {
-		msg := row.record.Message
-		label := msg.Role
-		switch msg.Role {
-		case "user":
-			label = "You"
-		case "assistant":
-			label = "Assistant"
-		case "system":
-			label = "Context evidence / system (not user intent)"
-		case "tool":
-			label = "Tool " + msg.ToolName + " [persisted result]"
-			if msg.ToolName == "delegate" {
-				label = "Child completion result [persisted summary/outcome]"
-			}
-			if row.parentID == "" {
-				label += " [origin outside window or unavailable]"
-			} else {
-				label += " [assistant " + row.parentID[:12] + " / call " + msg.ToolCallID + "]"
-			}
-		}
-		if row.record.ID == m.selectedID {
-			label = "> " + label
-		}
-		selected := row.record.ID == m.history.detailID
-		collapsed := m.collapseTools && !selected
-		text := label + ": " + msg.Content
-		if msg.Role == "tool" {
-			text = label + ": " + durableToolText(msg.ToolName, msg.ToolCallID, msg.Content)
-			if collapsed {
-				outcome, _, _ := strings.Cut(durableToolText(msg.ToolName, msg.ToolCallID, msg.Content), "\n")
-				text = label + " " + outcome + " [details collapsed; Ctrl+O /detail]"
-			}
-		}
-		for _, call := range msg.ToolCalls {
-			text += "\nRequested tool " + call.Name + " / " + call.ID
-			if !collapsed {
-				text += "\nRequested arguments (not an original file diff): " + string(call.Args)
-			}
-		}
-		if selected {
-			return []string{m.historyHeader(), "Record " + row.record.ID + "\nCtrl+O /journal return · Ctrl+L /log captured log · PgUp/PgDn", journalText(text, maxJournalText-8192)}
-		}
-		lines = append(lines, fmt.Sprintf("Record %d · /detail %d\n", m.history.page.Before+i+1, m.history.page.Before+i+1)+journalText(text, maxText))
+	blocks := m.conversation()
+	lines := make([]string, len(blocks))
+	for i, block := range blocks {
+		lines[i] = block.text(m.selectedID)
 	}
-	if !m.history.older {
-		// Query owns status, not conversation identity. A fallback is never inserted
-		// into the durable journal or matched by content against a real message.
-		if (!m.history.loaded || len(m.history.page.Entries) == 0) && m.state.Answer != "" {
-			lines = append(lines, "Query answer fallback (not a journal record): "+m.state.Answer)
-		}
-		for _, entry := range m.stream {
-			if m.persistedStream(entry) {
-				continue
-			}
-			if entry.tool && m.collapseTools {
-				lines = append(lines, entry.label+"[details collapsed; Ctrl+T]")
-			} else {
-				lines = append(lines, entry.label+entry.text)
-			}
-		}
-	}
-	if m.state.LastRunFailure != nil {
-		lines = append(lines, "Failure: "+m.state.LastRunFailure.Reason+" "+m.state.LastRunFailure.Detail)
-	}
-	lines = append(lines, m.transcript...)
 	return lines
 }
 

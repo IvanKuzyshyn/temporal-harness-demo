@@ -25,12 +25,17 @@ calls have a ten-second timeout. Ctrl+C cancels the session context.
 - Esc requests Stop; Ctrl+C quits (does not implicitly stop the workflow).
 - Tab switches journal/pattern log; PgUp/PgDn or mouse wheel browse the selected
   panel without following updates. End follows latest and clears unseen updates.
-- Ctrl+Up/Down selects a durable record; Ctrl+O expands/collapses it. Ordinary
-  typing and Up/Down still edit the pinned composer.
+- Ctrl+Up/Down selects a **visible entry** (prompt, response, work summary, or
+  expanded receipt), marked with `>`. Ctrl+O opens/closes raw record detail;
+  on a work summary it toggles that group. Ordinary typing and Up/Down still
+  edit the pinned composer.
 - Ctrl+L or `/log` opens a selected command's validated log; Ctrl+Left/Right or
   `/logprev` / `/lognext` page bytes beyond the model tail. `/metadata` shows
   sanitized original session values as scrollable rows.
-- Ctrl+T collapses/expands tool details in the chronological journal.
+- Ctrl+T toggles **one work block**: the selected group/receipt's group, otherwise
+  the latest work summary visible in the viewport. It does not submit text or
+  decide approvals. Expand work, then select a receipt for Ctrl+O/Ctrl+L. The
+  composer separator always hints this non-typing control in normal sizes.
 - `/older` loads the preceding 64-record window; `/latest` retries/returns to the
   newest window. `/detail <record number>` opens scrollable captured record
   details; `/journal` returns to the window. PgUp/PgDn also scroll record details.
@@ -64,6 +69,33 @@ fallbacks only until a nonempty history window is available. Original raw sessio
 DataDir is used for history, never a guessed client directory. Missing optional
 JSONL cannot erase the persisted conversation.
 
+`conversation.go` projects the loaded page into distinct cyan `› You` prompts,
+neutral response bodies with green `✓ Assistant · response completed` headings,
+and **one default-collapsed work block per prompt**. Response completion does not
+certify command/test success. System evidence, tool-request messages, tool results,
+child progress and live tool observations stay inside work; failed/interrupted/
+unknown canonical outcomes remain visible in its summary. Query request failures
+are separate notices, not colors applied to unrelated historical responses.
+Work preceding the first loaded prompt is labeled **earlier / partial**. Empty
+settled work is omitted; active work can show the current Query phase before any
+result arrives. Live drafts are explicitly best-effort, not completed responses.
+
+`conversationBlock` IDs, group membership and heading spans are the shared mapping
+for plain/styled rendering, visible selection and reflow anchors. Source identities
+are durable IDs; synthetic group IDs derive from the prompt or first partial-work
+record, never call IDs or old rendered indices. Only heading spans receive semantic
+color; evidence/body text is neutral and sanitized. Expansion stores IDs only,
+bounded by the loaded page plus a possible live-only group. Poll refresh preserves
+surviving groups; eviction, End/latest, older-window navigation, session and source
+changes discard obsolete expansion state. Frozen browsing also retains a bounded
+snapshot of live inputs so explicit expansion cannot consume incoming updates.
+
+Normal chrome uses five rows at 80×24/120×40 (including its separator), excluding
+exceptional notices, nonempty queues and configuration warnings. Model/session
+share the aligned brand row; original project, activity/freshness and browsing
+state have separate rows. Empty queue and successful Submit chatter are suppressed.
+The multiline composer has a separate rule and persistent controls.
+
 The UI retains one contiguous page of up to 64 complete durable records (from a
 32MiB-bounded artifact), plus 128 entries each for local notices, pattern log, and
 command events (4KiB per entry), 128 live segments (64KiB assistant / 4KiB tool),
@@ -71,7 +103,11 @@ and 512 compact replay events. A separate FIFO of up to 512 completed MessageRef
 hashes retires matching live entries across page eviction and snapshot replay;
 this bounded replay horizon resets on session/original-directory changes.
 Workflow and parent keys are SHA-256 identities separate from sanitized display
-labels, including in pending reconnect events. The journal overview limits durable record text
+labels, including in pending reconnect events. Frozen browsing holds at most 128
+live-input references with the same text bounds; it does not accumulate pages.
+Projection metadata retains no duplicate raw/rendered bodies: bounded text lives
+in the shared journal parts and only trusted heading byte spans are styled.
+The expanded journal overview limits durable record text
 to 4KiB each; selected detail permits 504KiB. Aggregate journal viewport text is
 bounded to 512KiB, with explicit truncation labels. Pending reconnect buffers use the events package's 4096-event cap,
 with a same-sized TUI projection buffer; the events-package copy validates only
@@ -92,8 +128,11 @@ the terminal dimensions; extremely small terminals necessarily hide some panes.
   replaces it and both approval and denial dispatch are refused. Esc/Ctrl+C
   remain available; denial reason survives resizing. The normal composer is
   absent during approval, not misleadingly editable.
-- Tool results and log references are available in the scrollable journal/detail
-  view, not limited to the old two-line Commands pane. This is not a terminal emulator.
+- Tool results and log references are available through expanded work and raw
+  detail, not in the default conversation. Ctrl+O from a log reveals its owning
+  work/receipt so the same source remains selected and Ctrl+L can reopen it.
+  `/detail N` uses the original page's global source number, shown on expanded
+  receipts; it is not a projected row number. This is not a terminal emulator.
 - Older browsing replaces the window and suppresses live suffixes rather than
   retaining unbounded history. Snapshots do not replace an older window. Tool
   pairing never crosses a page boundary or reuses another assistant's call ID.

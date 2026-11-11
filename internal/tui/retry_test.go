@@ -35,7 +35,13 @@ func TestRetryReplacesOnlyMatchingStream(t *testing.T) {
 	check := func() {
 		t.Helper()
 		m.refreshViewport(false)
-		view := m.viewport.View()
+		m.viewport.GotoTop()
+		m.selectedID = "work:live"
+		if !m.expandedWork[m.selectedID] {
+			m.toggleWork()
+		}
+		m.resumeFollowing()
+		view := m.viewport.GetContent()
 		if strings.Contains(view, "oldpartial") || strings.Count(view, "newpartial") != 1 || !strings.Contains(view, "previous-turn") || !strings.Contains(view, "childpartial-continued") || len(m.stream) != 3 {
 			t.Fatalf("incorrect retry display: %s; entries=%+v", view, m.stream)
 		}

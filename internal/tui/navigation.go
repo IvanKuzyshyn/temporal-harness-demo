@@ -31,6 +31,9 @@ func partRows(part string, width int) int {
 }
 func (m *Model) browse() {
 	if !m.showPatterns {
+		if m.followLive {
+			m.browseStream = append([]streamEntry(nil), m.stream...)
+		}
 		m.followLive = false
 		m.anchor = readingAnchor{} // A navigation gesture chooses a new visible top.
 	}
@@ -40,6 +43,7 @@ func (m *Model) browse() {
 // not call this; submission/info commands retain their original follow behavior.
 func (m *Model) resumeFollowing() {
 	m.followLive = true
+	m.browseStream = nil
 	m.unread = 0
 }
 func (m *Model) jumpLatest() tea.Cmd {
@@ -52,14 +56,8 @@ func (m *Model) jumpLatest() tea.Cmd {
 	return m.loadHistory(0)
 }
 func (m *Model) recordForPart(part int) string {
-	if m.log.ref != "" {
-		return m.log.recordID
-	}
-	if m.history.detailID != "" {
-		return m.history.detailID
-	}
-	if part > 0 && part <= len(m.history.page.Entries) {
-		return m.history.page.Entries[part-1].ID
+	if part >= 0 && part < len(m.journalBlocks) {
+		return m.journalBlocks[part].id
 	}
 	return ""
 }
@@ -82,7 +80,39 @@ func (m *Model) captureAnchor() {
 }
 func (m *Model) restoreAnchor() {
 	a := &m.anchor
-	if m.showPatterns || !a.valid || a.part >= len(m.journalParts) || m.recordForPart(a.part) != a.recordID {
+	if m.showPatterns || !a.valid {
+		return
+	}
+	if a.recordID != "" {
+		found := false
+		for i, b := range m.journalBlocks {
+			if b.id == a.recordID {
+				a.part = i
+				found = true
+				break
+			}
+		}
+		// An expanded source has its own exact identity. Membership is only
+		// a fallback when collapse has removed that source from visible parts.
+		if !found {
+			for i, b := range m.journalBlocks {
+				for _, id := range b.members {
+					if id == a.recordID {
+						a.part = i
+						a.line, a.cell = 0, 0
+						found = true
+					}
+				}
+				if found {
+					break
+				}
+			}
+		}
+		if !found {
+			return
+		}
+	}
+	if a.part >= len(m.journalParts) {
 		return
 	}
 	row := 0
@@ -123,8 +153,21 @@ func (m *Model) renderPatterns() {
 	m.viewport.SetContent(boundedJournal(m.patterns))
 }
 func (m *Model) selectRecord(direction int) {
-	records := m.history.page.Entries
-	if len(records) == 0 {
+	// Detail navigation may visit every durable source; normal navigation visits
+	// only visible projection targets, including collapsed work summaries.
+	var ids []string
+	if m.history.detailID != "" {
+		for _, r := range m.history.page.Entries {
+			ids = append(ids, r.ID)
+		}
+	} else {
+		for _, b := range m.journalBlocks {
+			if b.id != "" {
+				ids = append(ids, b.id)
+			}
+		}
+	}
+	if len(ids) == 0 {
 		m.notice = "No loaded records; /latest retries history"
 		return
 	}
@@ -132,43 +175,56 @@ func (m *Model) selectRecord(direction int) {
 	m.browse()
 	m.log = logState{}
 	index := -1
-	for i, r := range records {
-		if r.ID == m.selectedID {
+	for i, id := range ids {
+		if id == m.selectedID {
 			index = i
 			break
 		}
 	}
 	if index < 0 {
-		index = len(records) - 1
+		index = len(ids) - 1
 	} else {
-		index = max(0, min(len(records)-1, index+direction))
+		index = max(0, min(len(ids)-1, index+direction))
 	}
-	m.selectedID = records[index].ID
-	m.notice = "Selected record · Ctrl+O expand/collapse · Ctrl+L captured log"
+	m.selectedID = ids[index]
+	m.notice = ""
 	if m.history.detailID != "" {
 		m.history.detailID = m.selectedID
 	}
 	m.rebuildJournal()
 	m.viewport.GotoTop()
 	if m.history.detailID == "" {
-		row := 0
-		for i := 0; i <= index && i < len(m.journalParts); i++ {
-			row += partRows(m.journalParts[i], m.width)
-		}
-		m.viewport.SetYOffset(row)
+		m.revealSelected()
 	}
 }
 func (m *Model) toggleDetail() {
 	m.showPatterns = false
 	if m.log.ref != "" {
+		m.selectedID = m.log.recordID
 		m.log = logState{}
 		m.history.detailID = ""
+		// Returning from a log exposes its source receipt, preserving Ctrl+L
+		// reopen and a visible selection without weakening log/source guards.
+		for _, b := range m.conversation() {
+			for _, id := range b.members {
+				if id == m.selectedID {
+					if m.expandedWork == nil {
+						m.expandedWork = map[string]bool{}
+					}
+					m.expandedWork[b.id] = true
+				}
+			}
+		}
 		m.rebuildJournal()
-		m.viewport.GotoTop()
+		m.revealSelected()
 		return
 	}
 	if m.selectedID == "" {
 		m.selectRecord(0)
+	}
+	if strings.HasPrefix(m.selectedID, "work:") && m.history.detailID == "" {
+		m.toggleWork()
+		return
 	}
 	m.browse()
 	m.log = logState{}
@@ -183,9 +239,35 @@ func (m *Model) toggleDetail() {
 func (m *Model) rebuildJournal() {
 	m.anchor = readingAnchor{}
 	if m.log.ref != "" {
-		m.journalParts = []string{m.logView()}
+		m.journalBlocks = []conversationBlock{{id: m.log.recordID, sourceID: m.log.recordID, body: m.logView()}}
 	} else {
-		m.journalParts = m.journalLines()
+		m.journalBlocks = m.conversation()
+	}
+	// Leaving a raw detail for collapsed conversation must retain a visible
+	// target. Resolve source membership only after checking all visible IDs.
+	visible, owner := false, ""
+	for _, b := range m.journalBlocks {
+		if b.id == m.selectedID {
+			visible = true
+		}
+		for _, id := range b.members {
+			if id == m.selectedID {
+				owner = b.id
+			}
+		}
+	}
+	if !visible {
+		m.selectedID = owner
+	}
+	m.journalParts = make([]string, len(m.journalBlocks))
+	for i, b := range m.journalBlocks {
+		m.journalParts[i] = b.text(m.selectedID)
+		m.journalBlocks[i].headingBytes = len(safeText(b.heading))
+		if b.id != "" && b.id == m.selectedID {
+			m.journalBlocks[i].headingBytes += 2
+		}
+		// Retain one canonical text allocation, not another large detail body.
+		m.journalBlocks[i].heading, m.journalBlocks[i].body = "", ""
 	}
 	// Retain no more than the bounded display window while browsing. The source
 	// live/page caches have their own independent identity and size limits.
@@ -195,6 +277,9 @@ func (m *Model) rebuildJournal() {
 			m.journalParts[i] = journalText(part, max(64, budget)) + "\n[window display limit reached; /detail, /older or End]"
 			clear(m.journalParts[i+1:])
 			m.journalParts = m.journalParts[:i+1]
+			clear(m.journalBlocks[i+1:])
+			m.journalBlocks = m.journalBlocks[:i+1]
+			m.journalBlocks[i].headingBytes = min(m.journalBlocks[i].headingBytes, len(m.journalParts[i]))
 			break
 		}
 		budget -= len(part) + 1
@@ -205,30 +290,11 @@ func (m *Model) renderJournal() {
 	if m.showPatterns {
 		return
 	}
-	content := boundedJournal(m.journalParts)
-	// Style only validated durable outcome markers, never words in assistant or
-	// repository text. The canonical journal/parser remains plain text.
-	if m.log.ref == "" {
-		styled := append([]string(nil), m.journalParts...)
-		for i, r := range m.history.page.Entries {
-			index := i + 1
-			if m.history.detailID != "" {
-				if r.ID != m.history.detailID {
-					continue
-				}
-				index = 2
-			}
-			if index >= len(styled) || r.Message.Role != "tool" || r.Message.ToolName == "read_file" {
-				continue
-			}
-			text := durableToolText(r.Message.ToolName, r.Message.ToolCallID, r.Message.Content)
-			line, _, _ := strings.Cut(text, "\n")
-			status := strings.TrimSuffix(strings.TrimPrefix(line, "["), "]")
-			if status == "succeeded" || status == "failed" || status == "interrupted" || status == "failed/denied (see captured result)" {
-				styled[index] = strings.Replace(styled[index], line, outcomeLabel(status), 1)
-			}
-		}
-		content = boundedJournal(styled)
+	styled := make([]string, len(m.journalBlocks))
+	for i, b := range m.journalBlocks {
+		part := m.journalParts[i]
+		n := b.headingBytes
+		styled[i] = semanticHeading(part[:n], b.tone) + part[n:]
 	}
-	m.viewport.SetContent(content)
+	m.viewport.SetContent(boundedJournal(styled))
 }

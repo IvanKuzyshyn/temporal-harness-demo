@@ -94,8 +94,11 @@ func TestJournalOpaqueWorkflowIdentity(t *testing.T) {
 	m.applyEvent(retryEvent(6, events.MessageStart, "sessionname", id, ref, ""))
 	m.applyEvent(retryEvent(7, events.MessageUpdate, "sessionname", id, ref, "child replacement"))
 	m.refreshViewport(false)
+	m.viewport.GotoTop()
+	m.toggleWork()
+	m.resumeFollowing()
 	view := m.viewport.GetContent()
-	for _, want := range []string{"parent draft", "child sessionname: Assistant (stream draft, best-effort): other draft", "child replacement", "other parent draft"} {
+	for _, want := range []string{"parent draft", "child sessionname: Assistant (stream draft, best-effort):", "other draft", "child replacement", "other parent draft"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("lost distinct identity %q: %s", want, view)
 		}
@@ -145,8 +148,13 @@ func TestJournalDetailsBoundsAndLatestControls(t *testing.T) {
 	m := New(nil, Options{SessionID: "s"})
 	defer m.Close()
 	historySnapshot(t, m, dir)
+	if strings.Contains(m.viewport.GetContent(), "captured output") || !strings.Contains(m.viewport.GetContent(), "▸ Work") {
+		t.Fatal("normal overview did not collapse noisy output")
+	}
+	m.selectedID = "work:" + records[68].ID
+	m.toggleWork()
 	if !strings.Contains(m.viewport.GetContent(), "display truncated") {
-		t.Fatal("missing overview truncation label")
+		t.Fatal("expanded overview missing truncation label")
 	}
 	m.prompt.SetValue("/detail 70")
 	m.submitPrompt(false)
@@ -188,8 +196,12 @@ func TestJournalDetailsBoundsAndLatestControls(t *testing.T) {
 	m.prompt.SetValue("/latest")
 	m.Update(m.submitPrompt(false)())
 	m.Update(key('t', tea.ModCtrl))
-	if !strings.Contains(m.viewport.GetContent(), "details collapsed") {
-		t.Fatal("tool collapse not wired")
+	if !strings.Contains(m.viewport.GetContent(), "▾ Work") {
+		t.Fatal("work expansion not wired")
+	}
+	m.Update(key('t', tea.ModCtrl))
+	if !strings.Contains(m.viewport.GetContent(), "▸ Work") || strings.Contains(m.viewport.GetContent(), "captured output") {
+		t.Fatal("work collapse not wired")
 	}
 	// No new optimistic conversation row with an unmatchable identity.
 	m.prompt.SetValue("optimistic sentinel")
@@ -281,6 +293,9 @@ func TestJournalRenderBoundSanitizationAndDurableChildren(t *testing.T) {
 		m.appendLiveEntry(streamEntry{label: "Live child progress (best-effort): ", text: strings.Repeat("y", maxAnswer)})
 	}
 	m.refreshViewport(false)
+	m.selectedID = "work:" + records[62].ID
+	m.toggleWork()
+	m.resumeFollowing()
 	text := m.viewport.GetContent()
 	// The rendered view now includes trusted outcome SGR. Untrusted journal
 	// content must still be control-free before that styling is applied.
@@ -301,7 +316,7 @@ func TestJournalRenderBoundSanitizationAndDurableChildren(t *testing.T) {
 	m.applyEvent(retryEvent(1, events.MessageUpdate, "child", "s", "independent", "child draft"))
 	m.refreshViewport(false)
 	if !strings.Contains(m.viewport.GetContent(), "child draft") {
-		t.Fatal("lost child distinction")
+		t.Fatal("lost expanded child distinction")
 	}
 }
 func TestHistoryErrorVisibleWhileScrolledWithQueryStatus(t *testing.T) {

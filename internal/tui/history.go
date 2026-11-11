@@ -60,6 +60,9 @@ func (m *Model) syncHistory(session *workflows.SessionInfo, query uint64) tea.Cm
 		}
 		m.history = historyState{dir: dir, generation: m.history.generation + 1}
 		m.journalParts = nil
+		m.journalBlocks = nil
+		m.expandedWork = nil
+		m.browseStream = nil
 		m.followLive, m.unread = true, 0
 		m.selectedID = ""
 		m.anchor = readingAnchor{}
@@ -87,6 +90,7 @@ func (m *Model) loadHistory(before int) tea.Cmd {
 	m.history.pending = false
 	m.history.detailID = ""
 	m.selectedID = ""
+	m.expandedWork = nil
 	m.anchor = readingAnchor{}
 	m.showPatterns = false
 	m.history.explicit = true
@@ -154,6 +158,7 @@ func (m *Model) acceptHistory(msg historyMsg) {
 		m.history.page = msg.page
 		m.reconcileStreams()
 		if changedWindow {
+			m.expandedWork = nil
 			m.history.detailID = ""
 		}
 		m.history.loaded = true
