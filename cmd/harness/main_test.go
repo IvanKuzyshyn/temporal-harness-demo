@@ -48,8 +48,21 @@ func TestDoctorFlags(t *testing.T) {
 	}
 }
 
+func TestWorkerFlags(t *testing.T) {
+	var out bytes.Buffer
+	if err := execute([]string{"worker", "--help"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "model") {
+		t.Fatal("missing model flag")
+	}
+	if err := execute([]string{"worker", "unexpected"}, &out); err == nil {
+		t.Fatal("positional accepted")
+	}
+}
+
 func TestUnimplementedCommandsFailHonestly(t *testing.T) {
-	for _, name := range []string{"demo", "tui", "worker", "run", "session", "approve", "deny", "wait"} {
+	for _, name := range []string{"demo", "tui", "run", "session", "approve", "deny", "wait"} {
 		t.Run(name, func(t *testing.T) {
 			err := execute([]string{name}, &bytes.Buffer{})
 			if err == nil {
