@@ -269,43 +269,101 @@ func (m *Model) rebuildJournal() {
 		// Retain one canonical text allocation, not another large detail body.
 		m.journalBlocks[i].heading, m.journalBlocks[i].body = "", ""
 	}
-	// Retain no more than the bounded display window while browsing. The source
-	// live/page caches have their own independent identity and size limits.
-	budget := maxJournalText - 256
+	// Budget the width-independent native rendering, including trusted ANSI
+	// styling and separators. Reserve space for one honest, mapped omission
+	// block. Reflow may fall back to this representation, but never cuts it.
+	const limitNotice = "[window display limit reached; remaining content omitted, including live observations; /detail N for durable records, /older or End]"
+	budget := maxJournalText - len(limitNotice) - 1
 	for i, part := range m.journalParts {
-		if len(part)+1 > budget {
-			m.journalParts[i] = journalText(part, max(64, budget)) + "\n[window display limit reached; /detail, /older or End]"
-			clear(m.journalParts[i+1:])
-			m.journalParts = m.journalParts[:i+1]
-			clear(m.journalBlocks[i+1:])
-			m.journalBlocks = m.journalBlocks[:i+1]
-			m.journalBlocks[i].headingBytes = min(m.journalBlocks[i].headingBytes, len(m.journalParts[i]))
+		cost := len(m.nativeJournalPart(i)) + 1
+		if cost > budget {
+			// Keep a partial body only if its entire heading/identity fits.
+			// Omitted headings must not remain selectable phantom targets.
+			keep := i
+			overhead := max(0, cost-len(part))
+			if available := budget - overhead; available >= m.journalBlocks[i].headingBytes+3 {
+				m.journalParts[i] = bounded(part, available)
+				keep++
+			}
+			clear(m.journalParts[keep:])
+			m.journalParts = append(m.journalParts[:keep], limitNotice)
+			clear(m.journalBlocks[keep:])
+			m.journalBlocks = append(m.journalBlocks[:keep], conversationBlock{})
 			break
 		}
-		budget -= len(part) + 1
+		budget -= cost
+	}
+	if m.selectedID != "" {
+		retained := false
+		for _, b := range m.journalBlocks {
+			retained = retained || b.id == m.selectedID
+		}
+		if !retained {
+			m.selectedID = ""
+		}
 	}
 	m.renderJournal()
+}
+
+func (m *Model) nativeJournalPart(i int) string {
+	part, b := m.journalParts[i], m.journalBlocks[i]
+	return semanticHeading(part[:b.headingBytes], b.tone) + part[b.headingBytes:]
 }
 func (m *Model) renderJournal() {
 	if m.showPatterns {
 		return
 	}
-	styled := make([]string, len(m.journalBlocks))
+	m.journalCompact = false
+	var rendered strings.Builder
+	// Stop building at the aggregate byte bound, not after an unbounded join.
+	// The native fallback retains ALL canonical evidence/IDs. Its size was
+	// reserved at rebuild time and is independent of terminal width.
+	appendText := func(text string, separator bool) bool {
+		n := len(text)
+		if separator {
+			n++
+		}
+		if rendered.Len()+n > maxJournalText {
+			return false
+		}
+		if separator {
+			rendered.WriteByte('\n')
+		}
+		rendered.WriteString(text)
+		return true
+	}
 	for i, b := range m.journalBlocks {
 		if b.inset == 0 {
-			part := m.journalParts[i]
-			styled[i] = semanticHeading(part[:b.headingBytes], b.tone) + part[b.headingBytes:]
-			continue // Literal detail/log text retains the viewport's native soft wrap.
+			if !appendText(m.nativeJournalPart(i), i > 0) {
+				m.journalCompact = true
+				break
+			}
+			continue // Literal detail/log text always retains native soft wrap.
 		}
-		lines := m.partDisplayLines(i)
-		text := make([]string, len(lines))
-		for j, line := range lines {
-			text[j] = line.text
+		for j, line := range m.partDisplayLines(i) {
+			text := line.text
 			if line.heading {
-				text[j] = semanticHeading(line.text, b.tone)
+				text = semanticHeading(text, b.tone)
+			}
+			if !appendText(text, i > 0 || j > 0) {
+				m.journalCompact = true
+				break
 			}
 		}
-		styled[i] = strings.Join(text, "\n")
+		if m.journalCompact {
+			break
+		}
 	}
-	m.viewport.SetContent(boundedJournal(styled))
+	if m.journalCompact {
+		rendered.Reset()
+		for i := range m.journalParts {
+			if i > 0 {
+				rendered.WriteByte('\n')
+			}
+			rendered.WriteString(m.nativeJournalPart(i))
+		}
+	}
+	// No post-projection truncation and no unmapped trailing newline. The same
+	// compact policy now supplies every partDisplayLines navigation consumer.
+	m.viewport.SetContent(rendered.String())
 }

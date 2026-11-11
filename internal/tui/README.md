@@ -121,7 +121,22 @@ The expanded journal overview uses bounded receipt previews (from at most 4KiB
 per record); selected detail permits 504KiB. Width-specific wrapping is transient;
 the frozen canonical text and original source-cell anchor are retained, not a
 second width-dependent source cache. Aggregate journal viewport text is
-bounded to 512KiB, with explicit truncation labels. Pending reconnect buffers use the events package's 4096-event cap,
+bounded to 512KiB **including heading ANSI and separators**. Rebuild budgets the
+width-independent native representation and reserves one mapped omission notice;
+only retained headings remain selectable. The notice explicitly includes omitted
+live observations, which have no promised durable detail route. `/detail N` still
+addresses the loaded durable page, not just retained overview targets.
+
+Ordinary windows retain word wrapping/gutters. If those added continuation rows
+would exceed 512KiB, the entire retained window uses native cell-sliced wrapping
+and the matching native row map instead; **no additional content is cut on resize**.
+This boundary-only fallback sacrifices continuation gutters/word boundaries, not
+source text, IDs or the original anchor cell. Resizing back restores normal prose
+wrapping if it fits. Detail/log geometry never changes. No final byte truncation
+is applied to styled journal output. At effective width one (including width
+zero), an unrenderable wide prose grapheme consumes its complete source bytes and
+maps to an empty row; its canonical text survives restoration to a usable width.
+Pending reconnect buffers use the events package's 4096-event cap,
 with a same-sized TUI projection buffer; the events-package copy validates only
 sequence numbers. Prompt input has a hard aggregate 16,384-rune
 bound (at most 64KiB UTF-8), independent of display width; all keyboard and paste

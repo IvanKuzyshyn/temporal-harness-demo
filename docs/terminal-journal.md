@@ -82,6 +82,27 @@ The original cell is retained across repeated width changes rather than rounded
 down anew at each width. Legacy/live-only text uses a position in the same bounded
 frozen display window, without inventing a durable identity.
 
+The aggregate journal render limit remains **512 KiB**, including trusted heading
+ANSI and separators. The canonical window is budgeted at rebuild time against
+native wrapping, reserving a separate mapped `window display limit reached`
+notice. The notice explicitly says remaining content, including live observations,
+was omitted; it does not promise that live evidence has a durable artifact.
+Omitted headings are not selectable. `/detail N` can still access a loaded durable
+record omitted from the overview; `/older` and End retain their existing window
+policies, not a guarantee of recovering omitted live observations.
+
+If word-wrap continuation gutters/newlines would exceed that limit, the retained
+window switches to native cell-sliced wrapping **without dropping any more text**.
+Navigation uses that same representation and original source cells. This is a
+boundary-only readability tradeoff: continuation gutters and preferred word
+boundaries yield to retaining evidence; ordinary windows keep the approved prose
+layout. Returning to a width where prose fits restores it. Literal detail/log
+geometry is unchanged, and there is no independent final cut through styled rows.
+At widths zero/one, a wide prose grapheme that cannot fit is clipped to an empty
+mapped row while consuming its entire source cluster; normal-width restoration
+shows the retained canonical text again. Such tiny layouts are not usable reading
+surfaces, but do not stall the event loop on that grapheme.
+
 There is one underlying journal/detail/log window, not a cache of panel visits.
 While patterns are visible it remains retained, including a frozen journal's old
 page or a log's byte page and read position. Patterns take precedence in both

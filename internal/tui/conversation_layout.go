@@ -21,13 +21,19 @@ func (m *Model) partDisplayLines(index int) []conversationLine {
 	var out []conversationLine
 	for line, text := range strings.Split(part, "\n") {
 		heading := line < headingLines
-		if block.inset == 0 {
+		if block.inset == 0 || m.journalCompact {
 			// Literal panels are soft-wrapped by the viewport. Match its cell
 			// slicing exactly, including wide glyphs crossing a row boundary.
 			width := max(1, m.width)
 			count := max(1, (ansi.StringWidth(text)+width-1)/width)
 			for row := 0; row < count; row++ {
-				out = append(out, conversationLine{line: line, cell: row * width, heading: heading})
+				cell := row * width
+				if !heading && block.inset > 0 {
+					// Prose anchors exclude the canonical body gutter in both
+					// presentation modes; literal panels keep native cells.
+					cell = max(0, cell-block.inset)
+				}
+				out = append(out, conversationLine{line: line, cell: cell, heading: heading})
 			}
 			continue
 		}
@@ -36,7 +42,7 @@ func (m *Model) partDisplayLines(index int) []conversationLine {
 			inset = min(block.inset, max(0, m.width-2))
 		}
 		prefix := strings.Repeat(" ", inset)
-		if inset > 0 {
+		if !heading {
 			text = strings.TrimPrefix(text, strings.Repeat(" ", block.inset))
 		}
 		width := max(1, m.width-inset)
@@ -56,12 +62,18 @@ func (m *Model) partDisplayLines(index int) []conversationLine {
 					n = ansi.StringWidth(chunk)
 				}
 			}
-			if n == 0 { // A wide glyph in a one-cell terminal: retain cell-sliced fallback.
-				n = width
-				chunk = ansi.Cut(text, 0, n)
+			consumed := len(chunk)
+			if consumed == 0 || n == 0 {
+				// A cluster wider than the terminal cannot be shown. Consume
+				// the WHOLE source cluster, not a cell slice that may return
+				// that same glyph forever. Keep its source-cell position on
+				// an empty row; canonical text survives a normal-width restore.
+				cluster, cells := ansi.FirstGraphemeCluster(text, ansi.GraphemeWidth)
+				consumed, n = len(cluster), cells
+				chunk = ansi.Truncate(cluster, width, "")
 			}
 			out = append(out, conversationLine{prefix + chunk, line, cell, heading})
-			text = ansi.Cut(text, n, size)
+			text = text[consumed:]
 			cell += n
 		}
 	}

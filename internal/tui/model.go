@@ -83,6 +83,7 @@ type Model struct {
 	anchor                          readingAnchor
 	journalParts                    []string
 	journalBlocks                   []conversationBlock
+	journalCompact                  bool // budget fallback: native wrapping AND native row map
 	expandedWork                    map[string]bool
 	log                             logState
 	logGeneration                   uint64
@@ -474,6 +475,7 @@ func (m *Model) switchSession(id string) tea.Cmd {
 	m.showPatterns = false
 	m.journalParts = nil
 	m.journalBlocks = nil
+	m.journalCompact = false
 	m.expandedWork = nil
 	m.log = logState{}
 	m.heartbeat = time.Time{}
