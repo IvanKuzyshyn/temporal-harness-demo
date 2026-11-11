@@ -18,6 +18,7 @@ import (
 func TestDisplayFailuresDoNotSuppressRun(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
+	registerSessionContext(env, "ref")
 	appended := 0
 	env.RegisterActivityWithOptions(func(context.Context, w.EmitInput) (uint64, error) {
 		return 999, temporal.NewNonRetryableApplicationError("broken display", "display", nil)
@@ -45,6 +46,7 @@ func TestInboxSerializedBudgetWhileModelBusy(t *testing.T) {
 		t.Run(fmt.Sprintf("byte-%d", text[0]), func(t *testing.T) {
 			var suite testsuite.WorkflowTestSuite
 			env := suite.NewTestWorkflowEnvironment()
+			registerSessionContext(env, "ref")
 			env.RegisterActivityWithOptions(func(context.Context, w.EmitInput) (uint64, error) { return 1, nil }, activity.RegisterOptions{Name: w.EmitActivity})
 			env.RegisterActivityWithOptions(func(context.Context, w.AppendInput) (w.AppendResult, error) {
 				return w.AppendResult{TranscriptRef: "ref"}, nil

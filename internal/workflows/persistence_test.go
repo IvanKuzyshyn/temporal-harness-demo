@@ -16,6 +16,20 @@ import (
 	"go.temporal.io/sdk/testsuite"
 )
 
+func assertSessionTranscript(t *testing.T, messages []llm.Message, prompt, answer string) {
+	t.Helper()
+	byRole := make(map[string][]llm.Message)
+	for _, message := range messages {
+		byRole[message.Role] = append(byRole[message.Role], message)
+	}
+	if len(messages) != 6 || len(byRole["system"]) != 4 || len(byRole["user"]) != 1 || len(byRole["assistant"]) != 1 {
+		t.Fatalf("want four context snapshots, one user and one assistant: %+v", messages)
+	}
+	if byRole["user"][0].Content != prompt || byRole["assistant"][0].Content != answer {
+		t.Errorf("messages=%+v", messages)
+	}
+}
+
 type corruptingModel struct{ path string }
 
 func (m corruptingModel) Chat(context.Context, llm.Request, func(llm.Delta) error) (llm.Response, error) {
@@ -39,9 +53,10 @@ func TestSessionSurvivesModelCompletionDisplayFailure(t *testing.T) {
 			t.Errorf("state=%+v", s)
 		}
 		messages, err := activities.ReadTranscript(dir, s.TranscriptRef)
-		if err != nil || len(messages) != 2 {
-			t.Errorf("messages=%v err=%v", messages, err)
+		if err != nil {
+			t.Fatal(err)
 		}
+		assertSessionTranscript(t, messages, "hello", s.Answer)
 		env.CancelWorkflow()
 	}, time.Minute)
 	env.ExecuteWorkflow(w.SessionWorkflow, w.Input{DataDir: dir})
@@ -66,9 +81,7 @@ func TestSessionWithRealMockActivities(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(messages) != 2 || messages[0].Role != "user" || messages[1].Content != state.Answer {
-			t.Errorf("messages=%+v", messages)
-		}
+		assertSessionTranscript(t, messages, "hello", state.Answer)
 		path, err := events.NewStore(dir).Path("session-persistence")
 		if err != nil {
 			t.Fatal(err)

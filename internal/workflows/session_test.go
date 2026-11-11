@@ -9,14 +9,23 @@ import (
 
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/events"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/tools"
 	w "github.com/IvanKuzyshyn/temporal-harness-demo/internal/workflows"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/testsuite"
 )
 
+// Context snapshots share the parent transcript used by the session fixture.
+func registerSessionContext(env *testsuite.TestWorkflowEnvironment, ref string) {
+	env.RegisterActivityWithOptions(func(context.Context, w.GatherInput) (w.AppendResult, error) {
+		return w.AppendResult{TranscriptRef: ref}, nil
+	}, activity.RegisterOptions{Name: w.GatherActivity})
+}
+
 func TestSessionChatReceiptAndReconnect(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
+	registerSessionContext(env, "artifacts/transcript.json")
 	var emitted []events.Type
 	var calls int
 	var receipt bool
@@ -72,12 +81,15 @@ func TestSessionChatReceiptAndReconnect(t *testing.T) {
 		env.CancelWorkflow()
 	}, 3*time.Second)
 	env.ExecuteWorkflow(w.SessionWorkflow, w.Input{})
-	want := []events.Type{events.AgentStart, events.TurnStart, events.TurnEnd, events.AgentEnd, events.AgentSettled}
-	if len(emitted) != 2*len(want) {
+	want := []events.Type{
+		events.AgentStart, events.ParallelStart, events.ParallelEnd, events.TurnStart, events.TurnEnd, events.AgentEnd, events.AgentSettled,
+		events.AgentStart, events.TurnStart, events.TurnEnd, events.AgentEnd, events.AgentSettled,
+	}
+	if len(emitted) != len(want) {
 		t.Fatalf("events=%v", emitted)
 	}
 	for i, typ := range emitted {
-		if typ != want[i%len(want)] {
+		if typ != want[i] {
 			t.Errorf("event %d=%s", i, typ)
 		}
 	}
@@ -88,6 +100,15 @@ func TestSessionValidationAndFailures(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			var suite testsuite.WorkflowTestSuite
 			env := suite.NewTestWorkflowEnvironment()
+			registerSessionContext(env, "ref")
+			env.RegisterActivityWithOptions(func(_ context.Context, in w.ToolInput) (w.PreflightResult, error) {
+				if in.Call.ID != "unsafe" || in.Call.Name != "write_file" {
+					t.Errorf("unexpected preflight: %+v", in.Call)
+				}
+				var registry tools.LocalRegistry
+				def, _ := registry.Lookup(in.Call.Name)
+				return w.PreflightResult{Allowed: true, RequiresApproval: true, Mode: def.ExecutionMode, Replay: def.Replay, ActionHash: "write-action"}, nil
+			}, activity.RegisterOptions{Name: w.PreflightActivity})
 			var calls, rejected int
 			var toolResults []llm.Message
 			var failed bool
@@ -135,7 +156,7 @@ func TestSessionValidationAndFailures(t *testing.T) {
 						t.Errorf("calls=%d results=%v", calls, toolResults)
 					}
 					for _, m := range toolResults {
-						if !strings.Contains(m.Content, "not supported") {
+						if m.ToolCallID != "unsafe" || !strings.Contains(m.Content, "tool approval denied") {
 							t.Error(m)
 						}
 					}
