@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/events"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/workflows"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // safeText never lets untrusted terminal controls reach a renderer. Escape
@@ -59,6 +60,23 @@ func appendBounded(lines []string, s string) []string {
 // tool arguments, or child collections returned by the backend.
 func displayState(s workflows.State) workflows.State {
 	out := workflows.State{Status: bounded(singleLine(s.Status), 128), Turn: s.Turn, MaxTurns: s.MaxTurns, LastSeq: s.LastSeq, Answer: bounded(safeText(s.Answer), maxAnswer)}
+	if len(s.Inbox) > 0 {
+		n := min(len(s.Inbox), 64)
+		capacity := n
+		// One spare slot records overflow without retaining another entry or
+		// repurposing workflow metadata. Only this display projection uses cap
+		// as a flag; it is never appended to or sent back to the backend.
+		if len(s.Inbox) > n {
+			capacity++
+		}
+		out.Inbox = make([]workflows.MessageInput, n, capacity)
+		for i := range out.Inbox {
+			out.Inbox[i] = workflows.MessageInput{
+				Text:     bounded(singleLine(s.Inbox[i].Text), 256),
+				WhenBusy: bounded(singleLine(s.Inbox[i].WhenBusy), 32),
+			}
+		}
+	}
 	if s.PendingApproval != nil {
 		p := *s.PendingApproval
 		p.RequestID = bounded(safeText(p.RequestID), 256)
@@ -207,6 +225,40 @@ func (m *Model) refreshViewport(forceBottom bool) {
 	}
 }
 
+// queueView is a single fixed chrome row, independent of transcript scrolling.
+// Show the FIFO head, with a second preview when space permits. The count is
+// authoritative only up to the projection limit; '+' explicitly marks overflow.
+func (m *Model) queueView() string {
+	queue := m.state.Inbox
+	if len(queue) == 0 {
+		return "Queued: 0"
+	}
+	count := fmt.Sprint(len(queue))
+	if cap(queue) > len(queue) {
+		count += "+"
+	}
+	prefix := "Queued: " + count + " "
+	n := 1
+	if m.width >= 60 && len(queue) > 1 {
+		n = 2
+	}
+	suffix := ""
+	if len(queue) > n {
+		suffix = fmt.Sprintf(" · +%d more", len(queue)-n)
+	}
+	budget := max(1, (m.width-ansi.StringWidth(prefix+suffix)-3*(n-1))/n)
+	previews := make([]string, n)
+	for i := range previews {
+		mode := queue[i].WhenBusy
+		if mode == "" {
+			mode = "followUp"
+		}
+		mode = ansi.Truncate(mode, 10, "…")
+		previews[i] = ansi.Truncate(mode+": "+queue[i].Text, budget, "…")
+	}
+	return ansi.Truncate(prefix+strings.Join(previews, " · ")+suffix, m.width, "…")
+}
+
 func (m *Model) resize(w, h int) {
 	// Clamp absurd dimensions before handing them to components that allocate
 	// buffers. The outer render still never exceeds the actual terminal size.
@@ -215,7 +267,7 @@ func (m *Model) resize(w, h int) {
 	m.prompt.SetWidth(max(4, m.width))
 	m.prompt.SetHeight(3)
 	m.viewport.SetWidth(max(1, m.width))
-	m.viewport.SetHeight(max(1, m.height-11))
+	m.viewport.SetHeight(max(1, m.height-12))
 	m.refreshViewport(false)
 }
 
@@ -270,7 +322,7 @@ func (m *Model) View() tea.View {
 		title.Render(banner),
 		title.Render(panel), transcriptPane,
 		title.Render("Commands (Ctrl+T collapse)"), commandPane,
-		m.approvalView(), m.prompt.View(), footer, link,
+		m.approvalView(), m.queueView(), m.prompt.View(), footer, link,
 	}, "\n")
 	// Status and notices are plain text, never terminal instructions.
 	if m.notice != "" {
