@@ -13,7 +13,7 @@ defer model.Close() // Cancel outstanding commands when the caller exits.
 The caller runs the model with Bubble Tea. This package does not start a terminal,
 Temporal client, workers, or external processes itself. `Backend` defines the six
 session operations (`Submit`, `Query`, `Stop`, `Continue`, `Decide`, `Sessions`).
-All backend calls, transcript-page reads, and event-file reads run in commands with session-generation
+All backend calls, transcript/log-page reads, and event-file reads run in commands with session-generation
 checks on results. Backend implementations should honor context cancellation;
 calls have a ten-second timeout. Ctrl+C cancels the session context.
 
@@ -23,7 +23,13 @@ calls have a ten-second timeout. Ctrl+C cancels the session context.
 - Shift+Enter inserts a newline; Ctrl+J is the fallback for terminals that cannot
   distinguish Shift+Enter. Pasted multiline text is retained.
 - Esc requests Stop; Ctrl+C quits (does not implicitly stop the workflow).
-- Tab switches transcript/pattern log; PgUp/PgDn scroll the selected panel.
+- Tab switches journal/pattern log; PgUp/PgDn or mouse wheel browse the selected
+  panel without following updates. End follows latest and clears unseen updates.
+- Ctrl+Up/Down selects a durable record; Ctrl+O expands/collapses it. Ordinary
+  typing and Up/Down still edit the pinned composer.
+- Ctrl+L or `/log` opens a selected command's validated log; Ctrl+Left/Right or
+  `/logprev` / `/lognext` page bytes beyond the model tail. `/metadata` shows
+  sanitized original session values as scrollable rows.
 - Ctrl+T collapses/expands tool details in the chronological journal.
 - `/older` loads the preceding 64-record window; `/latest` retries/returns to the
   newest window. `/detail <record number>` opens scrollable captured record
@@ -82,9 +88,10 @@ the terminal dimensions; extremely small terminals necessarily hide some panes.
   denial-reason entry; Enter submits a nonempty reason. PgUp/PgDn scroll the
   bounded preview/arguments. Decisions retain the exact request/hash binding;
   no approval or rejection is sent implicitly.
-- Approval layout is tested at 80×24 and 40×14. Extremely small terminals can hide
-  details or controls: enlarge the terminal before deciding. This is not a
-  minimum-size safety interlock.
+- Approval layout is tested at 80×24 and 40×14. Below 40×12, a RESIZE warning
+  replaces it and both approval and denial dispatch are refused. Esc/Ctrl+C
+  remain available; denial reason survives resizing. The normal composer is
+  absent during approval, not misleadingly editable.
 - Tool results and log references are available in the scrollable journal/detail
   view, not limited to the old two-line Commands pane. This is not a terminal emulator.
 - Older browsing replaces the window and suppresses live suffixes rather than
@@ -94,10 +101,17 @@ the terminal dimensions; extremely small terminals necessarily hide some panes.
   captured results are not represented as reconstructed historical diffs.
 - [Durable history](../../docs/durable-history.md) documents the exact reader,
   safety/cancellation bounds, reconciliation rules, controls, and limitations.
-- Pinned-prompt redesign, phase styling, unread/follow behavior, record-level
-  anchoring and mouse scrolling remain separate UI work.
-- The Temporal UI link assumes localhost:8233 and the default namespace because
-  the required `Options` contract has no endpoint or namespace fields.
+- `layout.go` measures chrome before allocating the journal above the fixed
+  composer. `navigation.go` freezes the bounded window while browsing and retains
+  durable record/within-record row anchors across resize. `progress.go` shows
+  authoritative phase/mode/timing/counts and observed heartbeat age, never Query
+  polling as agent activity or prose as execution verification.
+- `log.go` extracts references only from canonical validated outcomes. The reader
+  pins the exact workflow's log directory and reads one 16 KiB byte page, capped
+  at 64 MiB with an explicit limit. No shell or arbitrary path opener is exposed.
+- [Native terminal behavior](../../docs/terminal-journal.md) documents controls,
+  display bounds, frozen-window notification semantics and controller-owned PTY
+  qualification. Unit tests are not actual terminal automation.
 - Shift+Enter/Alt+Enter recognition depends on terminal support; slash steering
   and Ctrl+J provide alternatives.
 

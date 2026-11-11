@@ -118,7 +118,12 @@ func (m *Model) approvalPage() (lines []string, start, height int) {
 	return
 }
 
+func (m *Model) approvalFits() bool { return m.width >= 40 && m.height >= 12 }
+
 func (m *Model) approvalScreen() string {
+	if !m.approvalFits() {
+		return lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(m.height).Render("RESIZE: approval paused\nNeed 40x12 or larger\nEsc stop · Ctrl+C quit")
+	}
 	lines, start, height := m.approvalPage()
 	end := min(len(lines), start+height)
 	body := append([]string(nil), lines[start:end]...)
@@ -185,6 +190,9 @@ func (m *Model) approvalKey(key tea.KeyPressMsg) tea.Cmd {
 }
 
 func (m *Model) approvalDecisionKey(key tea.KeyPressMsg) tea.Cmd {
+	if !m.approvalFits() {
+		return nil
+	}
 	if m.approval.pending || m.approval.sent {
 		return nil
 	}
@@ -218,6 +226,9 @@ func (m *Model) approvalDecisionKey(key tea.KeyPressMsg) tea.Cmd {
 }
 
 func (m *Model) decideCmd(approved bool) tea.Cmd {
+	if !m.approvalFits() {
+		return nil
+	}
 	p := m.state.PendingApproval
 	if p == nil || !time.Now().Before(p.ExpiresAt) {
 		m.notice = "Approval expired; refresh pending state"

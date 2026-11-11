@@ -9,7 +9,7 @@ import (
 )
 
 const demoPrompt = "/demo"
-const helpText = "Enter: follow-up | Alt+Enter or /steer <text>: steer | Shift+Enter (Ctrl+J): newline\nEsc: stop | Ctrl+C: quit | Tab: transcript/patterns | PgUp/PgDn: scroll | Ctrl+T: collapse tools\n/older | /latest (retry / newest) | /detail <record number> | /journal | /continue | /new [id] | /sessions [id] | /help | /demo | /explore <task> | /run <command>"
+const helpText = "Enter: follow-up | Alt+Enter or /steer <text>: steer | Shift+Enter (Ctrl+J): newline\nEsc: stop | Ctrl+C: detach | Tab: journal/patterns | PgUp/PgDn or wheel: scroll | End: follow latest\nCtrl+Up/Down: select record | Ctrl+O: detail | Ctrl+T: collapse tools\nCtrl+L /log: captured command log | Ctrl+Left/Right /logprev /lognext: byte pages\n/older: previous 64 records | /latest: newest/retry | /detail <record number> | /journal\n/metadata: full original configuration | /continue | /new [id] | /sessions [id] | /help | /demo | /explore <task> | /run <command>"
 
 func (m *Model) submitPrompt(steer bool) tea.Cmd {
 	text := strings.TrimSpace(m.prompt.Value())
@@ -22,10 +22,32 @@ func (m *Model) submitPrompt(steer bool) tea.Cmd {
 	demo := false
 	switch name {
 	case "/help":
+		m.history.detailID, m.selectedID = "", ""
+		m.log = logState{}
+		m.showPatterns = false
 		m.transcript = appendBounded(m.transcript, helpText)
 		m.prompt.Reset()
 		m.refreshViewport(true)
 		return nil
+	case "/metadata":
+		m.history.detailID, m.selectedID = "", ""
+		m.log = logState{}
+		m.showPatterns = false
+		for _, line := range strings.Split("Session: "+singleLine(m.opts.SessionID)+"\n"+m.sessionConfiguration()+"\nDataDir: "+singleLine(m.history.dir), "\n") {
+			m.transcript = appendBounded(m.transcript, line)
+		}
+		m.prompt.Reset()
+		m.refreshViewport(true)
+		return nil
+	case "/log", "/lognext", "/logprev":
+		m.prompt.Reset()
+		if name == "/lognext" {
+			return m.pageLog(1)
+		}
+		if name == "/logprev" {
+			return m.pageLog(-1)
+		}
+		return m.openSelectedLog()
 	case "/detail":
 		n, err := strconv.Atoi(rest)
 		i := n - m.history.page.Before - 1
@@ -33,15 +55,21 @@ func (m *Model) submitPrompt(steer bool) tea.Cmd {
 			m.notice = "Use /detail <record number> from the loaded history window"
 			return nil
 		}
+		m.browse()
+		m.showPatterns = false
 		m.history.detailID = m.history.page.Entries[i].ID
+		m.selectedID = m.history.detailID
+		m.log = logState{}
 		m.prompt.Reset()
-		m.refreshViewport(false)
+		m.rebuildJournal()
 		m.viewport.GotoTop()
 		return nil
 	case "/journal":
+		m.showPatterns = false
 		m.history.detailID = ""
+		m.log = logState{}
 		m.prompt.Reset()
-		m.refreshViewport(false)
+		m.rebuildJournal()
 		return nil
 	case "/older":
 		m.prompt.Reset()
@@ -52,7 +80,7 @@ func (m *Model) submitPrompt(steer bool) tea.Cmd {
 		return m.loadHistory(m.history.page.Before)
 	case "/latest":
 		m.prompt.Reset()
-		return m.loadHistory(0)
+		return m.jumpLatest()
 	case "/continue":
 		m.prompt.Reset()
 		return m.actionCmd("continue")

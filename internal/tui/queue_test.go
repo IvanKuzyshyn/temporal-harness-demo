@@ -22,7 +22,7 @@ func TestQueueSnapshotsAndFooter(t *testing.T) {
 		} {
 			m.Update(snapshotMsg{epoch: m.epoch, query: m.queryID, state: workflows.State{Status: "idle", Inbox: inbox}})
 			view := ansi.Strip(m.View().Content)
-			for _, want := range []string{"Queued:", "session:one", "turn:0/8 idle", "UI:"} {
+			for _, want := range []string{"Queued:", "session:one", "turn:0/8 idle"} {
 				if !strings.Contains(view, want) {
 					t.Fatalf("%v missing %q: %s", size, want, view)
 				}

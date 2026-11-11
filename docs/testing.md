@@ -45,6 +45,42 @@ Do not hide an initial failed gate behind a successful retry: retain the failure
 - Final uncached serialized root gates: build, vet, `go test -count=1 -p 1 ./...`, `go test -race -count=1 -p 1 ./...`, and formatting all **passed**. This does not erase the default-concurrency failures above.
 - Built CLI help was checked against the documented flag inventory; local documentation links/anchors passed validation. A temporary sample copy failed with `Add(2, 3) = -1; want 5`, as intended. This pass did not run setup, interactive demos, or live server/model/worker-loss tests.
 
+## Terminal journal regression and final qualification
+
+Task4 adds deterministic [layout/approval interlock tests](../internal/tui/layout_test.go),
+[reading-anchor/input tests](../internal/tui/navigation_test.go),
+[progress clock tests](../internal/tui/progress_test.go),
+[workflow phase/mode tests](../internal/workflows/progress_test.go), and
+[scoped log-reader tests](../internal/activities/command_reader_test.go) plus
+[log paging/parser/stale-response tests](../internal/tui/log_test.go).
+These use fake backends, real temporary artifacts and Temporal test environments,
+not private live services or actual PTYs. The red tests exposed missing wheel and
+unseen controls, unsafe tiny approval dispatch availability, sanitized-identity
+mismatch, loss of collapsed outcome meaning, older-window notifications, and a
+cross-session directory symlink alias. The implementation closes those cases.
+
+```sh
+HARNESS_MODEL=mock mise exec -- go test -count=1 -p 1 ./internal/tui ./internal/activities ./internal/workflows
+HARNESS_MODEL=mock mise exec -- go test -count=1 -p 1 ./internal/workflows -run TestRecordedReplay
+```
+
+Implementation qualification on the Task4 tree (2026-11-11 local time): three
+serialized full gate runs passed build/vet, uncached unit tests, uncached race
+tests, `go mod tidy -diff`, formatting and `git diff --check`. Explicit unchanged
+recorded-history replay also passed. Earlier targeted red/integration attempts
+are not erased: the first combined package run exposed the old footer/link and
+raw-ANSI rendering expectations plus genuine queue/status/follow regressions;
+those were corrected and both targeted and full suites rerun. No pinned module,
+workflow replay fixture or CI workflow was replaced.
+
+The final controller must separately qualify private normal/race durability,
+ordinary real-model Go/non-Go/file-refresh probes, a disposable mock guided demo,
+and actual terminal keyboard/resize/mouse/log/approval/reconnect captures. Follow
+[the terminal qualification checklist](terminal-journal.md#approval-and-qualification-boundary).
+Historical integrated17/18 live results below do **not** qualify the Task4 tree.
+Publication, final CI checks and independent reviews are not claimed by the
+implementation agent's unit/race/replay gates.
+
 ## Intentional failing sample
 
 [Sample project](../examples/sample-project/README.md) is a separate Go module. Root package traversal excludes it. Its `Add` function is intentionally broken; the sample test must fail before a fix:

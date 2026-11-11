@@ -17,6 +17,7 @@ func (r *runtime) afterRun(ctx workflow.Context) error {
 	if !r.state.WroteFile && !r.state.VerificationPending {
 		return nil
 	}
+	r.phase(ctx, "verification")
 	r.state.VerificationPending = true
 	r.state.HasUnansweredContext = true
 	call := llm.ToolCall{ID: r.inputID + "/afterrun/tests", Name: "run_command", Args: json.RawMessage(`{"cmd":"go","args":["test","./..."]}`)}

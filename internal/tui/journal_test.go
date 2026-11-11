@@ -282,7 +282,12 @@ func TestJournalRenderBoundSanitizationAndDurableChildren(t *testing.T) {
 	}
 	m.refreshViewport(false)
 	text := m.viewport.GetContent()
-	if len(text) > maxJournalText || strings.ContainsAny(text, "\x1b\x07\u202e") || !strings.Contains(text, "durable child summary") || !strings.Contains(text, "child-artifact#message") || !strings.Contains(text, "display limit") {
+	// The rendered view now includes trusted outcome SGR. Untrusted journal
+	// content must still be control-free before that styling is applied.
+	if strings.ContainsAny(boundedJournal(m.journalLines()), "\x1b\x07\u202e") {
+		t.Fatal("untrusted terminal controls retained")
+	}
+	if len(text) > maxJournalText || strings.ContainsAny(text, "\x07\u202e") || !strings.Contains(text, "durable child summary") || !strings.Contains(text, "child-artifact#message") || !strings.Contains(text, "display limit") {
 		t.Fatal("bounds/sanitization/child summary lost")
 	}
 	m.history.older = true

@@ -77,7 +77,9 @@ func (r *runtime) approveTool(ctx workflow.Context, call llm.ToolCall) (bool, er
 	p := &PendingApproval{RequestID: fmt.Sprintf("%s-approval-%d", workflow.GetInfo(ctx).WorkflowExecution.ID, r.state.ApprovalCounter), ActionHash: hash, Call: call, ExpiresAt: workflow.Now(ctx).Add(timeout), Preview: bounded(preflight.Preview, 8192)}
 	r.state.PendingApproval = p
 	r.state.Status = "blocked"
-	defer func() { r.state.PendingApproval = nil; r.state.Status = "working" }()
+	previousPhase := r.state.Phase
+	r.phase(ctx, "awaiting approval")
+	defer func() { r.state.PendingApproval = nil; r.state.Status = "working"; r.phase(ctx, previousPhase) }()
 	data := events.ApprovalData{RequestID: p.RequestID, ActionHash: hash, Command: bounded(call.Name+" "+string(call.Args), 8192)}
 	// Display must never delay the approval wait, extend its deadline or decide
 	// policy. One bounded best-effort attempt; no wait on the display sidechannel.

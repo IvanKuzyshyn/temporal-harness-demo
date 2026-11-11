@@ -135,13 +135,17 @@ func (m *Model) journalLines() []string {
 				label += " [assistant " + row.parentID[:12] + " / call " + msg.ToolCallID + "]"
 			}
 		}
+		if row.record.ID == m.selectedID {
+			label = "> " + label
+		}
 		selected := row.record.ID == m.history.detailID
 		collapsed := m.collapseTools && !selected
 		text := label + ": " + msg.Content
 		if msg.Role == "tool" {
 			text = label + ": " + durableToolText(msg.ToolName, msg.ToolCallID, msg.Content)
 			if collapsed {
-				text = label + " [details collapsed; Ctrl+T]"
+				outcome, _, _ := strings.Cut(durableToolText(msg.ToolName, msg.ToolCallID, msg.Content), "\n")
+				text = label + " " + outcome + " [details collapsed; Ctrl+O /detail]"
 			}
 		}
 		for _, call := range msg.ToolCalls {
@@ -151,7 +155,7 @@ func (m *Model) journalLines() []string {
 			}
 		}
 		if selected {
-			return []string{m.historyHeader(), "Record " + row.record.ID + " · /journal to return · PgUp/PgDn", journalText(text, maxJournalText-8192)}
+			return []string{m.historyHeader(), "Record " + row.record.ID + "\nCtrl+O /journal return · Ctrl+L /log captured log · PgUp/PgDn", journalText(text, maxJournalText-8192)}
 		}
 		lines = append(lines, fmt.Sprintf("Record %d · /detail %d\n", m.history.page.Before+i+1, m.history.page.Before+i+1)+journalText(text, maxText))
 	}
@@ -185,7 +189,7 @@ func (m *Model) journalLines() []string {
 func durableToolText(name, callID, content string) string {
 	// Successful read_file content is raw file data, not a result envelope.
 	if name == "read_file" {
-		return "[captured content; outcome metadata unavailable]\n" + content
+		return "[captured content; outcome metadata unavailable]\nRead evidence, not execution verification\n" + content
 	}
 	fields, ok := strictObject(content, "toolCallId", "output", "structured", "details", "isError", "interrupted",
 		"exitCode", "executionError", "tail", "logRef", "truncated")

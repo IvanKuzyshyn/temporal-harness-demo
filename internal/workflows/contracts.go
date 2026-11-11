@@ -98,6 +98,12 @@ type SessionInfo struct {
 }
 
 type State struct {
+	// Additive observation only: these fields never schedule work or prove verification.
+	Phase                string            `json:"phase,omitempty"`
+	Mode                 string            `json:"mode,omitempty"`
+	PhaseStartedAt       time.Time         `json:"phaseStartedAt,omitempty"`
+	RunStartedAt         time.Time         `json:"runStartedAt,omitempty"`
+	RunFinishedAt        time.Time         `json:"runFinishedAt,omitempty"`
 	Session              *SessionInfo      `json:"session,omitempty"`
 	Status               string            `json:"status"`
 	Turn                 int               `json:"turn"`

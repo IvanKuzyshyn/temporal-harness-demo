@@ -3,14 +3,13 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
-	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/events"
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/workflows"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -56,10 +55,29 @@ func appendBounded(lines []string, s string) []string {
 	return append(lines, s)
 }
 
+// Enum classification must not be invented by removing controls or eliding an
+// identity. An altered value stays visibly unknown rather than becoming a known
+// activity/mode after display sanitation.
+func displayEnum(raw string, limit int) string {
+	text := singleLine(raw)
+	if text != raw || len(text) > limit {
+		return bounded("unknown ("+text+")", limit)
+	}
+	return text
+}
+
 // Retain only bounded display data, not potentially large workflow inboxes,
 // tool arguments, or child collections returned by the backend.
 func displayState(s workflows.State) workflows.State {
-	out := workflows.State{Status: bounded(singleLine(s.Status), 128), Turn: s.Turn, MaxTurns: s.MaxTurns, LastSeq: s.LastSeq, Answer: bounded(safeText(s.Answer), maxAnswer)}
+	out := workflows.State{Status: displayEnum(s.Status, 128), Turn: s.Turn, MaxTurns: s.MaxTurns, LastSeq: s.LastSeq, Answer: bounded(safeText(s.Answer), maxAnswer)}
+	out.Phase, out.Mode = displayEnum(s.Phase, 64), displayEnum(s.Mode, 64)
+	out.PhaseStartedAt, out.RunStartedAt, out.RunFinishedAt = s.PhaseStartedAt, s.RunStartedAt, s.RunFinishedAt
+	for _, tool := range s.ActiveTools[:min(32, len(s.ActiveTools))] {
+		out.ActiveTools = append(out.ActiveTools, llm.ToolCall{Name: bounded(singleLine(tool.Name), 128)})
+	}
+	for _, child := range s.Children[:min(64, len(s.Children))] {
+		out.Children = append(out.Children, workflows.ChildState{Status: displayEnum(child.Status, 32)})
+	}
 	if s.Session != nil {
 		out.Session = &workflows.SessionInfo{
 			Model:    bounded(singleLine(s.Session.Model), maxText),
@@ -113,6 +131,14 @@ func (m *Model) applyEvent(e streamEvent) {
 	// command output, child announcements, or pattern log entries.
 	newLog := e.Seq > m.displaySeq
 	m.displaySeq = max(m.displaySeq, e.Seq)
+	if e.Type == events.Heartbeat && e.workflowKey == optionalIdentity(m.opts.SessionID) && e.parentKey == "" {
+		if at, err := time.Parse(time.RFC3339Nano, e.TS); err == nil && at.After(m.heartbeat) {
+			m.heartbeat = at
+		}
+	}
+	if newLog && !m.followLive {
+		m.unread = min(m.unread+1, 999999)
+	}
 	prefix := ""
 	if e.parentKey != "" || (e.workflowKey != "" && e.workflowKey != optionalIdentity(m.opts.SessionID)) {
 		prefix = "  child " + bounded(safeText(e.WorkflowID), 128) + ": "
@@ -189,6 +215,9 @@ func (m *Model) applyEvent(e streamEvent) {
 			return
 		}
 		line := prefix + string(e.Type) + " " + d.Name + " " + d.ToolCallID
+		if e.Type == events.ToolStart || e.Type == events.ToolUpdate {
+			line += " [running; best-effort]"
+		}
 		if d.Chunk != "" {
 			line += "\n" + d.Chunk
 		}
@@ -214,15 +243,14 @@ func (m *Model) applyEvent(e streamEvent) {
 }
 
 func (m *Model) refreshViewport(forceBottom bool) {
-	bottom := forceBottom || m.viewport.AtBottom()
-	var content string
-	if m.showPatterns {
-		content = strings.Join(m.patterns, "\n")
-	} else {
-		content = boundedJournal(m.journalLines())
+	if forceBottom {
+		m.followLive = true
+		m.unread = 0
 	}
-	m.viewport.SetContent(content)
-	if bottom {
+	if m.followLive || m.journalParts == nil {
+		m.rebuildJournal()
+	}
+	if m.followLive {
 		m.viewport.GotoBottom()
 	}
 }
@@ -261,18 +289,6 @@ func (m *Model) queueView() string {
 	return ansi.Truncate(prefix+strings.Join(previews, " · ")+suffix, m.width, "…")
 }
 
-func (m *Model) resize(w, h int) {
-	// Clamp absurd dimensions before handing them to components that allocate
-	// buffers. The outer render still never exceeds the actual terminal size.
-	m.width = max(0, min(w, 1000))
-	m.height = max(0, min(h, 500))
-	m.prompt.SetWidth(max(4, m.width))
-	m.prompt.SetHeight(3)
-	m.viewport.SetWidth(max(1, m.width))
-	m.viewport.SetHeight(max(1, m.height-15))
-	m.refreshViewport(false)
-}
-
 func (m *Model) sessionMismatch(s *workflows.SessionInfo) bool {
 	// An unspecified scenario is not a selection against which to warn. /demo
 	// opts in per run and may initialize a fresh session with Scenario=demo.
@@ -285,74 +301,8 @@ func (m *Model) sessionConfiguration() string {
 		return "config:unknown (legacy or not yet queried)\nselected model:" + singleLine(m.opts.Model) + "\nselected root:" + singleLine(m.opts.Input.Workdir)
 	}
 	text := "model:" + singleLine(s.Model) + "\nroot:" + singleLine(s.Workdir) + "\nconfig:original session"
-	if m.configMismatch || m.sessionMismatch(s) {
+	if m.configMismatch {
 		text += " [mismatch: client selection not applied]"
 	}
 	return text
-}
-
-func (m *Model) View() tea.View {
-	if m.width == 0 || m.height == 0 {
-		return tea.NewView("")
-	}
-	if m.state.PendingApproval != nil {
-		view := tea.NewView(m.approvalScreen())
-		view.AltScreen = true
-		return view
-	}
-	title := lipgloss.NewStyle().Bold(true)
-	panel := "Journal · /older /latest · PgUp/PgDn · Tab: patterns"
-	if m.showPatterns {
-		panel = "Pattern log (Tab: transcript)"
-	}
-	commands := "(no commands yet)"
-	if m.collapseTools {
-		commands = "(collapsed; Ctrl+T to expand)"
-	} else {
-		commands = "Tool details in journal · PgUp/PgDn to scroll\nLive events are not certified command outcomes"
-	}
-	commandPane := lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(2).Render(commands)
-	if lipgloss.Height(commandPane) < 2 {
-		commandPane += "\n"
-	}
-	status := m.state.Status
-	if status == "" {
-		status = "new"
-	}
-	if m.queryPending {
-		status += " " + m.spinner.View()
-	}
-	maxTurns := m.state.MaxTurns
-	if maxTurns == 0 {
-		maxTurns = m.opts.Input.MaxTurns
-	}
-	footer := fmt.Sprintf("session:%s turn:%d/%d %s", singleLine(m.opts.SessionID), m.state.Turn, maxTurns, status)
-	link := "UI: http://localhost:8233/namespaces/default/workflows/" + url.PathEscape(m.opts.SessionID)
-	if lipgloss.Width(link) > m.width {
-		link = "UI: http://localhost:8233 (default namespace)"
-	}
-	banner := "Harness · /help · Esc stop · Ctrl+C quit"
-	if m.opts.Demo {
-		banner = "Harness · /demo: guided demo · /help · Esc stop · Ctrl+C quit"
-	}
-	transcriptPane := m.viewport.View()
-	content := strings.Join([]string{
-		title.Render(banner),
-		title.Render(panel), transcriptPane,
-		title.Render("Commands (Ctrl+T collapse)"), commandPane,
-		m.approvalView(), m.queueView(), m.prompt.View(), footer, link, m.sessionConfiguration(),
-	}, "\n")
-	// Status and notices are plain text, never terminal instructions.
-	notice := m.notice
-	if m.history.err != "" {
-		// A history failure must remain visible even when its window header
-		// has scrolled offscreen. Query status and approval remain independent.
-		notice = "History: " + m.history.err
-	}
-	if notice != "" {
-		content = strings.Replace(content, title.Render("Commands (Ctrl+T collapse)"), title.Render("Commands")+" · "+bounded(singleLine(notice), 160), 1)
-	}
-	view := tea.NewView(lipgloss.NewStyle().MaxWidth(m.width).MaxHeight(m.height).Render(content))
-	view.AltScreen = true
-	return view
 }

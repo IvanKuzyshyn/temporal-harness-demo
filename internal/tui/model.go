@@ -77,6 +77,15 @@ type Model struct {
 	state                           workflows.State
 	history                         historyState
 	configMismatch                  bool
+	followLive                      bool
+	unread                          uint64
+	selectedID, anchorID            string
+	anchorRow                       int
+	journalParts                    []string
+	log                             logState
+	logGeneration                   uint64
+	logCancel                       context.CancelFunc
+	now, heartbeat                  time.Time
 	approval                        approvalModal
 	transcript, patterns, commands  []string
 	stream                          []streamEntry
@@ -119,7 +128,7 @@ func New(backend Backend, opts Options) *Model {
 	v := viewport.New()
 	v.SoftWrap = true
 	v.FillHeight = true
-	m := &Model{backend: backend, opts: opts, lifetime: lifetime, close: closeModel, ctx: ctx, cancel: cancel, epoch: 1, reconnect: events.NewReconnect(), offsets: make(map[string]int64), prompt: p, viewport: v, spinner: spinner.New()}
+	m := &Model{followLive: true, backend: backend, opts: opts, lifetime: lifetime, close: closeModel, ctx: ctx, cancel: cancel, epoch: 1, reconnect: events.NewReconnect(), offsets: make(map[string]int64), prompt: p, viewport: v, spinner: spinner.New()}
 	m.resize(80, 24)
 	return m
 }
@@ -142,6 +151,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		m.captureAnchor()
 		m.resize(msg.Width, msg.Height)
 		return m, nil
 	case tea.KeyPressMsg:
@@ -170,15 +180,54 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "ctrl+t":
 			m.collapseTools = !m.collapseTools
+			m.rebuildJournal()
 			m.refreshViewport(false)
 			return m, nil
 		case "pgup":
+			m.browse()
 			m.viewport.PageUp()
 			return m, nil
 		case "pgdown":
+			m.browse()
 			m.viewport.PageDown()
 			return m, nil
+		case "end":
+			return m, m.jumpLatest()
+		case "ctrl+up":
+			m.selectRecord(-1)
+			return m, nil
+		case "ctrl+down":
+			m.selectRecord(1)
+			return m, nil
+		case "ctrl+o":
+			m.toggleDetail()
+			return m, nil
+		case "ctrl+l":
+			return m, m.openSelectedLog()
+		case "ctrl+right":
+			return m, m.pageLog(1)
+		case "ctrl+left":
+			return m, m.pageLog(-1)
 		}
+	case tea.MouseWheelMsg:
+		if m.state.PendingApproval != nil {
+			code := tea.KeyUp
+			if msg.Button == tea.MouseWheelDown {
+				code = tea.KeyDown
+			}
+			return m, m.approvalKey(tea.KeyPressMsg{Code: code})
+		}
+		m.browse()
+		if msg.Button == tea.MouseWheelUp {
+			m.viewport.ScrollUp(3)
+		}
+		if msg.Button == tea.MouseWheelDown {
+			m.viewport.ScrollDown(3)
+		}
+		return m, nil
+	case logMsg:
+		m.acceptLog(msg)
+		return m, nil
 	case pollMsg:
 		if msg.epoch != m.epoch {
 			return m, nil
@@ -325,6 +374,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.switchSession(msg.id)
 	case spinner.TickMsg:
+		m.now = msg.Time
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
@@ -408,6 +458,12 @@ func (m *Model) switchSession(id string) tea.Cmd {
 	m.newMessage = false
 	m.state = workflows.State{}
 	m.history = historyState{}
+	m.followLive = true
+	m.unread = 0
+	m.selectedID, m.anchorID = "", ""
+	m.journalParts = nil
+	m.log = logState{}
+	m.heartbeat = time.Time{}
 	m.configMismatch = false
 	m.approval = approvalModal{}
 	m.started = false
