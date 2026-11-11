@@ -108,7 +108,9 @@ func (m *Model) conversation() []conversationBlock {
 				mark = "▾"
 			}
 			heading := fmt.Sprintf("%s Work · %d observations", mark, len(g.work)+len(g.live))
-			if g.partial {
+			if g.id == "work:live" {
+				heading += " · current live / unassociated"
+			} else if g.partial {
 				heading += " · earlier / partial"
 			}
 			heading += " · Ctrl+T"
@@ -192,6 +194,12 @@ func (m *Model) conversation() []conversationBlock {
 			g.work = append(g.work, row)
 		}
 	}
+	flush()
+	// Query activity and surviving stream observations have no trustworthy
+	// prompt identity. Even the latest loaded prompt may be from a completed
+	// request while a new history read is delayed or unavailable. Keep this
+	// suffix separate; neither call IDs nor prose establish prompt ownership.
+	g = group{id: "work:live"}
 	var drafts []streamEntry
 	if !m.history.older {
 		stream := m.stream

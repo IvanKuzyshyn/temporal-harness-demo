@@ -186,16 +186,44 @@ func TestPatternsPreserveFollowingAndRefreshDoesNotResetBrowsing(t *testing.T) {
 	m, _ := testModel(t)
 	m.history.page.Entries = durableRecords(64)
 	m.rebuildJournal()
-	m.patterns = []string{strings.Repeat("PATTERN\n", 80)}
+	for i := 0; i < 80; i++ {
+		m.patterns = append(m.patterns, fmt.Sprintf("PATTERN-%02d", i))
+	}
+	assertPatternFrame := func(first int) {
+		t.Helper()
+		frame := ansi.Strip(m.View().Content)
+		if !strings.Contains(frame, fmt.Sprintf("PATTERN-%02d", first)) || strings.Contains(frame, "PATTERN-79") {
+			t.Fatalf("pattern frame ignored reading offset %d: %s", first, frame)
+		}
+		if !m.followLive {
+			t.Fatal("pattern frame changed journal follow policy")
+		}
+	}
 	m.Update(key(tea.KeyTab, 0))
+	assertPatternFrame(0)
 	m.Update(key(tea.KeyPgDown, 0))
+	assertPatternFrame(m.viewport.Height())
+	m.Update(key(tea.KeyPgUp, 0))
+	assertPatternFrame(0)
 	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
+	assertPatternFrame(3)
+	m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	assertPatternFrame(0)
+	m.Update(key(tea.KeyPgDown, 0))
+	offset := m.viewport.YOffset()
+	m.started, m.reconnect = true, nil
+	m.Update(tailMsg{epoch: m.epoch, events: []streamEvent{delta(1, "JOURNAL-LIVE-TAIL")}})
+	assertPatternFrame(offset)
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	assertPatternFrame(offset)
+	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	assertPatternFrame(offset)
 	if !m.followLive {
 		t.Fatal("scrolling secondary panel changed underlying follow policy")
 	}
 	m.Update(key(tea.KeyTab, 0))
-	if !m.followLive || !m.viewport.AtBottom() {
-		t.Fatal("return did not preserve following")
+	if !m.followLive || !m.viewport.AtBottom() || !strings.Contains(ansi.Strip(m.View().Content), "JOURNAL-LIVE-TAIL") || strings.Contains(m.View().Content, "PATTERN-") {
+		t.Fatal("return did not render the still-following journal")
 	}
 	m.browse()
 	m.unread = 9

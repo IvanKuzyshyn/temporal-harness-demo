@@ -72,13 +72,16 @@ JSONL cannot erase the persisted conversation.
 `conversation.go` projects the loaded page into distinct cyan `› You` prompts,
 neutral response bodies with green `✓ Assistant · response completed` headings,
 and **one default-collapsed work block per prompt**. Response completion does not
-certify command/test success. System evidence, tool-request messages, tool results,
-child progress and live tool observations stay inside work; failed/interrupted/
-unknown canonical outcomes remain visible in its summary. Query request failures
-are separate notices, not colors applied to unrelated historical responses.
-Work preceding the first loaded prompt is labeled **earlier / partial**. Empty
-settled work is omitted; active work can show the current Query phase before any
-result arrives. Live drafts are explicitly best-effort, not completed responses.
+certify command/test success. System evidence, tool-request messages and durable
+tool results stay inside their prompt's work; failed/interrupted/unknown canonical
+outcomes remain visible in its summary. Live tool/child observations and current
+Query activity lack a trustworthy prompt identity and occupy a separate
+**current live / unassociated** work block (`work:live`), even after a newer prompt
+page arrives. They are never assigned by cached page position, call ID or prose.
+Query request failures are separate notices, not colors applied to unrelated
+historical responses. Work preceding the first loaded prompt is labeled
+**earlier / partial**. Empty settled work is omitted. Live drafts are explicitly
+best-effort, not completed responses.
 
 `conversationBlock` IDs, group membership and heading spans are the shared mapping
 for plain/styled rendering, visible selection and reflow anchors. Source identities

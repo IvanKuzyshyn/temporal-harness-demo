@@ -92,8 +92,9 @@ func TestConversationFrozenWorkToggleDoesNotConsumeIncoming(t *testing.T) {
 		t.Fatal("expansion consumed live updates behind frozen window")
 	}
 	m.jumpLatest()
-	if !strings.Contains(m.viewport.GetContent(), "4 observations") {
-		t.Fatal("End did not expose newest observations")
+	v := ansi.Strip(m.viewport.GetContent())
+	if !strings.Contains(v, "3 observations · Ctrl+T") || !strings.Contains(v, "1 observations · current live / unassociated") {
+		t.Fatal("End did not expose newest observations separately from durable prompt work")
 	}
 }
 

@@ -295,6 +295,8 @@ func TestJournalRenderBoundSanitizationAndDurableChildren(t *testing.T) {
 	m.refreshViewport(false)
 	m.selectedID = "work:" + records[62].ID
 	m.toggleWork()
+	m.selectedID = "work:live"
+	m.toggleWork()
 	m.resumeFollowing()
 	text := m.viewport.GetContent()
 	// The rendered view now includes trusted outcome SGR. Untrusted journal
@@ -315,6 +317,8 @@ func TestJournalRenderBoundSanitizationAndDurableChildren(t *testing.T) {
 	m.stream = nil
 	m.applyEvent(retryEvent(1, events.MessageUpdate, "child", "s", "independent", "child draft"))
 	m.refreshViewport(false)
+	m.selectedID = "work:live"
+	m.toggleWork()
 	if !strings.Contains(m.viewport.GetContent(), "child draft") {
 		t.Fatal("lost expanded child distinction")
 	}

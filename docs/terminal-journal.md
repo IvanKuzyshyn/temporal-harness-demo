@@ -48,13 +48,16 @@ available. Mismatch comparison uses raw values, not their sanitized rendering.
   `/help` lists controls. Navigation never submits an approval or executes a tool.
 
 Each loaded prompt owns at most one work block containing automatic context,
-intermediate tool-request assistant messages, tool results and noisy child/live
-progress. A settled prompt with no work has no empty block. Work before the first
-loaded user is **earlier / partial**, never assigned to that later prompt. Counts
-are observations within the loaded page, not a claim of complete run history or
-unique executions. Active Query phase can appear before any durable tool result.
-Substantive durable responses and best-effort parent drafts remain readable outside
-work. Tool-call IDs are not grouping identities, including when reused.
+intermediate tool-request assistant messages and durable tool results. A settled
+prompt with no work has no empty block. Work before the first loaded user is
+**earlier / partial**, never assigned to that later prompt. Live tool/child
+observations and active Query phase have no trustworthy prompt identity: they
+appear in a separate **current live / unassociated** block after the durable page,
+not inside the last cached prompt's work. A later page does not itself establish
+ownership of surviving live observations. Counts describe bounded observations,
+not complete run history or unique executions. Substantive durable responses and
+best-effort parent drafts remain readable outside work. Tool-call IDs and prose
+are not grouping identities, including when reused.
 
 Expansion state is bounded to the loaded page (plus a possible live-only group),
 keeps surviving same-page identities during polling, and resets on End/latest,

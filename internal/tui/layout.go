@@ -182,7 +182,7 @@ func (m *Model) View() tea.View {
 		// stale chrome geometry, so exceptional status never pushes drafts offscreen.
 		viewport := m.viewport
 		viewport.SetHeight(m.journalHeight())
-		if m.followLive {
+		if m.followLive && !m.showPatterns {
 			viewport.GotoBottom()
 		}
 		if viewport.Height() > 0 {
