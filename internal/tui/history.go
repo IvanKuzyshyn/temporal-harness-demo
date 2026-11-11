@@ -97,7 +97,15 @@ func (m *Model) loadHistory(before int) tea.Cmd {
 		m.resumeFollowing()
 	}
 	m.history.jumpLatest = before == 0
-	return m.loadHistoryForQuery(before, m.queryID)
+	cmd := m.loadHistoryForQuery(before, m.queryID)
+	// Explicit navigation must replace the previous panel immediately, even
+	// when the reader cannot start or later fails. Rebuild from the cached page,
+	// not the retained parts, which may still contain a detail or captured log.
+	if before > 0 {
+		m.rebuildJournal()
+		m.viewport.GotoTop()
+	}
+	return cmd
 }
 func (m *Model) loadHistoryForQuery(before int, query uint64) tea.Cmd {
 	if m.history.pending {
@@ -105,6 +113,8 @@ func (m *Model) loadHistoryForQuery(before int, query uint64) tea.Cmd {
 	}
 	if !filepath.IsAbs(m.history.dir) {
 		m.history.err = "unavailable: original session DataDir is missing or relative"
+		m.history.explicit = false
+		m.history.jumpLatest = false
 		m.refreshViewport(false)
 		return nil
 	}
