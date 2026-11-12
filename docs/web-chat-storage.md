@@ -15,7 +15,7 @@ Task4 adds migration `000003`, direct `GetTurn`/bounded `RecentChatExchanges`,
 `CheckChatCommand`/`RecordChatAdmission`, `StartChatTurn`,
 `BeginChatModelAttempt`, `GetChatModelResult`/`SaveChatModelResult`, and atomic
 `PersistTurnResult`. See [web-chat-temporal.md](web-chat-temporal.md) for exact
-receipt ordering, bounded carry and completion authority. Task5 reuses schema3:
+receipt ordering, bounded carry and completion authority. Task5 fix1 requires schema4 (the earlier Task5 slice used schema3):
 `MarkChatCancelling` projects the workflow-owned target; accepted control receipts
 also project cancelling without resurrecting a terminal turn. Cancelled
 `PersistTurnResult` atomically closes running attempts, writes `turn.cancelled`,
@@ -127,6 +127,29 @@ Original file/image bytes never enter Postgres. Schema includes extraction
 status/text/derived-image metadata for the later authorized processing task.
 
 ### Worker projection records
+
+Schema4 adds `turns.model_invocations_closed` and `chat_model_invocations`
+(id, conversation/turn, Temporal attempt, registered_at, cleanup_confirmed_at).
+Each activity body gets its own UUID, even a duplicate delivery of one attempt.
+`RegisterChatModelInvocation(ctx,ref,id,attempt)` must commit before provider work;
+it rejects closed admission and never reauthorizes an existing invocation ID.
+`AcknowledgeChatModelCleanup(ctx,ref,id)` is owner-bound/idempotent and runs only
+after all body work and goroutines join. `SealChatModelInvocations(ctx,ref)` closes
+admission permanently and returns the count of missing acknowledgments. These
+transactions share the conversation lock. A racing registration is therefore
+visible or rejected, and sealed zero is stable. Neither `model_steps` failure nor
+a saved canonical candidate is acknowledgment. `PersistTurnResult` independently
+rejects any terminal outcome with `ErrChatCleanupUnconfirmed` while a row remains
+unacknowledged, and seals admission atomically on success.
+
+Apply migration4 with old API/workers stopped; do not hot-mix old workers that
+lack registration with the new protocol. Upgrade backfills existing nonterminal
+model attempts as **unacknowledged**, even
+if their publisher projection says failed/interrupted. It does not fabricate
+cleanup evidence. Pre-upgrade active work may require operator investigation;
+there is no old workflow-history compatibility/reset promise. Down migration
+removes only the new ledger/column; downgrade must not run alongside active workers.
+
 
 - `BeginChatModelAttempt(ctx, chat.ModelAttempt) (cached bool, err error)` is the
   text-chat registration path. It atomically checks the canonical candidate,

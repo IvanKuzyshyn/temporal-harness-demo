@@ -26,7 +26,7 @@ Export configuration explicitly (the binary does not automatically source `.env`
   passwords; edit credentials deliberately rather than reinitializing volumes.
 
 `bin/web-api -migrate` applies embedded migrations and exits. `bin/web-api` requires
-schema version 3 and serves HTTP. Effective pgx user/database/startup parameters
+schema version 4 and serves HTTP. Effective pgx user/database/startup parameters
 are validated before connecting, including query/environment/service overrides;
 only the validated config is used. Application identity must be `webchat`, never
 Temporal's database/role. Runtime connection hosts and fallback hosts must be
@@ -153,8 +153,10 @@ return `stale_target`. Accepted control results include `targetTurnId` and, for
 replacement, `replacementTurnId`. Poll the receipt and conversation/history
 projections separately: accepted does not mean cleanup is complete. Replacement
 starts only after joined cleanup and durable target cancellation, ahead of queued
-normal messages. A cleanup timeout remains `cancelling_interrupted` in workflow
-state and `cancelling` in SQL; no newer turn runs. See the runtime document for
+normal messages. Any missing cleanup acknowledgment across **all** started model
+invocations (including older timed-out attempts) leaves `cancelling_interrupted`
+in workflow state and `cancelling` in SQL; no newer turn runs. Later retry
+cancellation/success cannot bypass this durable barrier. See the runtime document for
 completion linearization, recovery and operator limits. Approvals/revocation and
 new attachment-bearing messages/replacements still reject `invalid_command`.
 

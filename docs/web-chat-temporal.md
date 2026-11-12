@@ -7,7 +7,7 @@ routing, attachment access or tool execution on this path.
 
 ## Run
 
-Apply application migrations with `web-api -migrate` (now version **3**), then run
+Apply application migrations with `web-api -migrate` (now version **4**), then run
 `cmd/web-worker` and `cmd/web-api` with the private API/DB configuration described
 in [web-api.md](web-api.md). Build with `mise exec -- go build -p 1 ./...`.
 Additional configuration:
@@ -107,7 +107,7 @@ Continue-As-New occurs between joined turns or exhausted persistence batches,
 waits for all update handlers, and carries pending turn IDs, the last accepted
 normal sequence and scalar counters, plus at most 101 reference-only admission checkpoints. An active
 recovery checkpoint adds only its
-turn ID, `start`/`settle` phase, bounded backoff and intended settlement metadata
+turn ID, `start`/`join`/`settle` phase, bounded backoff and intended settlement metadata
 (status/reason, no answer text). A settled model call is not repeated on recovery.
 There are no live children in this slice. Inbox limit is 64; a run rolls after
 100 handled commands/recovery batches (or server suggestion). A pure validator
@@ -138,9 +138,11 @@ include `targetTurnId` and, for replacement, `replacementTurnId`. Acceptance is
 intent/admission, not completed cancellation. Normal sequence order is untouched.
 
 The turn-local cancellation context interrupts model/start activities and start
-recovery backoff. Every live activity future is joined before cancellation
-settlement or CAN. Disconnected context is used **only to await cleanup**, not to
-run unbounded persistence after workflow cancellation. Cancellation projection
+recovery backoff. Every logical activity future is joined before CAN, but a
+logical future (including success/cancellation) does **not** join older timed-out
+remote attempts. A separate durable all-invocation barrier gates settlement and
+all newer turns. Disconnected workflow context is used only to await futures,
+not to run unbounded persistence after workflow cancellation. Cancellation projection
 writes use normal workflow context and bounded storage batches. The admission
 transaction projects `cancelling`; `MarkChatCancelling` is idempotent, and
 `PersistTurnResult(cancelled)` atomically settles the target, running attempts,
@@ -149,22 +151,42 @@ handoff before the control claim is cleared. No replacement starts until this
 settlement succeeds. The replacement occupies a separate single priority slot,
 not the bounded normal inbox; queued normal follow-ups retain FIFO order.
 
-A timeout is **not proof of remote cleanup**. If cancellation joins with a model
-timeout, state remains `cancelling_interrupted`; replacement/follow-ups do not
-start, even if a late remote activity eventually returns. Operator investigation
-is required; no automatic reset, reuse or overlap is attempted. The current
-runtime has no document children; Task8 must cancel and join children under the
-same turn-local boundary before declaring cleanup complete.
+Every `ChatModel` body registers a fresh invocation UUID **before** cache/provider
+work. Registration commits under the same conversation lock as the permanent
+per-turn admission seal. It is either counted by the seal or rejected; even a
+late or duplicate delivery cannot start invisibly. The body acknowledges its
+registration only after provider/persistence return and heartbeat/shutdown
+goroutines join. This uses a two-second uncancelled activity-side cleanup context;
+missing/failed acknowledgment remains unknown, not success. Panic/Goexit also
+leave the invocation unacknowledged; acknowledgment is not a Go defer. Attempt status,
+publisher fencing, worker concurrency, and elapsed time are never cleanup proof.
 
-Completion linearizes when the model result enters final settlement (`settle`).
+`SealChatModelInvocations` closes admission and counts all missing acknowledgments.
+Only sealed zero allows terminal settlement and newer inference. Any positive
+count parks `cancelling_interrupted` (or `cleanup_interrupted` after ordinary
+model completion/failure), exposes `UnconfirmedModelInvocations`, and leaves SQL
+nonterminal. Replacement/FIFO do not start, even after a late acknowledgment.
+Operator investigation is required; no automatic reset/reuse is attempted.
+A lost acknowledgment may conservatively park work whose body actually returned.
+Worker/server restart cannot erase the ledger. The current runtime has no document
+children; Task9 must add their cleanup evidence to the same turn-local barrier.
+These tests prove application-body cleanup with fake inference, not live-provider
+server-side resource reclamation.
+
+Completion linearizes when the returned model result enters finalization (`join`,
+then `settle` after the sealed barrier).
 Controls racing with that boundary are rejected `stale_target`, including while
 that settlement is recovering: its SQL may already be committed with a lost
 acknowledgment, so a control cannot safely revoke it. Stop during **start**
 recovery is supported and interrupts its backoff. Cancellation settlement itself
-recovers in bounded batches and may CAN with `cancel_mark`/`cancel_settle` phases,
+recovers in bounded batches and may CAN with `cancel_mark`/`cancel_join`/`cancel_settle` phases,
 the claimed command identity, target/replacement IDs and intended cancellation
 reason. No live child/activity, text, attachment content or growing receipt list
-is carried. Query-only `DecidingAdmission` exposes one in-flight receipt decision
+is carried. A failed seal activity can recover/CAN with `join`/`cancel_join`
+metadata; this is explicitly **not** a cleanup acknowledgment and cannot advance
+the turn. The resumed workflow must obtain sealed zero first. Once a positive
+missing count is observed, the workflow parks rather than rolling over.
+Query-only `DecidingAdmission` exposes one in-flight receipt decision
 and must be empty on CAN; exhausted writes move to existing bounded checkpoints.
 
 Replacement inference loads the original target prompt and attachment **IDs** as
@@ -290,7 +312,13 @@ actual worker + Temporal-server + Postgres restart while cancelling. The parent
 runner owns the restart protocol and retains the same Temporal SQLite history;
 Postgres postmaster timestamps prove its restart. Another real test withholds
 cleanup beyond heartbeat timeout and verifies `cancelling_interrupted` with no
-replacement execution. Inference is explicitly fake; cancellation, histories,
+replacement execution. `TestReplacementAfterTimedOutAttemptDoesNotBypassCleanup`
+holds attempt1 after timeout on one real model worker, cancels attempt2 on another
+(or cancels during retry backoff), and verifies no terminal cancellation/FIFO/
+replacement while the older body is unacknowledged. It also restarts the workflow
+worker while the old provider remains held. The normal replacement test asserts
+the actual CAN run chain and scheduled-turn order. Inference is explicitly fake;
+cancellation, histories,
 SQL, server processes and restart are real. SDK unit tests alone are not join
 proof. `storage` and `api` runner modes are preserved. `chat` includes them and starts a
 pinned real Temporal dev server as an owned child on unique loopback ports, with

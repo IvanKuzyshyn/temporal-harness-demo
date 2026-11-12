@@ -215,6 +215,19 @@ func (r *Repository) PersistTurnResult(ctx context.Context, a chat.TurnResult) e
 			}
 			return nil
 		}
+		// Defense in depth: no terminal result may outrun a remote body, even
+		// if a caller bypasses the workflow's explicit cleanup activity. This
+		// lock also serializes the closing gate with every new registration.
+		var pending bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM chat_model_invocations WHERE conversation_id=$1 AND turn_id=$2 AND cleanup_confirmed_at IS NULL)`, a.ConversationID, a.TurnID).Scan(&pending); err != nil {
+			return err
+		}
+		if pending {
+			return ErrChatCleanupUnconfirmed
+		}
+		if _, err := tx.Exec(ctx, `UPDATE turns SET model_invocations_closed=true WHERE conversation_id=$1 AND id=$2`, a.ConversationID, a.TurnID); err != nil {
+			return err
+		}
 		entry := chat.LogicalID(a.TurnID, "final")
 		limited := false
 		if a.Status == "completed" {

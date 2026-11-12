@@ -63,8 +63,8 @@ export WEBCHAT_TEST_TEMPORAL_DATABASE_URL="postgres://temporal:test-temporal-onl
 export WEBCHAT_TEST_RECEIPT="$work/receipt"
 echo "Storage integration project=$project database=$database address=$port volume=$volume"
 run() { mise exec -- go test -p 1 -count=1 -timeout 3m -tags integration "$@" ./internal/storage/...; }
-WEBCHAT_TEST_PHASE=migration run -v -run '^TestMigration(Cycle|DispatchUpgrade)$'
-run -race -v -run "${WEBCHAT_TEST_STORAGE_RUN:-Test(Accept|Command|Logical|History|Attachment|Control|Database|Projection|Schema|WebChat|ModelAttemptRetry|MissingDisplay|ChatAdmission|ChatResultAttempt|ChatAttempt|ChatFailed|ChatOverlapping|ChatCandidate|CancelledDraft|ReplacementPrompt)}"
+WEBCHAT_TEST_PHASE=migration run -v -run '^TestMigration(Cycle|DispatchUpgrade|ChatCleanupUpgrade)$'
+run -race -v -run "${WEBCHAT_TEST_STORAGE_RUN:-Test(Accept|Command|Logical|History|Attachment|Control|Database|Projection|Schema|WebChat|ModelAttemptRetry|MissingDisplay|ChatAdmission|ChatResultAttempt|ChatAttempt|ChatCleanup|ChatFailed|ChatOverlapping|ChatCandidate|CancelledDraft|ReplacementPrompt)}"
 WEBCHAT_TEST_PHASE=restart-write run -v -run '^TestRestartWrite$'
 before=$("${compose[@]}" exec -T postgres psql -U postgres -Atc 'SELECT pg_postmaster_start_time()')
 "${compose[@]}" restart postgres

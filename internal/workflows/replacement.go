@@ -26,9 +26,10 @@ func (s *WebSessionState) claimControl(c chat.CommandIdentity) chat.AdmissionRes
 	if s.Control != nil && s.Control.Command.ExpectedActiveTurnID == c.ExpectedActiveTurnID {
 		return chat.AdmissionResult{State: "rejected", Code: "control_conflict"}
 	}
-	// Settlement is a completion linearization boundary: its SQL may already
-	// have committed even when acknowledgment is missing. Never revoke it.
-	if s.ActiveTurn == "" || s.ActiveTurn != c.ExpectedActiveTurnID || s.RecoveryPhase == "settle" {
+	// Finalization (join/settle) is the completion linearization boundary.
+	// Once the model returned, preserve that decision; SQL settlement may
+	// already have committed when its acknowledgment is missing.
+	if s.ActiveTurn == "" || s.ActiveTurn != c.ExpectedActiveTurnID || (s.RecoveryPhase == "join" || s.RecoveryPhase == "settle") {
 		return chat.AdmissionResult{State: "rejected", Code: "stale_target"}
 	}
 	s.Control = &WebControl{Command: c}

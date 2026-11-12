@@ -13,12 +13,13 @@ const (
 	WebSessionName             = "WebChatSessionWorkflow"
 	WebAgentsQueue             = "web-chat-agents"
 	WebLLMQueue                = "web-chat-llm"
-	WebDocumentsQueue          = "web-chat-documents" // reserved; no child worker before Task8
+	WebDocumentsQueue          = "web-chat-documents" // reserved; child execution belongs to Task9
 	WebCheckCommandActivity    = "CheckChatCommand"
 	WebAdmissionActivity       = "RecordChatAdmission"
 	WebResumeAdmissionActivity = "ResumeChatAdmission"
 	WebStartTurnActivity       = "StartChatTurn"
 	WebModelActivity           = "ChatModel"
+	WebSealModelActivity       = "SealChatModelInvocations"
 	WebPersistTurnActivity     = "PersistTurnResult"
 )
 
@@ -29,13 +30,14 @@ type WebSessionInput struct {
 	Carry                   *WebSessionState
 }
 type WebSessionState struct {
-	Status              string
-	ActiveTurn          chat.TurnID
-	Inbox               []chat.TurnRef
-	LastMessageSequence int64
-	Completed, Failed   int64
-	Cancelled           int64
-	Control             *WebControl
+	Status                      string
+	ActiveTurn                  chat.TurnID
+	Inbox                       []chat.TurnRef
+	LastMessageSequence         int64
+	Completed, Failed           int64
+	Cancelled                   int64
+	UnconfirmedModelInvocations int64
+	Control                     *WebControl
 	// Recovery carries only an active ID, phase and settlement metadata, never
 	// response text. CAN can checkpoint between failed persistence retry batches.
 	RecoveryPhase        string
@@ -76,9 +78,9 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 	if state.ActiveTurn != "" && state.Status == "recovering" && chat.ValidID(string(state.ActiveTurn)) {
 		validCheckpoint = state.RecoveryPhase == "start" && state.PendingResult == nil
 		if r := state.PendingResult; r != nil {
-			validCheckpoint = state.RecoveryPhase == "settle" && r.TurnID == state.ActiveTurn && r.ConversationID == in.ConversationID && (r.Status == "completed" || r.Status == "failed")
+			validCheckpoint = (state.RecoveryPhase == "join" || state.RecoveryPhase == "settle") && r.TurnID == state.ActiveTurn && r.ConversationID == in.ConversationID && (r.Status == "completed" || r.Status == "failed")
 			if state.Control != nil && r.Status == "cancelled" && r.TurnID == state.ActiveTurn && r.ConversationID == in.ConversationID {
-				validCheckpoint = state.RecoveryPhase == "cancel_mark" || state.RecoveryPhase == "cancel_settle"
+				validCheckpoint = state.RecoveryPhase == "cancel_mark" || state.RecoveryPhase == "cancel_join" || state.RecoveryPhase == "cancel_settle"
 			}
 		}
 	}
@@ -103,7 +105,7 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 	if r := state.PendingResult; r != nil && len(r.Reason) > 128 {
 		validCheckpoint = false
 	}
-	if state.DecidingAdmission != nil || len(state.Inbox) > in.MaxInbox || len(state.PendingAdmissions) > 101 || !validCheckpoint || state.RecoveringAdmissions != len(state.PendingAdmissions) || state.RecoveryDelay < 0 || state.RecoveryDelay > time.Minute {
+	if state.UnconfirmedModelInvocations != 0 || state.DecidingAdmission != nil || len(state.Inbox) > in.MaxInbox || len(state.PendingAdmissions) > 101 || !validCheckpoint || state.RecoveringAdmissions != len(state.PendingAdmissions) || state.RecoveryDelay < 0 || state.RecoveryDelay > time.Minute {
 		return temporal.NewNonRetryableApplicationError("invalid carry", "InvalidRequest", nil)
 	}
 	if err := workflow.SetQueryHandler(ctx, "state", func() (WebSessionState, error) { return state, nil }); err != nil {
@@ -237,8 +239,10 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 			return admissionErr
 		}
 		if operations >= in.ContinueAfter || workflow.GetInfo(ctx).GetContinueAsNewSuggested() {
-			// Every activity is joined here. A recovering turn carries its checkpoint,
-			// not a live activity/child. Pending handlers must still finish first.
+			// Every logical future is joined here. Remote invocation cleanup is
+			// independently gated by the durable ledger: join/cancel_join carry
+			// only IDs and cannot settle or advance until that barrier confirms.
+			// Pending handlers must still finish first.
 			if err := workflow.Await(ctx, func() bool { return workflow.AllHandlersFinished(ctx) }); err != nil {
 				return err
 			}
@@ -306,7 +310,7 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 				}
 				continue
 			}
-			state.RecoveryPhase = "cancel_settle"
+			state.RecoveryPhase = "cancel_join"
 		}
 		if state.RecoveryPhase == "start" {
 			state.Status = "running"
@@ -333,11 +337,8 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 				return ctx.Err()
 			}
 			if state.Control != nil {
-				if temporal.IsTimeoutError(err) {
-					// Timeout cannot prove remote cleanup. Never overlap replacement.
-					state.Status = "cancelling_interrupted"
-					return workflow.Await(ctx, func() bool { return false })
-				}
+				// Neither the final error nor success proves older retries joined.
+				// All outcomes pass through the same sealed invocation barrier.
 				continue
 			}
 			result := chat.TurnResult{TurnRef: ref, Status: "completed"}
@@ -346,7 +347,30 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 				result.Reason = "model_error"
 			}
 			state.PendingResult = &result
+			state.RecoveryPhase = "join"
+		}
+		if state.RecoveryPhase == "join" || state.RecoveryPhase == "cancel_join" {
+			var pending int64
+			if err := workflow.ExecuteActivity(webStorageContext(ctx), WebSealModelActivity, ref).Get(ctx, &pending); err != nil {
+				if err = recoverTurn(err); err != nil {
+					return err
+				}
+				continue
+			}
+			if pending != 0 {
+				state.UnconfirmedModelInvocations = pending
+				state.Status = "cleanup_interrupted"
+				if state.Control != nil {
+					state.Status = "cancelling_interrupted"
+				}
+				// Durable missing acknowledgments, not elapsed time. Never reset,
+				// settle, CAN into newer work, or assume an older attempt joined.
+				return workflow.Await(ctx, func() bool { return false })
+			}
 			state.RecoveryPhase = "settle"
+			if state.Control != nil {
+				state.RecoveryPhase = "cancel_settle"
+			}
 		}
 		state.Status = "persisting"
 		if state.Control != nil {

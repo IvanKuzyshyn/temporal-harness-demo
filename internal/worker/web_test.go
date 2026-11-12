@@ -28,7 +28,7 @@ func TestWebWorkerIsolationAndCleanup(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"web-chat-agents", "web-chat-llm"}, queues)
 	require.Len(t, workers[0].workflows, 1)
-	require.Len(t, workers[0].activities, 6)
+	require.Len(t, workers[0].activities, 7)
 	require.Len(t, workers[1].activities, 1)
 	require.NoError(t, r.Close())
 	require.Equal(t, 1, c.closed)

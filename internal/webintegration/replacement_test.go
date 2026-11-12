@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 	enumspb "go.temporal.io/api/enums/v1"
 	tc "go.temporal.io/sdk/client"
+	"go.temporal.io/sdk/converter"
 )
 
 func (f *fixture) control(t *testing.T, c chat.Conversation, target chat.TurnID, kind chat.CommandKind, text string) chat.SessionCommand {
@@ -245,7 +246,7 @@ func TestReplacementRealJoinPriorityRetryConflictAndStaleStop(t *testing.T) {
 		}
 	})
 	c := f.conversation(t, "qwen3.5:9b")
-	_, err := f.sdk.ExecuteWorkflow(f.ctx, tc.StartWorkflowOptions{ID: c.WorkflowID, TaskQueue: workflows.WebAgentsQueue}, workflows.WebSessionName, workflows.WebSessionInput{ConversationID: c.ID, Model: c.Model, ContinueAfter: 4})
+	run, err := f.sdk.ExecuteWorkflow(f.ctx, tc.StartWorkflowOptions{ID: c.WorkflowID, TaskQueue: workflows.WebAgentsQueue}, workflows.WebSessionName, workflows.WebSessionInput{ConversationID: c.ID, Model: c.Model, ContinueAfter: 4})
 	require.NoError(t, err)
 	first := f.command(t, c, "original target prompt")
 	_, err = f.gateway.Submit(f.ctx, first)
@@ -322,9 +323,32 @@ func TestReplacementRealJoinPriorityRetryConflictAndStaleStop(t *testing.T) {
 	var uiResult chat.AdmissionResult
 	require.NoError(t, json.Unmarshal(ui.Result, &uiResult))
 	require.Equal(t, loser, uiResult)
-	// Cancellation completion in actual history must precede the next run's work.
-	// CAN occurred at the low admission budget while the target was cancelling.
-	desc, err := f.sdk.DescribeWorkflowExecution(f.ctx, c.WorkflowID, "")
-	require.NoError(t, err)
-	require.Equal(t, enumspb.WORKFLOW_EXECUTION_STATUS_RUNNING, desc.WorkflowExecutionInfo.Status)
+	// Assert the actual run chain, rather than inferring CAN from a running
+	// latest execution. The low admission budget checkpoints the cancellation;
+	// model scheduling across the complete chain must preserve priority.
+	id, rollovers := run.GetRunID(), 0
+	var scheduled []chat.TurnID
+	for {
+		next := ""
+		it := f.sdk.GetWorkflowHistory(f.ctx, c.WorkflowID, id, false, enumspb.HISTORY_EVENT_FILTER_TYPE_ALL_EVENT)
+		for it.HasNext() {
+			event, e := it.Next()
+			require.NoError(t, e)
+			if a := event.GetWorkflowExecutionContinuedAsNewEventAttributes(); a != nil {
+				next = a.NewExecutionRunId
+				rollovers++
+			}
+			if a := event.GetActivityTaskScheduledEventAttributes(); a != nil && a.ActivityType.Name == workflows.WebModelActivity {
+				var ref chat.TurnRef
+				require.NoError(t, converter.GetDefaultDataConverter().FromPayloads(a.Input, &ref))
+				scheduled = append(scheduled, ref.TurnID)
+			}
+		}
+		if next == "" {
+			break
+		}
+		id = next
+	}
+	require.GreaterOrEqual(t, rollovers, 1)
+	require.Equal(t, []chat.TurnID{first.TurnID, replacement.TurnID, follow.TurnID}, scheduled)
 }

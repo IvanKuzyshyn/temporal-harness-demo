@@ -13,6 +13,7 @@ import (
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm/ollama"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/storage"
+	"github.com/google/uuid"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 )
@@ -68,6 +69,27 @@ func chatRequest(turn chat.Turn, recent []chat.Exchange) (llm.Request, error) {
 // or token stream is returned to Temporal. Final publication is a separate atomic
 // settlement activity, so a DB outage can never masquerade as completion.
 func (a *ChatActivities) ChatModel(ctx context.Context, ref chat.TurnRef) (retErr error) {
+	attempt := 1
+	if activity.IsActivity(ctx) {
+		attempt = int(activity.GetInfo(ctx).Attempt)
+	}
+	invocationID := uuid.NewString()
+	if err := a.Repository.RegisterChatModelInvocation(ctx, ref, invocationID, attempt); err != nil {
+		return chatStorageError(err) // No provider work without confirmed registration.
+	}
+	retErr = a.runChatModel(ctx, ref, attempt)
+	// Only normal body return proves its provider/persistence and heartbeat/
+	// shutdown goroutines joined. Do NOT defer this acknowledgment: panic or
+	// Goexit must leave durable doubt, even though they also run Go defers.
+	ack, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	if err := a.Repository.AcknowledgeChatModelCleanup(ack, ref, invocationID); err != nil && retErr == nil {
+		retErr = chatStorageError(err)
+	}
+	return retErr
+}
+
+func (a *ChatActivities) runChatModel(ctx context.Context, ref chat.TurnRef, attempt int) (retErr error) {
 	activityCtx := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	var stopping atomic.Bool
@@ -126,10 +148,6 @@ func (a *ChatActivities) ChatModel(ctx context.Context, ref chat.TurnRef) (retEr
 	req, err := chatRequest(turn, history)
 	if err != nil {
 		return err
-	}
-	attempt := 1
-	if activity.IsActivity(ctx) {
-		attempt = int(activity.GetInfo(ctx).Attempt)
 	}
 	attemptID := chat.LogicalID(ref.TurnID, fmt.Sprintf("model/0/attempt/%d", attempt))
 	cached, err := a.Repository.BeginChatModelAttempt(ctx, chat.ModelAttempt{ID: attemptID, ConversationID: ref.ConversationID, TurnID: ref.TurnID, Attempt: attempt, Status: "running"})

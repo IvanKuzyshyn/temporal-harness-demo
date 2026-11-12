@@ -22,6 +22,9 @@ type ChatRepository interface {
 	RecentChatExchanges(context.Context, chat.TurnRef) ([]chat.Exchange, error)
 	GetChatModelResult(context.Context, chat.TurnRef) (chat.ChatModelResult, error)
 	SaveChatModelResult(context.Context, chat.ChatModelResult) error
+	RegisterChatModelInvocation(context.Context, chat.TurnRef, string, int) error
+	AcknowledgeChatModelCleanup(context.Context, chat.TurnRef, string) error
+	SealChatModelInvocations(context.Context, chat.TurnRef) (int64, error)
 	BeginChatModelAttempt(context.Context, chat.ModelAttempt) (bool, error)
 	CompleteModelAttempt(context.Context, chat.ConversationID, string, string, []byte, string, string) error
 }
@@ -46,6 +49,10 @@ func (a *ChatActivities) CheckChatCommand(ctx context.Context, c chat.SessionCom
 }
 func (a *ChatActivities) RecordChatAdmission(ctx context.Context, c chat.Admission) error {
 	return chatStorageError(a.Repository.RecordChatAdmission(ctx, c))
+}
+func (a *ChatActivities) SealChatModelInvocations(ctx context.Context, r chat.TurnRef) (int64, error) {
+	pending, err := a.Repository.SealChatModelInvocations(ctx, r)
+	return pending, chatStorageError(err)
 }
 func (a *ChatActivities) MarkChatCancelling(ctx context.Context, r chat.TurnRef) error {
 	return chatStorageError(a.Repository.MarkChatCancelling(ctx, r))
