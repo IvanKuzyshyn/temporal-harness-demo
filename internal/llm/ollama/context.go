@@ -15,6 +15,9 @@ import (
 func textWire(req llm.Request) (*api.ChatRequest, error) {
 	stream := true
 	wire := &api.ChatRequest{Model: req.Model, Stream: &stream, Options: map[string]any{"num_ctx": req.ContextWindow, "num_predict": req.MaxOutputTokens}}
+	if req.Think != nil {
+		wire.Think = &api.ThinkValue{Value: *req.Think}
+	}
 	for _, msg := range req.Messages {
 		out := api.Message{Role: msg.Role, Content: msg.Content, ToolCallID: msg.ToolCallID, ToolName: msg.ToolName}
 		for _, call := range msg.ToolCalls {

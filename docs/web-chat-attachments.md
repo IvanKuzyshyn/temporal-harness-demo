@@ -1,6 +1,6 @@
 # Durable attachments (Task8 foundation, current schema8)
 
-Task10 adds [bounded context](web-chat-context.md) metadata without changing original-byte storage or attachment authorization.
+Task10 adds [bounded context](web-chat-context.md) metadata without changing original-byte storage or attachment authorization. Up to four already-authorized persisted results can be retained independently of lossy summaries, with exact instruction/scope, source hashes and partial/error/truncation metadata. This neither reopens originals nor permits new analysis; immutable recorded output is not guaranteed factual truth.
 
 Task9 supersedes the extraction-only runtime seam below with [scoped document children](web-chat-analysis.md), action-specific summaries, authorized raster preparation, and exact user-instruction binding. Global arbitrary-image inference remains unqualified; the separately [source-bounded narrow image profile](web-chat-image-profile.md) enables authorized production analysis with explicit reductions/rejections. The original storage/parser guarantees below remain in force.
 

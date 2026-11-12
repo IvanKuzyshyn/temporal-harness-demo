@@ -163,6 +163,22 @@ func (b *Builder) Build(ctx context.Context, c chat.ConversationID, t chat.TurnI
 	if err != nil {
 		return ModelContext{}, err
 	}
+	remaining := budget.Excerpts
+	for _, m := range b.Mandatory.Messages {
+		if m.Role == "tool" {
+			var result chat.WebToolResult
+			if json.Unmarshal([]byte(m.Content), &result) == nil {
+				remaining -= len(result.Text)
+			} else {
+				remaining -= len(m.Content)
+			}
+		}
+	}
+	if remaining < 0 {
+		remaining = 0
+	}
+	var evidence *chat.ContextEvidenceCoverage
+	req, evidence = retainEvidence(req, state, &remaining, budget)
 	var count int
 	if summary != nil {
 		meta := summaryMetadata{}
@@ -181,20 +197,6 @@ func (b *Builder) Build(ctx context.Context, c chat.ConversationID, t chat.TurnI
 			failure = "summary_omitted_for_budget"
 		}
 	}
-	remaining := budget.Excerpts
-	for _, m := range b.Mandatory.Messages {
-		if m.Role == "tool" {
-			var result chat.WebToolResult
-			if json.Unmarshal([]byte(m.Content), &result) == nil {
-				remaining -= len(result.Text)
-			} else {
-				remaining -= len(m.Content)
-			}
-		}
-	}
-	if remaining < 0 {
-		remaining = 0
-	}
 	var recent []chat.Exchange
 	for _, e := range state.Recent {
 		if summary == nil || e.Sequence > summary.CoveredSequence {
@@ -209,6 +211,7 @@ func (b *Builder) Build(ctx context.Context, c chat.ConversationID, t chat.TurnI
 	if out.Coverage.OmittedExchanges < 0 {
 		return out, invalid("inconsistent history coverage")
 	}
+	out.Coverage.Evidence = evidence
 	out.Coverage.SourceLimited = true
 	out.Coverage.SummaryFailure = failure
 	if summary != nil {

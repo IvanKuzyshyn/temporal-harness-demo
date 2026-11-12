@@ -111,7 +111,7 @@ func (m *contextLiveModel) Chat(ctx context.Context, req llm.Request, emit func(
 	if err != nil {
 		errorText = err.Error()
 	}
-	recordErr := m.record(map[string]any{"kind": "provider_call", "model": req.Model, "phase": phase, "latencyMs": time.Since(start).Milliseconds(), "accounting": admitted.Accounting, "transportSucceeded": err == nil, "error": errorText, "output": res.Message.Content, "tokens": res.Tokens, "doneReason": res.DoneReason, "outputExhausted": res.OutputExhausted(req.MaxOutputTokens), "hostRSSBytesBefore": before, "hostRSSBytesAfter": after, "hostRSSBytesSampledPeak": peak, "resourceLimit": "read-only process RSS samples; not GPU admission or reclamation proof", "imageAdmissionQualified": false})
+	recordErr := m.record(map[string]any{"kind": "provider_call", "model": req.Model, "phase": phase, "request": req, "latencyMs": time.Since(start).Milliseconds(), "accounting": admitted.Accounting, "transportSucceeded": err == nil, "error": errorText, "output": res.Message.Content, "tokens": res.Tokens, "doneReason": res.DoneReason, "outputExhausted": res.OutputExhausted(req.MaxOutputTokens), "hostRSSBytesBefore": before, "hostRSSBytesAfter": after, "hostRSSBytesSampledPeak": peak, "resourceLimit": "read-only process RSS samples; not GPU admission or reclamation proof", "imageAdmissionQualified": false})
 	if err == nil {
 		err = recordErr
 	}
@@ -149,6 +149,10 @@ func TestContextLiveModels(t *testing.T) {
 				_, e := f.gateway.Submit(f.ctx, cmd)
 				require.NoError(t, e)
 				f.completed(t, cmd)
+				page, e := f.repo.ListMessages(f.ctx, c.ID, "", 1)
+				require.NoError(t, e)
+				require.Len(t, page.Messages, 1)
+				require.NoError(t, m.record(map[string]any{"kind": "completed_turn", "model": model, "turnId": cmd.TurnID, "text": page.Messages[0].Text, "context": page.Messages[0].Context}))
 				return cmd
 			}
 			send("My secret phrase is blue kite. Remember it. Reply only Noted. Do not use tools.")

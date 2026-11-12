@@ -97,6 +97,12 @@ func (r *Repository) LoadContext(ctx context.Context, ref chat.TurnRef) (out cha
 				if len(p.AttachmentIDs) > 0 || p.ReplacementTarget != nil {
 					i.exchange.User += "\nPersisted prompt provenance (IDs only, no original access): " + string(provenance)
 				}
+				// Final requests retain evidence independently below, not once in
+				// each recent exchange and again beside the summary.
+				if recent {
+					out.Recent = append(out.Recent, i.exchange)
+					continue
+				}
 				var n int
 				if e = tx.QueryRow(ctx, `SELECT count(*) FROM tool_calls WHERE conversation_id=$1 AND turn_id=$2 AND status='completed' AND authorized_scope IS NOT NULL`, ref.ConversationID, i.turn).Scan(&n); e != nil {
 					return e
@@ -123,14 +129,10 @@ func (r *Repository) LoadContext(ctx context.Context, ref chat.TurnRef) (out cha
 					return e
 				}
 				i.exchange.OmittedResults = n - len(i.exchange.Results)
-				if recent {
-					out.Recent = append(out.Recent, i.exchange)
-				} else {
-					out.Older = append(out.Older, i.exchange)
-				}
+				out.Older = append(out.Older, i.exchange)
 			}
 		}
-		return nil
+		return loadContextEvidence(ctx, tx, ref, &out)
 	})
 	return
 }

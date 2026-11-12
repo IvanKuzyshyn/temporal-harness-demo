@@ -28,12 +28,18 @@ func TestBoundedTextWireAndExhaustion(t *testing.T) {
 	defer server.Close()
 	m, err := New(server.URL)
 	require.NoError(t, err)
-	res, err := m.Chat(context.Background(), llm.Request{Bounded: true, Model: "qwen3.5:9b", ContextWindow: 16384, MaxOutputTokens: 2000, Messages: []llm.Message{{Role: "user", Content: "hello"}}}, nil)
+	req := llm.Request{Bounded: true, Model: "qwen3.5:9b", ContextWindow: 16384, MaxOutputTokens: 2000, Messages: []llm.Message{{Role: "user", Content: "hello"}}}
+	res, err := m.Chat(context.Background(), req, nil)
 	require.NoError(t, err)
 	require.Equal(t, false, wire["truncate"])
 	require.Equal(t, false, wire["shift"])
 	require.Equal(t, "length", res.DoneReason)
 	require.True(t, res.OutputExhausted(2000))
+	require.Nil(t, wire["think"], "ordinary callers retain provider default")
+	require.NoError(t, json.Unmarshal([]byte(`{"Think":false}`), &req))
+	_, err = m.Chat(context.Background(), req, nil)
+	require.NoError(t, err)
+	require.Equal(t, false, wire["think"], "explicit summary no-reasoning request must reach provider")
 }
 func TestBoundedUnicodeRenderedAdmission(t *testing.T) {
 	// U+0344 canonically decomposes into two combining marks (4 UTF-8 bytes),

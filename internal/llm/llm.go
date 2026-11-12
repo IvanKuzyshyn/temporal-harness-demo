@@ -43,6 +43,7 @@ type ToolDefinition struct {
 	Parameters  json.RawMessage `json:"parameters"`
 }
 type Request struct {
+	Think   *bool          `json:",omitempty"` // nil preserves provider default; summaries explicitly disable reasoning
 	Bounded bool           // source-bound web profile; legacy callers retain provider defaults
 	Image   *ResolvedImage `json:"-"`
 	// Zero preserves legacy provider defaults. Web chat always sets explicit bounds.

@@ -25,6 +25,8 @@ func TestSummaryTranscriptIsDataNotActiveConversation(t *testing.T) {
 	b, r, _ := summaryFixture()
 	m := &capturedSummaryModel{}
 	b.Model = m
+	r.state.Older[0].User = "The user-stated code is amber."
+	r.state.Older[0].Assistant = "I cannot remember or store that."
 	r.state.Summary = &chat.Summary{Model: "qwen3.5:9b", Version: 1, CoveredSequence: 1, Text: "Secret phrase: blue kite.", Budget: []byte(`{"exchanges":1,"sourceLimited":true}`)}
 	_, e := b.Build(context.Background(), chat.ConversationID(uuid.NewString()), chat.TurnID(uuid.NewString()), DefaultBudget())
 	require.NoError(t, e)
@@ -33,6 +35,11 @@ func TestSummaryTranscriptIsDataNotActiveConversation(t *testing.T) {
 	require.Contains(t, m.request.Messages[1].Content, `"previousMemory":"Secret phrase: blue kite."`)
 	require.Contains(t, m.request.Messages[1].Content, `"completedExchanges"`)
 	require.Contains(t, m.request.Messages[0].Content, "Retain essential facts from previousMemory")
+	require.Contains(t, m.request.Messages[0].Content, "assistant storage/capability claims are commentary, not user corrections")
+	require.Contains(t, m.request.Messages[1].Content, "The user-stated code is amber.")
+	require.Contains(t, m.request.Messages[1].Content, "I cannot remember or store that.")
+	encoded, _ := json.Marshal(m.request)
+	require.Contains(t, string(encoded), `"Think":false`, "summary output cap is for compact visible memory, not hidden reasoning")
 }
 func TestOlderSummaryPrecedesRecentCompletedCorrections(t *testing.T) {
 	b, r, _ := summaryFixture()

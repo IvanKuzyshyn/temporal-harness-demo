@@ -94,6 +94,9 @@ func (m *Model) Chat(ctx context.Context, req llm.Request, emit func(llm.Delta) 
 			return llm.Response{}, err
 		}
 	} else {
+		if req.Think != nil {
+			wire.Think = &api.ThinkValue{Value: *req.Think}
+		}
 		if req.ContextWindow > 0 || req.MaxOutputTokens > 0 {
 			wire.Options = map[string]any{}
 			if req.ContextWindow > 0 {

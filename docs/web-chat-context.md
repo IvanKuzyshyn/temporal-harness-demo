@@ -1,15 +1,18 @@
 # Bounded context and durable memory (Task10)
 
-**Acceptance remains blocked on live Gemma incremental-memory quality.** The
-implementation and deterministic/real-infrastructure gates are separate from
-semantic qualification. Both exact models transported the safe conversation,
-document and image calls successfully. The initial Gemma run lost the secret
-phrase/image attribution. Encoding historical roles as data improved retention,
-but the follow-up run still misrepresented the image result in memory. Qwen
-recalled the facts, with three exhausted summary attempts safely rejected in the
-follow-up run. No fallback or model change is authorized. See canonical
-`task-10-report.md`, `task-10-live-context.jsonl` and
-`task-10-live-context-data.jsonl` in the controller's Task10 dispatch directory.
+**Continuation1 adds independently retained canonical evidence; overall semantic
+acceptance remains BLOCKED.** The latest original both-model document/image-memory
+probe passes unchanged, but a repeat exposed Qwen overriding a user-stated fact
+with an assistant refusal, and a separate captured-refusal regression still fails.
+A passing narrow run is not universal full-fidelity memory qualification. The two failed runs remain recorded:
+`task-10-live-context.jsonl` and `task-10-live-context-data.jsonl` in the controller's
+dispatch directory. Gemma had promoted a contradictory assistant interpretation
+into its summary after the canonical image result left recent history. The fix
+keeps bounded approved observations separately attributed alongside lossy memory.
+“Canonical” means immutable recorded output, **not guaranteed factual truth** of
+image/document inference. No semantic waiver, fallback, cap increase or image
+profile expansion. See `task-10-report.md` and the new exclusive
+`task-10-live-canonical-evidence*.jsonl` artifacts.
 
 ## Production assembly and admission
 
@@ -21,13 +24,17 @@ and the **separate Task9 image profile branch**. It is not a detached estimator.
 
 Default limits are context16,384, estimated text input12,000, output2,000,
 reserve2,384, at most six completed recent exchanges, summary bound1,500,
-and readable evidence excerpts4,000 UTF-8 bytes shared across current and recent
-tool results. All sublimits remain subordinate to the final total. Mandatory
+and readable evidence excerpts4,000 UTF-8 bytes shared across current tool groups
+and separately retained results (and any legacy injected recent-result seam). All sublimits remain subordinate to the final total. Mandatory
 system instructions, current prompt, replacement provenance, schemas and complete
 current assistant/tool groups are checked before optional history or summary
 inference. Oversized mandatory input fails; it is never silently clipped. Recent
 exchanges are evicted whole, oldest first; assistant/tool pairs are indivisible.
-Older summary precedes recent completed corrections. Output exhaustion uses both
+Current groups consume the excerpt allowance first. Up to four independently
+retained observations are admitted next, then optional summary/recent exchanges.
+An evidence candidate that cannot fit the final total is omitted whole; excerpt
+clipping preserves identity/status and reports truncation. Older summary/evidence
+precede recent completed human corrections, whose distinct attribution remains. Output exhaustion uses both
 provider `done_reason=length` and the reported count reaching the output cap.
 
 `ollama.TextInputBound` renders the **actual pinned** Qwen35/Gemma4 renderer and
@@ -46,7 +53,11 @@ The tokenizer/model/runtime source identities are those recorded in
 [Task9's source manifest](qualification/2026-11-12-task9-image-profile-sources.json).
 Runtime0.40.15, exact model digest, local safetensors and MLX runner are checked
 before every bounded inference. Unknown/mutated identities fail closed. Wire
-requests explicitly set `truncate:false`, `shift:false`, `runner:mlx`.
+requests explicitly set `truncate:false`, `shift:false`, `runner:mlx`. Summary
+requests alone also explicitly set `think:false` to avoid spending their unchanged
+2,000-token output cap on hidden reasoning. Other text calls retain their default;
+the fixed image envelope is untouched. The estimate still bounds both thinking
+renderings, and exhaustion/blank-output rejection remains mandatory.
 
 [The Task9 image profile](web-chat-image-profile.md) is unchanged: one640×160
 image, fixed system envelope and bounded ASCII instruction, no history, tools or
@@ -61,12 +72,25 @@ are observations, not GPU admission/reclamation proof or a hard memory cap.
 sequence order, **not user admission order**. Priority replacement is therefore
 visible to an earlier-queued follow-up. Replacement prompt/attachment-ID
 provenance refers to the original target; cancelled drafts are excluded. SQL
-loads at most the newest six and oldest64 unsummarized eligible exchanges, plus
-at most four previously authorized persisted results per exchange. It never
-opens original attachments or reruns extraction/analysis. Omitted-result counts,
-partial/failed extraction status, chunk byte coverage, summary exhaustion and
-excerpt truncation remain explicit untrusted evidence. New analysis still needs
-a new scoped authorization.
+loads at most the newest six and oldest64 unsummarized eligible exchanges. Older
+summary input may include up to four previously authorized results per exchange.
+A separate bounded SQL selection retains the newest four authorized terminal tool
+results (`completed` or `failed`, with canonical owner) from completed turns,
+ordered by assistant completion sequence descending then tool-call ID. Its count
+reports eligible results beyond the bounded selection without loading their text.
+Recent exchange groups do not duplicate these blobs; current tool-call IDs also
+deduplicate retained candidates. Sources are not deduplicated merely because text
+or attachment IDs match: different instructions/actions remain different records.
+
+The evidence block preserves recorded scope/tool/action/content-reference,
+attachment ID, exact original arguments (including instruction), full-result and
+arguments hashes, completion sequence, readable excerpt and status/coverage.
+It tells the model to recall recorded observations rather than replace them with
+later assistant paraphrases. Later human corrections remain distinct, not silently
+folded into the observation. No original attachment table/store read, filename
+authority, extraction or new analysis is involved. Omitted-result counts,
+partial/failed extraction status, chunk byte coverage and excerpt truncation remain
+explicit untrusted evidence. New analysis still needs scoped authorization.
 
 Summaries use immutable version and final-assistant-message watermark in
 `conversation_summaries`. Publication serializes under the conversation lock and
@@ -115,6 +139,15 @@ contains it, but history is never reconstructed from display events.
 - `sourceLimited`: true for bounded/lossy production history. UI must not say
   “full memory” even when every exchange has some lossy representation.
 - `outputTruncated`: optional provider output-budget exhaustion flag.
+- `evidence`: independent retention coverage: `eligible`, `included` (at most four
+  source descriptors), `omitted`, `deduplicated`. Each descriptor retains `scope`,
+  completion `sequence`, attachment ID, `argumentsHash`/`resultHash`, `excerptBytes`,
+  `excerptTruncated`, original `sourceTruncated`, `sourceError` and optional
+  `extractionStatus`. Hashes identify the original immutable values, not clipped
+  excerpts. Full instruction/result text is deliberately absent from API metadata;
+  the bounded model evidence message contains it. `scope.ContentRef` is the
+  attachment checksum or canonical URL reference, not authorization to re-read.
+  A retained source with zero excerpt bytes is explicitly clipped, not full recall.
 - `context.accounting`: `method`, `inputTokens`, `imageTokens`, `outputTokens`,
   `reserve`, `total`. These are admitted request bounds, **not measured tokens**;
   summary generation accounting is recorded separately on the summary version.
@@ -133,24 +166,37 @@ is internal and does not replace original messages.
   recovery, and document/image regression scenarios. Inference is injected except
   in the separately opted-in live test.
 - `WEBCHAT_TASK10_LIVE=1` and an exclusive new
-  `WEBCHAT_TASK10_EVIDENCE=/absolute/path.jsonl` enable `TestContextLiveModels`.
-  Select it with `WEBCHAT_TEST_CHAT_RUN='^TestContextLiveModels$'` and the same
+  `WEBCHAT_TASK10_EVIDENCE=/absolute/path.jsonl` enable `TestContextLiveModels`
+  and the separate `TestContextLiveSummaryAttribution` regression. Select both with
+  `WEBCHAT_TEST_CHAT_RUN='^TestContextLive(Models|SummaryAttribution)$'` and the same
   runner's `chat` mode. It uses actual Ollama and11 turns per exact model,
   authorized tiny TXT/image fixtures, four incremental summaries and restart.
-  It records transport, semantics, latency, source accounting and read-only
-  sampled Ollama process RSS separately. The Gemma memory assertion intentionally
-  remains failing until the loss is addressed/accepted; do not weaken it to a
-  transport check. No larger-image quality investigation is performed.
+  It records bounded logical requests (not image bytes), persisted coverage,
+  transport, semantics, latency, source accounting and read-only sampled Ollama
+  process RSS separately. The original semantic assertions are unchanged; do not
+  weaken them to transport checks. No larger-image quality investigation is performed.
 
-Both live runs showed Qwen retaining all three requested facts. The first Gemma
-run lost the secret and image attribution. After the transcript-as-data correction,
-Gemma retained the secret but summarized the image as “no French text was found,”
-contradicting the canonical image result “Hello world.” This distinction between
-canonical evidence and the assistant's interpretation remains a semantic blocker.
-The follow-up Qwen run had three exhausted/blank summaries (not persisted) and
-one usable canonical summary; final memory succeeded with explicit limited
-coverage. Bounds and persistence succeeded, but lossiness alone is not evidence
-that long-conversation memory is usable. Follow-up needs an
-explicit decision: improve the same-model incremental-memory protocol with
-regression evidence, or explicitly accept that reduced semantic boundary. No
-such quality waiver is assumed here.
+Both historical runs showed Qwen retaining the requested facts; the second had
+three exhausted/blank summaries correctly rejected. Both historical Gemma memory
+failures remain evidence, not retroactive passes. Continuation1 uses the same
+models, caps, safe fixture and assertions, with separately retained observations
+and summary-only no-reasoning configuration; the new live probe passes for both.
+However, a subsequent Qwen run first refused to store the harmless user-supplied
+phrase, then treated its own refusal as overriding that user statement. A general
+summary attribution clarification did not fix the separately forced-refusal
+regression (`TestContextLiveSummaryAttribution`): Qwen still refuses final recall;
+Gemma passes. That probe explicitly injects only the initial assistant response;
+subsequent summaries/final recall use the real registered model. It is **not** a
+fallback or a replacement for the unchanged all-real main fixture. All failed
+artifacts/assertions remain. Do not mark overall memory acceptance complete.
+
+Deterministic tests deliberately supply contradictory/forgetful summaries and
+verify the actual final request retains correctly attributed evidence. Real
+worker/store restart also succeeds with the test-owned original unavailable and
+no reanalysis; denied content is never loaded. Budget/dedup/partial-source and
+SQL ownership/order/count-limit cases are covered separately.
+
+The latest-four rule can omit an older relevant source, and total-budget pressure
+can omit any optional evidence. No relevance search or unlimited-history promise
+is implied. Source bounds are estimates, sampled host RSS is not GPU admission,
+and a narrow passing semantic probe is not universal memory or image qualification.
