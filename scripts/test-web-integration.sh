@@ -112,7 +112,7 @@ PY
   echo "Actual isolated Temporal address=$WEBCHAT_TEST_TEMPORAL_ADDRESS pid=$temporal_pid"
   export WEBCHAT_TEST_RESTART_REQUEST="$work/restart.request"
   default_run=.
-  if [[ "$mode" == replacement ]]; then default_run='Test(Replacement|ClosedUnreceiptedControl)'; fi
+  if [[ "$mode" == replacement ]]; then default_run='Test(Replacement|ClosedUnreceiptedControl|OrdinaryHardWorkerDeath)'; fi
   mise exec -- go test -p 1 -count=1 -race -tags integration -v -timeout 15m -run "${WEBCHAT_TEST_CHAT_RUN:-$default_run}" ./internal/webintegration/... &
   test_pid=$!
   # Only this parent restarts its owned children/Compose project. Tests cannot

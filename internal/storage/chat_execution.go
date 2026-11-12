@@ -206,7 +206,8 @@ func (r *Repository) PersistTurnResult(ctx context.Context, a chat.TurnResult) e
 	}
 	return r.withConversation(ctx, a.ConversationID, func(tx pgx.Tx) error {
 		var old *string
-		if err := tx.QueryRow(ctx, `SELECT settlement_digest FROM turns WHERE conversation_id=$1 AND id=$2 FOR UPDATE`, a.ConversationID, a.TurnID).Scan(&old); err != nil {
+		var status string
+		if err := tx.QueryRow(ctx, `SELECT settlement_digest,status FROM turns WHERE conversation_id=$1 AND id=$2 FOR UPDATE`, a.ConversationID, a.TurnID).Scan(&old, &status); err != nil {
 			return err
 		}
 		if old != nil {
@@ -215,14 +216,16 @@ func (r *Repository) PersistTurnResult(ctx context.Context, a chat.TurnResult) e
 			}
 			return nil
 		}
-		// Defense in depth: no terminal result may outrun a remote body, even
-		// if a caller bypasses the workflow's explicit cleanup activity. This
-		// lock also serializes the closing gate with every new registration.
+		// Accepted-control settlement requires all body acknowledgments, even
+		// if a caller tries to bypass cancellation with completed/failed. Normal
+		// retry-safe finalization may retain missing acks after hard worker loss;
+		// canonical attempt/result fences protect logical output, not cleanup.
+		// This lock serializes the closing gate with every new registration.
 		var pending bool
 		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM chat_model_invocations WHERE conversation_id=$1 AND turn_id=$2 AND cleanup_confirmed_at IS NULL)`, a.ConversationID, a.TurnID).Scan(&pending); err != nil {
 			return err
 		}
-		if pending {
+		if pending && (a.Status == "cancelled" || status == "cancelling") {
 			return ErrChatCleanupUnconfirmed
 		}
 		if _, err := tx.Exec(ctx, `UPDATE turns SET model_invocations_closed=true WHERE conversation_id=$1 AND id=$2`, a.ConversationID, a.TurnID); err != nil {

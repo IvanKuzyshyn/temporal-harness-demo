@@ -11,8 +11,47 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/converter"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
+
+func TestWebOrdinaryMissingCleanupAckDoesNotBlockFinalizationOrFIFO(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		name := "completed"
+		if failed {
+			name = "failed"
+		}
+		t.Run(name, func(t *testing.T) {
+			e, c := setupWeb(t)
+			target, follow := webCommand(c, 1), webCommand(c, 2)
+			e.RegisterActivityWithOptions(func(_ context.Context, ref chat.TurnRef) error {
+				if failed && ref.TurnID == target.TurnID {
+					return temporal.NewNonRetryableApplicationError("model failed", "InvalidRequest", nil)
+				}
+				return nil
+			}, activity.RegisterOptions{Name: w.WebModelActivity})
+			e.RegisterActivityWithOptions(func(_ context.Context, ref chat.TurnRef) (int64, error) {
+				if ref.TurnID == target.TurnID {
+					return 1, nil
+				}
+				return 0, nil
+			}, activity.RegisterOptions{Name: w.WebSealModelActivity, DisableAlreadyRegisteredCheck: true})
+			var results []chat.TurnResult
+			e.RegisterActivityWithOptions(func(_ context.Context, result chat.TurnResult) error { results = append(results, result); return nil }, activity.RegisterOptions{Name: w.WebPersistTurnActivity})
+			e.RegisterDelayedCallback(func() {
+				e.UpdateWorkflowNoRejection("message", string(target.CommandID), t, target)
+				e.UpdateWorkflowNoRejection("message", string(follow.CommandID), t, follow)
+			}, 0)
+			e.RegisterDelayedCallback(func() { e.CancelWorkflow() }, time.Minute)
+			e.ExecuteWorkflow(w.WebChatSessionWorkflow, w.WebSessionInput{ConversationID: c})
+			require.Len(t, results, 2)
+			require.Equal(t, target.TurnID, results[0].TurnID)
+			require.Equal(t, name, results[0].Status)
+			require.Equal(t, follow.TurnID, results[1].TurnID)
+			require.Equal(t, "completed", results[1].Status)
+		})
+	}
+}
 
 func TestWebCleanupBarrierSurvivesStorageExhaustionAndContinueAsNew(t *testing.T) {
 	e, c := setupWeb(t)

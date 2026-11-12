@@ -140,10 +140,11 @@ intent/admission, not completed cancellation. Normal sequence order is untouched
 The turn-local cancellation context interrupts model/start activities and start
 recovery backoff. Every logical activity future is joined before CAN, but a
 logical future (including success/cancellation) does **not** join older timed-out
-remote attempts. A separate durable all-invocation barrier gates settlement and
-all newer turns. Disconnected workflow context is used only to await futures,
-not to run unbounded persistence after workflow cancellation. Cancellation projection
-writes use normal workflow context and bounded storage batches. The admission
+remote attempts. For an accepted stop/replacement, a separate durable all-invocation
+barrier gates target cancellation settlement and all newer turns. Disconnected
+workflow context is used only to await futures, not to run unbounded persistence
+after workflow cancellation. Cancellation projection writes use normal workflow
+context and bounded storage batches. The admission
 transaction projects `cancelling`; `MarkChatCancelling` is idempotent, and
 `PersistTurnResult(cancelled)` atomically settles the target, running attempts,
 optional cached draft and `turn.cancelled` event. Receipt handlers finish or
@@ -162,19 +163,28 @@ leave the invocation unacknowledged; acknowledgment is not a Go defer. Attempt s
 publisher fencing, worker concurrency, and elapsed time are never cleanup proof.
 
 `SealChatModelInvocations` closes admission and counts all missing acknowledgments.
-Only sealed zero allows terminal settlement and newer inference. Any positive
-count parks `cancelling_interrupted` (or `cleanup_interrupted` after ordinary
-model completion/failure), exposes `UnconfirmedModelInvocations`, and leaves SQL
-nonterminal. Replacement/FIFO do not start, even after a late acknowledgment.
-Operator investigation is required; no automatic reset/reuse is attempted.
-A lost acknowledgment may conservatively park work whose body actually returned.
-Worker/server restart cannot erase the ledger. The current runtime has no document
-children; Task9 must add their cleanup evidence to the same turn-local barrier.
-These tests prove application-body cleanup with fake inference, not live-provider
-server-side resource reclamation.
+For an accepted stop/replacement, only sealed zero allows target settlement and
+newer inference. A positive count parks `cancelling_interrupted`, exposes
+`UnconfirmedModelInvocations`, and leaves SQL nonterminal. Replacement/FIFO do not
+start, even after a late acknowledgment. Operator investigation is required; no
+automatic reset/reuse is attempted. A lost acknowledgment may conservatively park
+controlled work whose body actually returned. Worker/server restart cannot erase
+the ledger. The current runtime has no document children; Task9 must add their
+cleanup evidence to the same turn-local barrier.
+
+**Ordinary completion/failure without an accepted control is different.** It seals
+new registrations but does not require missing acknowledgments to arrive. A hard
+worker death or lost cleanup write therefore cannot permanently prevent a valid
+Temporal retry from publishing the canonical result or processing normal follow-ups.
+The missing rows remain unacknowledged; completion is not evidence of body cleanup.
+Task4's immutable candidate and latest-attempt fences prevent stale bodies from
+changing logical history, including after terminal settlement. Ordinary retries
+may still overlap stale remote bodies, as in Task4; accepted intervention is
+stricter for its exact target. Neither path claims physical provider/GPU reclamation.
+Tests use fake inference with real application-body and server/SQL lifecycle evidence.
 
 Completion linearizes when the returned model result enters finalization (`join`,
-then `settle` after the sealed barrier).
+then `settle` after sealing registrations).
 Controls racing with that boundary are rejected `stale_target`, including while
 that settlement is recovering: its SQL may already be committed with a lost
 acknowledgment, so a control cannot safely revoke it. Stop during **start**
@@ -183,9 +193,10 @@ recovers in bounded batches and may CAN with `cancel_mark`/`cancel_join`/`cancel
 the claimed command identity, target/replacement IDs and intended cancellation
 reason. No live child/activity, text, attachment content or growing receipt list
 is carried. A failed seal activity can recover/CAN with `join`/`cancel_join`
-metadata; this is explicitly **not** a cleanup acknowledgment and cannot advance
-the turn. The resumed workflow must obtain sealed zero first. Once a positive
-missing count is observed, the workflow parks rather than rolling over.
+metadata; this is explicitly **not** a cleanup acknowledgment. A resumed ordinary
+finalization must seal registrations before settlement; a resumed controlled
+finalization must additionally obtain sealed zero. A positive missing count for
+an accepted control parks the workflow rather than rolling over.
 Query-only `DecidingAdmission` exposes one in-flight receipt decision
 and must be empty on CAN; exhausted writes move to existing bounded checkpoints.
 
@@ -317,10 +328,16 @@ holds attempt1 after timeout on one real model worker, cancels attempt2 on anoth
 (or cancels during retry backoff), and verifies no terminal cancellation/FIFO/
 replacement while the older body is unacknowledged. It also restarts the workflow
 worker while the old provider remains held. The normal replacement test asserts
-the actual CAN run chain and scheduled-turn order. Inference is explicitly fake;
-cancellation, histories,
-SQL, server processes and restart are real. SDK unit tests alone are not join
-proof. `storage` and `api` runner modes are preserved. `chat` includes them and starts a
+the actual CAN run chain and scheduled-turn order.
+`TestOrdinaryHardWorkerDeathRecoversCanonicalResponseAndFollowUp` launches a dedicated
+model worker subprocess, verifies durable invocation registration, sends SIGKILL
+only to that owned process, and verifies its signal exit. A fresh SDK model worker
+then executes Temporal's retry: one canonical answer/event and the queued normal
+follow-up complete while the old missing acknowledgment remains honest. Late stale
+publication, registration and changed settlement are rejected. This is not a
+graceful worker close. Inference is explicitly fake; cancellation, histories, SQL,
+worker-process death, server processes and restart are real. SDK unit tests alone
+are not join proof. `storage` and `api` runner modes are preserved. `chat` includes them and starts a
 pinned real Temporal dev server as an owned child on unique loopback ports, with
 its own SQLite persistence; Postgres is an independent UUID Compose project.
 Mock inference is explicit and does not contact ambient model services. Live

@@ -28,6 +28,10 @@ func TestChatCleanupDoesNotInferAcknowledgmentFromPublisherStatus(t *testing.T) 
 	require.Equal(t, "interrupted", reason)
 	require.NoError(t, r.SaveChatModelResult(ctx, chat.ChatModelResult{TurnRef: ref, Text: "latest candidate", AttemptID: newer}))
 	require.NoError(t, r.AcknowledgeChatModelCleanup(ctx, ref, newer))
+	// This is an accepted-control finalization, not ordinary retry recovery.
+	// Its cancelling projection must retain the strict all-invocation barrier
+	// even if a caller incorrectly attempts a completed/failed settlement.
+	require.NoError(t, r.MarkChatCancelling(ctx, ref))
 	pending, err := r.SealChatModelInvocations(ctx, ref)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, pending)
@@ -44,6 +48,40 @@ func TestChatCleanupDoesNotInferAcknowledgmentFromPublisherStatus(t *testing.T) 
 	require.Zero(t, pending)
 	require.ErrorIs(t, r.RegisterChatModelInvocation(ctx, ref, uuid.NewString(), 3), storage.ErrStaleChatAttempt)
 	require.NoError(t, r.PersistTurnResult(ctx, chat.TurnResult{TurnRef: ref, Status: "cancelled", Reason: "replaced"}))
+}
+
+func TestChatCleanupOrdinaryFinalizationPreservesMissingAcknowledgments(t *testing.T) {
+	for _, status := range []string{"completed", "failed"} {
+		t.Run(status, func(t *testing.T) {
+			r, p := database(t)
+			c := conversation(t, r)
+			rc, err := r.AcceptCommand(ctx, input(c.ID))
+			require.NoError(t, err)
+			ref := chat.TurnRef{ConversationID: c.ID, TurnID: rc.TurnID}
+			old, newer := uuid.NewString(), uuid.NewString()
+			for n, id := range []string{old, newer} {
+				require.NoError(t, r.RegisterChatModelInvocation(ctx, ref, id, n+1))
+				require.False(t, beginChatAttempt(t, r, chat.ModelAttempt{ID: id, ConversationID: c.ID, TurnID: rc.TurnID, Attempt: n + 1, Status: "running"}))
+			}
+			require.NoError(t, r.AcknowledgeChatModelCleanup(ctx, ref, newer))
+			if status == "completed" {
+				require.NoError(t, r.SaveChatModelResult(ctx, chat.ChatModelResult{TurnRef: ref, Text: "canonical retry", AttemptID: newer}))
+			}
+			result := chat.TurnResult{TurnRef: ref, Status: status}
+			require.NoError(t, r.PersistTurnResult(ctx, result), "ordinary finalization must not require missing cleanup ack")
+			require.NoError(t, r.PersistTurnResult(ctx, result), "identical settlement stays idempotent")
+			var missing int
+			require.NoError(t, p.QueryRow(ctx, "SELECT count(*) FROM chat_model_invocations WHERE id=$1 AND cleanup_confirmed_at IS NULL", old).Scan(&missing))
+			require.Equal(t, 1, missing, "logical completion is not fabricated physical cleanup evidence")
+			require.ErrorIs(t, r.RegisterChatModelInvocation(ctx, ref, uuid.NewString(), 3), storage.ErrStaleChatAttempt)
+			late := r.SaveChatModelResult(ctx, chat.ChatModelResult{TurnRef: ref, Text: "stale output", AttemptID: old})
+			if status == "completed" {
+				require.ErrorIs(t, late, storage.ErrConflict)
+			} else {
+				require.ErrorIs(t, late, storage.ErrStaleChatAttempt)
+			}
+		})
+	}
 }
 
 func TestChatCleanupTracksDuplicateInvocationAndBindsAcknowledgment(t *testing.T) {

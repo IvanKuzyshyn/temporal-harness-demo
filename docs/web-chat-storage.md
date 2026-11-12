@@ -139,8 +139,14 @@ admission permanently and returns the count of missing acknowledgments. These
 transactions share the conversation lock. A racing registration is therefore
 visible or rejected, and sealed zero is stable. Neither `model_steps` failure nor
 a saved canonical candidate is acknowledgment. `PersistTurnResult` independently
-rejects any terminal outcome with `ErrChatCleanupUnconfirmed` while a row remains
-unacknowledged, and seals admission atomically on success.
+rejects settlement with `ErrChatCleanupUnconfirmed` while a row remains unacknowledged
+if the requested outcome is `cancelled` **or** the target is already `cancelling`.
+Thus a caller cannot bypass a controlled target's barrier by requesting completed/
+failed. Ordinary completed/failed outcomes may settle despite missing cleanup
+acknowledgments, retaining Task4's hard-worker-loss recovery and canonical fencing.
+All successful settlements seal admission atomically. Rows with missing
+acknowledgments are not acknowledged or deleted by settlement; ordinary logical
+completion is not cleanup proof. There is no schema change for this distinction.
 
 Apply migration4 with old API/workers stopped; do not hot-mix old workers that
 lack registration with the new protocol. Upgrade backfills existing nonterminal

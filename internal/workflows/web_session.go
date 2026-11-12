@@ -240,8 +240,9 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 		}
 		if operations >= in.ContinueAfter || workflow.GetInfo(ctx).GetContinueAsNewSuggested() {
 			// Every logical future is joined here. Remote invocation cleanup is
-			// independently gated by the durable ledger: join/cancel_join carry
-			// only IDs and cannot settle or advance until that barrier confirms.
+			// independently tracked by the ledger: join/cancel_join carry only
+			// IDs. Controlled finalization still requires sealed-zero cleanup;
+			// ordinary finalization uses canonical fencing, not dead-body acks.
 			// Pending handlers must still finish first.
 			if err := workflow.Await(ctx, func() bool { return workflow.AllHandlersFinished(ctx) }); err != nil {
 				return err
@@ -357,12 +358,13 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 				}
 				continue
 			}
-			if pending != 0 {
+			// Accepted intervention requires cleanup evidence for every target body.
+			// Ordinary retry-safe completion retains Task4's canonical fencing:
+			// a dead worker's missing ack is not a permanent liveness veto.
+			// Sealing still blocks late registration; missing rows remain honest.
+			if pending != 0 && state.Control != nil {
 				state.UnconfirmedModelInvocations = pending
-				state.Status = "cleanup_interrupted"
-				if state.Control != nil {
-					state.Status = "cancelling_interrupted"
-				}
+				state.Status = "cancelling_interrupted"
 				// Durable missing acknowledgments, not elapsed time. Never reset,
 				// settle, CAN into newer work, or assume an older attempt joined.
 				return workflow.Await(ctx, func() bool { return false })

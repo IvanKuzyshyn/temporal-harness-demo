@@ -153,10 +153,13 @@ return `stale_target`. Accepted control results include `targetTurnId` and, for
 replacement, `replacementTurnId`. Poll the receipt and conversation/history
 projections separately: accepted does not mean cleanup is complete. Replacement
 starts only after joined cleanup and durable target cancellation, ahead of queued
-normal messages. Any missing cleanup acknowledgment across **all** started model
-invocations (including older timed-out attempts) leaves `cancelling_interrupted`
-in workflow state and `cancelling` in SQL; no newer turn runs. Later retry
-cancellation/success cannot bypass this durable barrier. See the runtime document for
+normal messages. For an accepted control, any missing cleanup acknowledgment across
+**all** model invocations of its target (including older timed-out attempts) leaves
+`cancelling_interrupted` in workflow state and `cancelling` in SQL; no newer turn
+runs. Later retry cancellation/success cannot bypass this durable barrier. Ordinary
+completion/failure without an accepted control retains retry-safe hard-worker-loss
+recovery: missing cleanup acknowledgments do not block canonical settlement or
+normal follow-ups, and are not falsely marked confirmed. See the runtime document for
 completion linearization, recovery and operator limits. Approvals/revocation and
 new attachment-bearing messages/replacements still reject `invalid_command`.
 
