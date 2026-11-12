@@ -132,7 +132,7 @@ func (r *Repository) StartChatTurn(ctx context.Context, ref chat.TurnRef) error 
 func (r *Repository) GetChatModelResult(ctx context.Context, ref chat.TurnRef) (chat.ChatModelResult, error) {
 	out := chat.ChatModelResult{TurnRef: ref}
 	var calls []byte
-	err := r.pool.QueryRow(ctx, `SELECT text,tokens,coalesce(attempt_id::text,''),limited_history,calls FROM chat_model_results WHERE conversation_id=$1 AND turn_id=$2 AND logical_step=$3`, ref.ConversationID, ref.TurnID, ref.Step).Scan(&out.Text, &out.Tokens, &out.AttemptID, &out.LimitedHistory, &calls)
+	err := r.pool.QueryRow(ctx, `SELECT text,tokens,coalesce(attempt_id::text,''),limited_history,calls,context_metadata FROM chat_model_results WHERE conversation_id=$1 AND turn_id=$2 AND logical_step=$3`, ref.ConversationID, ref.TurnID, ref.Step).Scan(&out.Text, &out.Tokens, &out.AttemptID, &out.LimitedHistory, &calls, &out.Context)
 	if err == nil {
 		err = json.Unmarshal(calls, &out.Calls)
 	}
@@ -176,7 +176,7 @@ func (r *Repository) SaveChatModelResult(ctx context.Context, a chat.ChatModelRe
 		if a.Calls == nil {
 			calls = []byte(`[]`)
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO chat_model_results(conversation_id,turn_id,text,tokens,attempt_id,limited_history,payload_digest,logical_step,calls) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, a.ConversationID, a.TurnID, a.Text, a.Tokens, nullable(a.AttemptID), a.LimitedHistory, hash, a.Step, calls)
+		_, err = tx.Exec(ctx, `INSERT INTO chat_model_results(conversation_id,turn_id,text,tokens,attempt_id,limited_history,payload_digest,logical_step,calls,context_metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, a.ConversationID, a.TurnID, a.Text, a.Tokens, nullable(a.AttemptID), a.LimitedHistory, hash, a.Step, calls, a.Context)
 		return err
 	})
 }
@@ -246,10 +246,11 @@ func (r *Repository) PersistTurnResult(ctx context.Context, a chat.TurnResult) e
 		}
 		entry := chat.LogicalID(a.TurnID, "final")
 		limited := false
+		var contextMetadata *chat.ContextMetadata
 		if a.Status == "completed" {
 			var text, attempt string
 			var tokens int
-			err := tx.QueryRow(ctx, `SELECT text,tokens,coalesce(attempt_id::text,''),limited_history FROM chat_model_results WHERE conversation_id=$1 AND turn_id=$2 AND logical_step=$3 AND calls='[]'::jsonb`, a.ConversationID, a.TurnID, a.Step).Scan(&text, &tokens, &attempt, &limited)
+			err := tx.QueryRow(ctx, `SELECT text,tokens,coalesce(attempt_id::text,''),limited_history,context_metadata FROM chat_model_results WHERE conversation_id=$1 AND turn_id=$2 AND logical_step=$3 AND calls='[]'::jsonb`, a.ConversationID, a.TurnID, a.Step).Scan(&text, &tokens, &attempt, &limited, &contextMetadata)
 			if err != nil {
 				return err
 			}
@@ -306,7 +307,7 @@ func (r *Repository) PersistTurnResult(ctx context.Context, a chat.TurnResult) e
 		if _, err := tx.Exec(ctx, `UPDATE turns SET status=$3,reason=$4,settlement_digest=$5,updated_at=clock_timestamp() WHERE conversation_id=$1 AND id=$2`, a.ConversationID, a.TurnID, a.Status, a.Reason, hash); err != nil {
 			return err
 		}
-		payload, _ := json.Marshal(map[string]any{"status": a.Status, "reason": a.Reason, "limitedHistory": limited})
+		payload, _ := json.Marshal(map[string]any{"status": a.Status, "reason": a.Reason, "limitedHistory": limited, "context": contextMetadata})
 		_, err := tx.Exec(ctx, `INSERT INTO events(id,conversation_id,turn_id,type,payload,payload_digest) VALUES($1,$2,$3,$4,$5,$6)`, chat.LogicalID(a.TurnID, "settlement"), a.ConversationID, a.TurnID, "turn."+a.Status, payload, hash)
 		return err
 	})

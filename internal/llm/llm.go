@@ -43,7 +43,8 @@ type ToolDefinition struct {
 	Parameters  json.RawMessage `json:"parameters"`
 }
 type Request struct {
-	Image *ResolvedImage `json:"-"`
+	Bounded bool           // source-bound web profile; legacy callers retain provider defaults
+	Image   *ResolvedImage `json:"-"`
 	// Zero preserves legacy provider defaults. Web chat always sets explicit bounds.
 	ContextWindow, MaxOutputTokens, MaxResponseBytes int
 	Model                                            string
@@ -57,9 +58,15 @@ type Delta struct {
 	Tokens int
 }
 type Response struct {
-	Message Message
-	Tokens  int
+	Message    Message
+	Tokens     int
+	DoneReason string
 }
+
+func (r Response) OutputExhausted(limit int) bool {
+	return r.DoneReason == "length" || (limit > 0 && r.Tokens >= limit)
+}
+
 type Model interface {
 	Chat(context.Context, Request, func(Delta) error) (Response, error)
 }

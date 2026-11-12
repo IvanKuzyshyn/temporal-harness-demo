@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/chat"
+	modelcontext "github.com/IvanKuzyshyn/temporal-harness-demo/internal/context"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm/ollama"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/storage"
@@ -31,6 +32,11 @@ func (a *ChatActivities) AnalyzeAttachmentImage(ctx context.Context, in chat.Doc
 		if e != nil {
 			return e
 		}
+		assembled, e := modelcontext.Assemble(req, nil, modelcontext.DefaultBudget())
+		if e != nil {
+			return e
+		}
+		req = assembled.Request
 		prior, e := w.WebToolResult(parent, in.Scope.ConversationID, in.Scope.ToolCallID)
 		if e == nil {
 			if prior.Analysis == nil || prior.Analysis.ImageProfile != chat.NarrowImageProfile {
@@ -70,7 +76,7 @@ func (a *ChatActivities) AnalyzeAttachmentImage(ctx context.Context, in chat.Doc
 			return chat.ErrInvalid
 		}
 		out = part.Manifest
-		out.Truncated = res.Tokens >= 2000
+		out.Truncated = res.OutputExhausted(req.MaxOutputTokens)
 		if out.Truncated {
 			out.Status = "partial"
 		}

@@ -94,26 +94,32 @@ func (m *Model) admittedImage(ctx context.Context, req llm.Request) (*api.ChatRe
 	if _, err = png.Decode(bytes.NewReader(data)); err != nil {
 		return nil, invalidImage("invalid PNG")
 	}
+	if err = m.checkProfileIdentity(ctx, req.Model); err != nil {
+		return nil, err
+	}
+	return wire, nil
+}
+func (m *Model) checkProfileIdentity(ctx context.Context, modelName string) error {
 	// Never cache qualification across model/runtime changes or restarts. These
 	// metadata reads do not dispatch inference; mismatch fails closed.
 	check, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	version, err := m.client.Version(check)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if version != "0.40.15" {
-		return nil, invalidImage("runtime changed")
+		return invalidImage("runtime changed")
 	}
 	models, err := m.client.List(check)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	digest, _, _ := imageIdentity(req.Model)
+	digest, _, _ := imageIdentity(modelName)
 	for _, model := range models.Models {
-		if model.Name == req.Model && model.Digest == digest && model.Details.Format == "safetensors" && model.Details.Runner == "mlx" && model.RemoteHost == "" && model.RemoteModel == "" {
-			return wire, nil
+		if model.Name == modelName && model.Digest == digest && model.Details.Format == "safetensors" && model.Details.Runner == "mlx" && model.RemoteHost == "" && model.RemoteModel == "" {
+			return nil
 		}
 	}
-	return nil, invalidImage("model digest/runner changed")
+	return invalidImage("model digest/runner changed")
 }

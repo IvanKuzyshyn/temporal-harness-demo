@@ -2,7 +2,7 @@
 # Only ephemeral, uniquely named test resources; never targets the developer stack.
 set -euo pipefail
 mode=${1:-}
-[[ "$mode" == storage || "$mode" == api || "$mode" == chat || "$mode" == replacement || "$mode" == approval || "$mode" == fetch || "$mode" == attachments || "$mode" == analysis ]] || { echo 'usage: scripts/test-web-integration.sh storage|api|chat|replacement|approval|fetch|attachments|analysis' >&2; exit 2; }
+[[ "$mode" == storage || "$mode" == api || "$mode" == chat || "$mode" == replacement || "$mode" == approval || "$mode" == fetch || "$mode" == attachments || "$mode" == analysis || "$mode" == context ]] || { echo 'usage: scripts/test-web-integration.sh storage|api|chat|replacement|approval|fetch|attachments|analysis|context' >&2; exit 2; }
 for tool in docker mise python3; do command -v "$tool" >/dev/null || { echo "required: $tool" >&2; exit 1; }; done
 docker info >/dev/null
 docker compose version >/dev/null
@@ -64,7 +64,7 @@ export WEBCHAT_TEST_RECEIPT="$work/receipt"
 echo "Storage integration project=$project database=$database address=$port volume=$volume"
 run() { mise exec -- go test -p 1 -count=1 -timeout 3m -tags integration "$@" ./internal/storage/...; }
 WEBCHAT_TEST_PHASE=migration run -v -run '^TestMigration(Cycle|DispatchUpgrade|ChatCleanupUpgrade)$'
-run -race -v -run "${WEBCHAT_TEST_STORAGE_RUN:-Test(Accept|Command|Logical|History|Attachment|Control|Database|Projection|Schema|WebChat|ModelAttemptRetry|MissingDisplay|ChatAdmission|ChatResultAttempt|ChatAttempt|ChatCleanup|ChatFailed|ChatOverlapping|ChatCandidate|CancelledDraft|ReplacementPrompt|WebModelSteps|WebApproval|WebTool)}"
+run -race -v -run "${WEBCHAT_TEST_STORAGE_RUN:-Test(Accept|Command|Logical|History|Attachment|Control|Database|Projection|Schema|WebChat|ModelAttemptRetry|MissingDisplay|ChatAdmission|ChatResultAttempt|ChatAttempt|ChatCleanup|ChatFailed|ChatOverlapping|ChatCandidate|Context|CancelledDraft|ReplacementPrompt|WebModelSteps|WebApproval|WebTool)}"
 WEBCHAT_TEST_PHASE=restart-write run -v -run '^TestRestartWrite$'
 before=$("${compose[@]}" exec -T postgres psql -U postgres -Atc 'SELECT pg_postmaster_start_time()')
 "${compose[@]}" restart postgres
@@ -81,17 +81,17 @@ port=$("${compose[@]}" port postgres 5432)
 export WEBCHAT_TEST_DATABASE_URL="postgres://webchat:$WEBCHAT_TEST_APP_PASSWORD@$port/$database?sslmode=disable"
 echo "Restarted Postgres address=$port"
 WEBCHAT_TEST_PHASE=restart-read run -v -run '^TestRestartRead$'
-if [[ "$mode" == attachments || "$mode" == analysis ]]; then
+if [[ "$mode" == attachments || "$mode" == analysis || "$mode" == context ]]; then
   docker build -t webchat-attachment-parser:1 infra/attachment-parser
   export WEBCHAT_TEST_PARSERS=1
   mise exec -- go test -p 1 -count=1 -timeout 3m -race -tags integration -v ./internal/attachments/...
 fi
-if [[ "$mode" == api || "$mode" == chat || "$mode" == replacement || "$mode" == approval || "$mode" == fetch || "$mode" == attachments || "$mode" == analysis ]]; then
+if [[ "$mode" == api || "$mode" == chat || "$mode" == replacement || "$mode" == approval || "$mode" == fetch || "$mode" == attachments || "$mode" == analysis || "$mode" == context ]]; then
   # Serial packages: dispatcher scenarios deliberately reschedule commands in
   # this unique test database, never any developer/shared application database.
   mise exec -- go test -p 1 -count=1 -timeout 3m -race -tags integration -v ./cmd/web-api/... ./internal/api/... ./internal/dispatch/...
 fi
-if [[ "$mode" == chat || "$mode" == replacement || "$mode" == approval || "$mode" == fetch || "$mode" == attachments || "$mode" == analysis ]]; then
+if [[ "$mode" == chat || "$mode" == replacement || "$mode" == approval || "$mode" == fetch || "$mode" == attachments || "$mode" == analysis || "$mode" == context ]]; then
   # Launch the pinned actual server as an owned child, never inherited services.
   read -r grpc_port http_port metrics_port < <(python3 - <<'PY'
 import socket
@@ -117,6 +117,7 @@ PY
   echo "Actual isolated Temporal address=$WEBCHAT_TEST_TEMPORAL_ADDRESS pid=$temporal_pid"
   export WEBCHAT_TEST_RESTART_REQUEST="$work/restart.request"
   default_run=.
+  if [[ "$mode" == context ]]; then default_run='Test(Context|Document|ImageApplication|ImageChild|ImageScope|Replacement|OrdinaryHardWorkerDeath|ContinueAsNewCommandDedup)'; fi
   if [[ "$mode" == analysis ]]; then default_run='Test(Document|AnalysisChild|ApprovedImage|ImageApplication|ImageScope|ImageChild|ParentCancellationJoinsDocumentChild|Attachment|WebToolTimedOutBodyBlocksAcceptedReplacement|ReplacementAfterTimedOutAttemptDoesNotBypassCleanup|OrdinaryHardWorkerDeathRecoversCanonicalResponseAndFollowUp)'; fi
   if [[ "$mode" == replacement ]]; then default_run='Test(Replacement|ClosedUnreceiptedControl|OrdinaryHardWorkerDeath)'; fi
   if [[ "$mode" == approval ]]; then default_run='Test(Approval|Approve|Revoke|StaleDecision|Expiry|NewTool|WebTool)'; fi

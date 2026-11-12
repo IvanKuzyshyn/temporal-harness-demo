@@ -197,6 +197,7 @@ func appendMessage(ctx context.Context, tx pgx.Tx, m chat.MessageRecord) error {
 	}
 	// Server-assigned order and time are not part of write identity.
 	m.Sequence = 0
+	m.Context = nil // derived from the immutable final model result on reads
 	m.CreatedAt = chat.MessageRecord{}.CreatedAt
 	if len(m.AttachmentIDs) == 0 {
 		m.AttachmentIDs = nil
@@ -256,7 +257,8 @@ func (r *Repository) ListMessages(ctx context.Context, id chat.ConversationID, b
 		}
 	}
 	rows, err := r.pool.Query(ctx, `SELECT m.entry_id::text,m.turn_id::text,m.sequence,m.role,m.text,m.logical_step,m.result_kind,m.completion_state,m.created_at,
- coalesce((SELECT jsonb_agg(attachment_id::text ORDER BY ordinal) FROM message_attachments WHERE entry_id=m.entry_id),'[]'::jsonb)
+ coalesce((SELECT jsonb_agg(attachment_id::text ORDER BY ordinal) FROM message_attachments WHERE entry_id=m.entry_id),'[]'::jsonb),
+ (SELECT context_metadata FROM chat_model_results r WHERE r.turn_id=m.turn_id AND m.result_kind='final' AND m.role='assistant' AND r.calls='[]'::jsonb ORDER BY r.logical_step DESC LIMIT 1)
  FROM messages m WHERE m.conversation_id=$1 AND m.sequence<$2 ORDER BY m.sequence DESC LIMIT $3`, id, boundary, limit+1)
 	if err != nil {
 		return page, err
@@ -265,7 +267,7 @@ func (r *Repository) ListMessages(ctx context.Context, id chat.ConversationID, b
 	for rows.Next() {
 		m := chat.MessageRecord{ConversationID: id}
 		var ids []byte
-		err = rows.Scan(&m.EntryID, &m.TurnID, &m.Sequence, &m.Role, &m.Text, &m.LogicalStep, &m.ResultKind, &m.CompletionState, &m.CreatedAt, &ids)
+		err = rows.Scan(&m.EntryID, &m.TurnID, &m.Sequence, &m.Role, &m.Text, &m.LogicalStep, &m.ResultKind, &m.CompletionState, &m.CreatedAt, &ids, &m.Context)
 		if err != nil {
 			return page, err
 		}

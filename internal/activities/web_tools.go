@@ -10,6 +10,7 @@ import (
 
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/attachments"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/chat"
+	modelcontext "github.com/IvanKuzyshyn/temporal-harness-demo/internal/context"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm/ollama"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/tools"
@@ -177,15 +178,8 @@ func (a *ChatActivities) webRequest(ctx context.Context, ref chat.TurnRef, turn 
 			if e != nil {
 				return req, e
 			}
+			result = modelcontext.Excerpt(result, &remaining)
 			text := result.Text
-			if len(text) > remaining {
-				text = bounded(text, remaining)
-				result.Truncated = true
-			}
-			remaining -= len(text)
-			if remaining < 0 {
-				remaining = 0
-			}
 			if result.Error != "" && result.AttachmentID == "" {
 				text = "Tool outcome: " + result.Error
 			} else if result.RequestedURL != "" || result.AttachmentID != "" {
@@ -201,54 +195,8 @@ func (a *ChatActivities) webRequest(ctx context.Context, ref chat.TurnRef, turn 
 			req.Messages = append(req.Messages, llm.Message{Role: "tool", ToolCallID: c.ID, ToolName: c.Name, Content: text})
 		}
 	}
-	// Estimate the actual final web representation, including JSON escaping,
-	// message framing and schemas. Mandatory provenance and assistant/tool
-	// groups are indivisible; only completed optional exchanges may be omitted.
-	messageCost := func(messages ...llm.Message) (int, error) {
-		cost := 0
-		for _, m := range messages {
-			b, e := json.Marshal(m)
-			if e != nil {
-				return 0, &ollama.InvalidRequestError{Err: e}
-			}
-			cost += len(b) + 128
-		}
-		return cost, nil
-	}
-	used, err := messageCost(req.Messages...)
-	if err != nil {
-		return req, err
-	}
-	b, err := json.Marshal(req.Tools)
-	if err != nil {
-		return req, &ollama.InvalidRequestError{Err: err}
-	}
-	used += len(b)
-	if used > 12000 {
-		return req, &ollama.InvalidRequestError{Err: errors.New("web input budget exceeded")}
-	}
-	var selected []chat.Exchange
-	for _, exchange := range recent {
-		cost, err := messageCost(llm.Message{Role: "user", Content: exchange.User}, llm.Message{Role: "assistant", Content: exchange.Assistant})
-		if err != nil {
-			return req, err
-		}
-		if used+cost > 12000 {
-			break
-		}
-		used += cost
-		selected = append(selected, exchange)
-		if len(selected) == 6 {
-			break
-		}
-	}
-	mandatory := req.Messages
-	req.Messages = []llm.Message{mandatory[0]}
-	for i := len(selected) - 1; i >= 0; i-- {
-		req.Messages = append(req.Messages, llm.Message{Role: "user", Content: selected[i].User}, llm.Message{Role: "assistant", Content: selected[i].Assistant})
-	}
-	req.Messages = append(req.Messages, mandatory[1:]...)
-	return req, nil
+	out, err := modelcontext.Assemble(req, modelcontext.Exchanges(recent), modelcontext.DefaultBudget())
+	return out.Request, err
 }
 
 func (a *ChatActivities) ExecuteWebTool(ctx context.Context, in chat.WebToolExecution) (retErr error) {

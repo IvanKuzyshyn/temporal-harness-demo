@@ -88,10 +88,13 @@ type ChatModelResult struct {
 	Tokens         int
 	AttemptID      string
 	LimitedHistory bool
+	Context        *ContextMetadata `json:",omitempty"`
 }
 type Exchange struct {
 	User, Assistant string
-	Sequence        int64
+	Sequence        int64 // assistant completion sequence in context snapshots
+	Results         []WebToolResult
+	OmittedResults  int
 }
 
 // LogicalID is deterministic across activity retries AND workflow runs.

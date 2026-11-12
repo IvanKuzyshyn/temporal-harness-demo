@@ -29,7 +29,7 @@ Export configuration explicitly (the binary does not automatically source `.env`
   passwords; edit credentials deliberately rather than reinitializing volumes.
 
 `bin/web-api -migrate` applies embedded migrations and exits. `bin/web-api` requires
-schema version 7 and serves HTTP. Effective pgx user/database/startup parameters
+schema version 8 and serves HTTP. Effective pgx user/database/startup parameters
 are validated before connecting, including query/environment/service overrides;
 only the validated config is used. Application identity must be `webchat`, never
 Temporal's database/role. Runtime connection hosts and fallback hosts must be
@@ -96,7 +96,7 @@ Uploads alone do not grant content access.
   Omitted model defaults to **qwen3.5:9b**; explicit empty/null/unknown tags fail.
 - `GET /conversations?cursor=...&limit=50` → 200 `ConversationPage`.
 - `GET /conversations/{id}` → 200 `Metadata`.
-- `GET /conversations/{id}/messages?before=...&limit=50` → 200 `MessagePage`.
+- `GET /conversations/{id}/messages?before=...&limit=50` → 200 `MessagePage`. Final assistant records include nullable `context` accounting/coverage; see [bounded context](web-chat-context.md).
 - `POST /conversations/{id}/messages` (`MessageRequest`) → 202 `Receipt`.
 - `POST /conversations/{id}/replace` (`ReplaceRequest`) → 202 `Receipt`.
 - `POST /conversations/{id}/stop` (`StopRequest`) → 202 `Receipt`.
