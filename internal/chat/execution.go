@@ -18,6 +18,8 @@ type SessionCommand struct {
 // CommandIdentity is bounded admission carry. Payload was validated by the
 // original Update; the digest and every identity are rechecked against SQL.
 type CommandIdentity struct {
+	ApprovalID, ActionHash           string
+	Decision                         ApprovalDecision
 	ExpectedActiveTurnID             TurnID
 	CommandID                        CommandID
 	RequestID                        string
@@ -29,7 +31,7 @@ type CommandIdentity struct {
 }
 
 func (c SessionCommand) Identity() CommandIdentity {
-	return CommandIdentity{CommandID: c.CommandID, RequestID: c.RequestID, ConversationID: c.ConversationID, TurnID: c.TurnID, WorkflowID: c.WorkflowID, Model: c.Model, PayloadDigest: c.PayloadDigest, Kind: c.Kind, Sequence: c.Sequence, ExpectedActiveTurnID: c.Payload.ExpectedActiveTurnID}
+	return CommandIdentity{CommandID: c.CommandID, RequestID: c.RequestID, ConversationID: c.ConversationID, TurnID: c.TurnID, WorkflowID: c.WorkflowID, Model: c.Model, PayloadDigest: c.PayloadDigest, Kind: c.Kind, Sequence: c.Sequence, ExpectedActiveTurnID: c.Payload.ExpectedActiveTurnID, ApprovalID: c.Payload.ApprovalID, ActionHash: c.Payload.ActionHash, Decision: c.Payload.Decision}
 }
 
 type AdmissionCheckpoint struct {
@@ -40,6 +42,8 @@ type AdmissionCheckpoint struct {
 }
 
 type AdmissionResult struct {
+	PolicyRevision    int64  `json:"policyRevision,omitempty"`
+	GrantedToolset    string `json:"grantedToolset,omitempty"`
 	State             string `json:"state"`
 	Code              string `json:"code,omitempty"`
 	TargetTurnID      TurnID `json:"targetTurnId,omitempty"`
@@ -60,6 +64,7 @@ type Admission struct {
 
 // TurnRef is safe to carry through Temporal; content stays in Postgres.
 type TurnRef struct {
+	Step           int `json:",omitempty"`
 	ConversationID ConversationID
 	TurnID         TurnID
 }
@@ -77,6 +82,7 @@ type TurnResult struct {
 	Status, Reason string
 }
 type ChatModelResult struct {
+	Calls []WebModelCall `json:",omitempty"`
 	TurnRef
 	Text           string
 	Tokens         int

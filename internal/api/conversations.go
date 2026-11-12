@@ -84,7 +84,7 @@ func (s *Server) metadata(w http.ResponseWriter, r *http.Request, id chat.Conver
 		storageError(w, err)
 		return
 	}
-	respond(w, 200, map[string]any{"conversation": conversationJSON(p.Conversation), "activeTurn": p.ActiveTurn, "pendingApproval": p.PendingApproval, "policy": map[string]any{"revision": p.Conversation.PolicyRevision, "approvalAll": "unknown"}, "freshness": map[string]any{"source": "postgres_projection", "authoritative": false, "observedAt": time.Now().UTC(), "workflowConfirmedAt": nil}, "dispatcherConnected": s.connected()})
+	respond(w, 200, map[string]any{"conversation": conversationJSON(p.Conversation), "activeTurn": p.ActiveTurn, "pendingApproval": p.PendingApproval, "policy": map[string]any{"revision": p.Conversation.PolicyRevision, "approvalAll": p.ApprovalToolset == chat.WebToolset, "toolsetVersion": p.ApprovalToolset}, "freshness": map[string]any{"source": "postgres_projection", "authoritative": false, "observedAt": time.Now().UTC(), "workflowConfirmedAt": nil}, "dispatcherConnected": s.connected()})
 }
 func (s *Server) history(w http.ResponseWriter, r *http.Request, id chat.ConversationID) {
 	before, n, ok := pageArgs(w, r, "before")

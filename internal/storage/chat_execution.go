@@ -22,7 +22,7 @@ func (r *Repository) CheckChatCommand(ctx context.Context, c chat.SessionCommand
 func (r *Repository) checkChatCommandIdentity(ctx context.Context, c chat.CommandIdentity) (out chat.AdmissionResult, err error) {
 	var raw []byte
 	err = r.pool.QueryRow(ctx, `SELECT c.execution_receipt FROM commands c JOIN conversations v ON v.id=c.conversation_id
- WHERE c.id=$1 AND c.conversation_id=$2 AND c.request_id=$3 AND coalesce(c.turn_id::text,'')=$4 AND c.payload_digest=$5 AND c.kind=$6 AND c.sequence=$7 AND v.workflow_id=$8 AND v.model=$9 AND coalesce(c.payload->>'expectedActiveTurnId','')=$10`, c.CommandID, c.ConversationID, c.RequestID, c.TurnID, c.PayloadDigest, c.Kind, c.Sequence, c.WorkflowID, c.Model, c.ExpectedActiveTurnID).Scan(&raw)
+ WHERE c.id=$1 AND c.conversation_id=$2 AND c.request_id=$3 AND coalesce(c.turn_id::text,'')=$4 AND c.payload_digest=$5 AND c.kind=$6 AND c.sequence=$7 AND v.workflow_id=$8 AND v.model=$9 AND coalesce(c.payload->>'expectedActiveTurnId','')=$10 AND coalesce(c.payload->>'approvalId','')=$11 AND coalesce(c.payload->>'actionHash','')=$12 AND coalesce(c.payload->>'decision','')=$13`, c.CommandID, c.ConversationID, c.RequestID, c.TurnID, c.PayloadDigest, c.Kind, c.Sequence, c.WorkflowID, c.Model, c.ExpectedActiveTurnID, c.ApprovalID, c.ActionHash, c.Decision).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return out, ErrConflict
 	}
@@ -63,7 +63,12 @@ func (r *Repository) recordChatAdmissionIdentity(ctx context.Context, c chat.Com
 		if result.State == "accepted" && (c.Kind == chat.CommandStop || c.Kind == chat.CommandReplace) {
 			// Projection only: the replayable workflow claim already owns the
 			// target. Late receipt retry must not resurrect a terminal turn.
-			if _, err = tx.Exec(ctx, `UPDATE turns SET status='cancelling',updated_at=clock_timestamp() WHERE conversation_id=$1 AND id=$2 AND status IN ('queued','running')`, c.ConversationID, c.ExpectedActiveTurnID); err != nil {
+			if _, err = tx.Exec(ctx, `UPDATE turns SET status='cancelling',updated_at=clock_timestamp() WHERE conversation_id=$1 AND id=$2 AND status IN ('queued','running','awaiting_approval')`, c.ConversationID, c.ExpectedActiveTurnID); err != nil {
+				return err
+			}
+		}
+		if result.State == "accepted" && (c.Kind == chat.CommandDecide || c.Kind == chat.CommandRevoke) {
+			if err = recordWebPolicyReceipt(ctx, tx, c, result); err != nil {
 				return err
 			}
 		}
@@ -126,11 +131,15 @@ func (r *Repository) StartChatTurn(ctx context.Context, ref chat.TurnRef) error 
 }
 func (r *Repository) GetChatModelResult(ctx context.Context, ref chat.TurnRef) (chat.ChatModelResult, error) {
 	out := chat.ChatModelResult{TurnRef: ref}
-	err := r.pool.QueryRow(ctx, `SELECT text,tokens,coalesce(attempt_id::text,''),limited_history FROM chat_model_results WHERE conversation_id=$1 AND turn_id=$2`, ref.ConversationID, ref.TurnID).Scan(&out.Text, &out.Tokens, &out.AttemptID, &out.LimitedHistory)
+	var calls []byte
+	err := r.pool.QueryRow(ctx, `SELECT text,tokens,coalesce(attempt_id::text,''),limited_history,calls FROM chat_model_results WHERE conversation_id=$1 AND turn_id=$2 AND logical_step=$3`, ref.ConversationID, ref.TurnID, ref.Step).Scan(&out.Text, &out.Tokens, &out.AttemptID, &out.LimitedHistory, &calls)
+	if err == nil {
+		err = json.Unmarshal(calls, &out.Calls)
+	}
 	return out, dbError(err)
 }
 func (r *Repository) SaveChatModelResult(ctx context.Context, a chat.ChatModelResult) error {
-	if !chat.ValidID(string(a.TurnID)) || len(a.Text) > 65536 || a.Tokens < 0 {
+	if !chat.ValidID(string(a.TurnID)) || a.Step < 0 || a.Step >= chat.MaxWebSteps || len(a.Calls) > 4 || len(a.Text) > 65536 || a.Tokens < 0 {
 		return chat.ErrInvalid
 	}
 	hash, err := digest(a)
@@ -139,7 +148,7 @@ func (r *Repository) SaveChatModelResult(ctx context.Context, a chat.ChatModelRe
 	}
 	return r.withConversation(ctx, a.ConversationID, func(tx pgx.Tx) error {
 		var old string
-		err := tx.QueryRow(ctx, `SELECT payload_digest FROM chat_model_results WHERE turn_id=$1`, a.TurnID).Scan(&old)
+		err := tx.QueryRow(ctx, `SELECT payload_digest FROM chat_model_results WHERE turn_id=$1 AND logical_step=$2`, a.TurnID, a.Step).Scan(&old)
 		if err == nil {
 			if old != hash {
 				return ErrConflict
@@ -155,15 +164,19 @@ func (r *Repository) SaveChatModelResult(ctx context.Context, a chat.ChatModelRe
 			// even if their provider has not learned of cancellation yet.
 			var owns bool
 			if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM model_steps s JOIN turns t ON t.id=s.turn_id AND t.conversation_id=s.conversation_id
- WHERE s.id=$1 AND s.conversation_id=$2 AND s.turn_id=$3 AND s.logical_step=0 AND s.status='running' AND t.status IN ('queued','running')
- AND NOT EXISTS(SELECT 1 FROM model_steps newer WHERE newer.turn_id=s.turn_id AND newer.logical_step=0 AND newer.attempt>s.attempt))`, a.AttemptID, a.ConversationID, a.TurnID).Scan(&owns); err != nil {
+ WHERE s.id=$1 AND s.conversation_id=$2 AND s.turn_id=$3 AND s.logical_step=$4 AND s.status='running' AND t.status IN ('queued','running')
+ AND NOT EXISTS(SELECT 1 FROM model_steps newer WHERE newer.turn_id=s.turn_id AND newer.logical_step=s.logical_step AND newer.attempt>s.attempt))`, a.AttemptID, a.ConversationID, a.TurnID, a.Step).Scan(&owns); err != nil {
 				return err
 			}
 			if !owns {
 				return ErrStaleChatAttempt
 			}
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO chat_model_results(conversation_id,turn_id,text,tokens,attempt_id,limited_history,payload_digest) VALUES($1,$2,$3,$4,$5,$6,$7)`, a.ConversationID, a.TurnID, a.Text, a.Tokens, nullable(a.AttemptID), a.LimitedHistory, hash)
+		calls, _ := json.Marshal(a.Calls)
+		if a.Calls == nil {
+			calls = []byte(`[]`)
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO chat_model_results(conversation_id,turn_id,text,tokens,attempt_id,limited_history,payload_digest,logical_step,calls) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, a.ConversationID, a.TurnID, a.Text, a.Tokens, nullable(a.AttemptID), a.LimitedHistory, hash, a.Step, calls)
 		return err
 	})
 }
@@ -222,7 +235,7 @@ func (r *Repository) PersistTurnResult(ctx context.Context, a chat.TurnResult) e
 		// canonical attempt/result fences protect logical output, not cleanup.
 		// This lock serializes the closing gate with every new registration.
 		var pending bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM chat_model_invocations WHERE conversation_id=$1 AND turn_id=$2 AND cleanup_confirmed_at IS NULL)`, a.ConversationID, a.TurnID).Scan(&pending); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM chat_model_invocations WHERE conversation_id=$1 AND turn_id=$2 AND cleanup_confirmed_at IS NULL UNION ALL SELECT 1 FROM web_tool_invocations WHERE conversation_id=$1 AND turn_id=$2 AND cleanup_confirmed_at IS NULL)`, a.ConversationID, a.TurnID).Scan(&pending); err != nil {
 			return err
 		}
 		if pending && (a.Status == "cancelled" || status == "cancelling") {
@@ -236,7 +249,7 @@ func (r *Repository) PersistTurnResult(ctx context.Context, a chat.TurnResult) e
 		if a.Status == "completed" {
 			var text, attempt string
 			var tokens int
-			err := tx.QueryRow(ctx, `SELECT text,tokens,coalesce(attempt_id::text,''),limited_history FROM chat_model_results WHERE conversation_id=$1 AND turn_id=$2`, a.ConversationID, a.TurnID).Scan(&text, &tokens, &attempt, &limited)
+			err := tx.QueryRow(ctx, `SELECT text,tokens,coalesce(attempt_id::text,''),limited_history FROM chat_model_results WHERE conversation_id=$1 AND turn_id=$2 AND logical_step=$3 AND calls='[]'::jsonb`, a.ConversationID, a.TurnID, a.Step).Scan(&text, &tokens, &attempt, &limited)
 			if err != nil {
 				return err
 			}
@@ -257,7 +270,7 @@ func (r *Repository) PersistTurnResult(ctx context.Context, a chat.TurnResult) e
 		if a.Status == "cancelled" {
 			// A provider candidate is not a completed answer after cancellation.
 			var text string
-			err := tx.QueryRow(ctx, `SELECT text FROM chat_model_results WHERE conversation_id=$1 AND turn_id=$2`, a.ConversationID, a.TurnID).Scan(&text)
+			err := tx.QueryRow(ctx, `SELECT text FROM chat_model_results WHERE conversation_id=$1 AND turn_id=$2 ORDER BY logical_step DESC LIMIT 1`, a.ConversationID, a.TurnID).Scan(&text)
 			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				return err
 			}
@@ -277,6 +290,18 @@ func (r *Repository) PersistTurnResult(ctx context.Context, a chat.TurnResult) e
 			if _, err := tx.Exec(ctx, `UPDATE model_steps SET status='failed',error=$3 WHERE conversation_id=$1 AND turn_id=$2 AND status='running'`, a.ConversationID, a.TurnID, a.Reason); err != nil {
 				return err
 			}
+		}
+		if a.Status == "cancelled" || a.Status == "failed" {
+			toolResult, _ := json.Marshal(chat.WebToolResult{Error: a.Status})
+			if _, err := tx.Exec(ctx, `UPDATE tool_calls SET status=$3,result=$4 WHERE conversation_id=$1 AND turn_id=$2 AND status IN ('pending','running')`, a.ConversationID, a.TurnID, a.Status, toolResult); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE web_tool_invocations SET status=$3 WHERE conversation_id=$1 AND turn_id=$2 AND status='running'`, a.ConversationID, a.TurnID, a.Status); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(ctx, `UPDATE model_steps SET status='completed' WHERE conversation_id=$1 AND turn_id=$2 AND status='running' AND logical_step<$3 AND EXISTS(SELECT 1 FROM chat_model_results r WHERE r.attempt_id=model_steps.id)`, a.ConversationID, a.TurnID, a.Step); err != nil {
+			return err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE turns SET status=$3,reason=$4,settlement_digest=$5,updated_at=clock_timestamp() WHERE conversation_id=$1 AND id=$2`, a.ConversationID, a.TurnID, a.Status, a.Reason, hash); err != nil {
 			return err

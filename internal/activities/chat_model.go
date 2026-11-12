@@ -146,11 +146,14 @@ func (a *ChatActivities) runChatModel(ctx context.Context, ref chat.TurnRef, att
 		return err
 	}
 	req, err := chatRequest(turn, history)
+	if err == nil && a.WebTools != nil {
+		req, err = a.webRequest(ctx, ref, req)
+	}
 	if err != nil {
 		return err
 	}
-	attemptID := chat.LogicalID(ref.TurnID, fmt.Sprintf("model/0/attempt/%d", attempt))
-	cached, err := a.Repository.BeginChatModelAttempt(ctx, chat.ModelAttempt{ID: attemptID, ConversationID: ref.ConversationID, TurnID: ref.TurnID, Attempt: attempt, Status: "running"})
+	attemptID := chat.LogicalID(ref.TurnID, fmt.Sprintf("model/%d/attempt/%d", ref.Step, attempt))
+	cached, err := a.Repository.BeginChatModelAttempt(ctx, chat.ModelAttempt{ID: attemptID, ConversationID: ref.ConversationID, TurnID: ref.TurnID, LogicalStep: ref.Step, Attempt: attempt, Status: "running"})
 	if err != nil {
 		return err
 	}
@@ -172,8 +175,12 @@ func (a *ChatActivities) runChatModel(ctx context.Context, ref chat.TurnRef, att
 	if err == nil {
 		err = ctx.Err()
 	}
-	if err == nil && (len(response.Message.ToolCalls) != 0 || len(response.Message.Content) > 65536 || !utf8.ValidString(response.Message.Content)) {
+	if err == nil && ((len(response.Message.ToolCalls) != 0 && a.WebTools == nil) || len(response.Message.ToolCalls) > 4 || len(response.Message.Content) > 65536 || !utf8.ValidString(response.Message.Content)) {
 		err = &ollama.InvalidRequestError{Err: errors.New("unsupported model output")}
+	}
+	var calls []chat.WebModelCall
+	if err == nil && len(response.Message.ToolCalls) > 0 {
+		calls, err = a.webCalls(ctx, ref, response.Message.ToolCalls)
 	}
 	if err != nil {
 		// WorkerStop arrives before the SDK's context deadline. Use that still
@@ -192,7 +199,7 @@ func (a *ChatActivities) runChatModel(ctx context.Context, ref chat.TurnRef, att
 		}
 		return err
 	}
-	err = a.Repository.SaveChatModelResult(ctx, chat.ChatModelResult{TurnRef: ref, Text: response.Message.Content, Tokens: response.Tokens, AttemptID: attemptID, LimitedHistory: true})
+	err = a.Repository.SaveChatModelResult(ctx, chat.ChatModelResult{TurnRef: ref, Calls: calls, Text: response.Message.Content, Tokens: response.Tokens, AttemptID: attemptID, LimitedHistory: true})
 	if errors.Is(err, storage.ErrConflict) || errors.Is(err, storage.ErrStaleChatAttempt) {
 		// Never overwrite a canonical response. A different attempt's committed
 		// winner is reusable; changed output from THIS owner is still a defect.

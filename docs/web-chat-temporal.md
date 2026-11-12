@@ -1,13 +1,18 @@
-# Database-backed Temporal text chat (Tasks 4–5)
+# Database-backed Temporal web chat (Tasks 4–6)
+
+Task6 extends the text-only baseline below with step-aware model/tool execution,
+recorded approvals and policy carry. The authoritative additions and Task7/8/9
+handoff are in [recorded approvals](web-chat-approvals.md).
 
 This is a new runtime, not an adaptation of the terminal/project agent's prompt.
 Legacy entry points, workflows, tools, files and queues remain unchanged until
 Task 13. There is no TypeScript agent loop, workdir, project gathering, fixture
-routing, attachment access or tool execution on this path.
+routing or unauthorized attachment access on this path. Task6 adds only the
+closed web tool protocol, not production fetch/file adapters.
 
 ## Run
 
-Apply application migrations with `web-api -migrate` (now version **4**), then run
+Apply application migrations with `web-api -migrate` (now version **5**), then run
 `cmd/web-worker` and `cmd/web-api` with the private API/DB configuration described
 in [web-api.md](web-api.md). Build with `mise exec -- go build -p 1 ./...`.
 Additional configuration:
@@ -22,14 +27,14 @@ Additional configuration:
   Production does not silently fall back when Ollama or a model is unavailable.
 
 `worker.StartWeb` registers `WebChatSessionWorkflow` and persistence activities
-on `web-chat-agents`, and `ChatModel` on `web-chat-llm`. Inference concurrency is
+on `web-chat-agents`, and `ChatStep` under the `ChatModel` activity name on
+`web-chat-llm`. Inference concurrency is
 one per worker. `web-chat-documents` is reserved, **not polling or advertised as
-ready** until a real child is implemented. Child/tool registration is not done
-here. Updates are named `message`, `stop`, `replace`, `decide`, `revoke`; query
+ready** until a real child is implemented. Child registration is not done here; Task6 registers the restricted web-tool
+approval/execution activities. Updates are named `message`, `stop`, `replace`, `decide`, `revoke`; query
 `state` returns `WebSessionState` without database/network access. Stop and text
-replacement execute as described below. Approvals/revocation and messages or
-replacements with new attachments still return `invalid_command`, not fake
-success or attachment authorization. Rejected message/replacement intent turns
+replacement execute as described below. Task6 implements approvals/revocation. Messages or replacements with new
+attachments still return `invalid_command`, not fake success or attachment authorization. Rejected message/replacement intent turns
 are marked failed with their rejection code; terminal receipt reconciliation does
 not rewrite turn projections.
 
@@ -217,8 +222,8 @@ order. A queued prompt accepted before a priority replacement therefore sees the
 replacement's completed exchange when it eventually runs. They never
 include queued prompts or failed/cancelled assistant drafts. `ChatModel` checks
 `chat_model_results` before calling the provider and persists a complete provider
-response there before returning. The stable logical key is the turn ID (one
-model step in this text-only slice). Same candidate is idempotent; changed
+response there before returning. The stable logical key is `(turn ID, logical step)` in schema5; ordinary text
+uses step0. Task6 records intermediate tool-call candidates separately. Same candidate is idempotent; changed
 candidate conflicts. Response text does not enter activity results/Temporal carry.
 
 `BeginChatModelAttempt(ctx, ModelAttempt) (cached bool, err error)` checks the
@@ -236,7 +241,9 @@ one winning running attempt or roll back, rather than report false completion.
 Activity retries reuse an already saved model result without another answer.
 Heartbeats run independently of token arrival and DB writes. Provider 400/422/invalid input and missing-model errors
 are nonretryable; EOF without a final stream-completion record is still an error.
-Provider output is capped at 64KiB; unrequested tool calls are rejected.
+Provider text is capped at 64KiB. The web step adapter accepts only the two
+registered web tools, bounded arguments and four calls per response; the direct
+text-only ChatModel seam still rejects tool calls.
 
 `PersistTurnResult(ctx, chat.TurnResult) error` is the settlement activity and
 repository method. One conversation-locked transaction:
@@ -314,6 +321,7 @@ mise exec -- go vet -p 1 ./...
 mise exec -- go test -p 1 ./...
 scripts/test-web-integration.sh chat
 scripts/test-web-integration.sh replacement
+scripts/test-web-integration.sh approval
 WEBCHAT_TEST_LIVE_MODELS=1 scripts/test-web-integration.sh chat
 ```
 

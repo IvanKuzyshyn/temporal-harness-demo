@@ -17,7 +17,7 @@ var ErrStaleChatAttempt = errors.New("chat model attempt superseded")
 // SaveChatModelResult. cached=true means reuse the winner, without changing its
 // attempt projection or starting another inference.
 func (r *Repository) BeginChatModelAttempt(ctx context.Context, a chat.ModelAttempt) (cached bool, err error) {
-	if a.Status != "running" || !chat.ValidID(a.ID) || !chat.ValidID(string(a.TurnID)) || a.Attempt < 1 || a.LogicalStep != 0 || a.Error != "" || a.ResultEntryID != "" || len(a.Usage) != 0 {
+	if a.Status != "running" || !chat.ValidID(a.ID) || !chat.ValidID(string(a.TurnID)) || a.Attempt < 1 || (a.LogicalStep < 0 || a.LogicalStep >= chat.MaxWebSteps) || a.Error != "" || a.ResultEntryID != "" || len(a.Usage) != 0 {
 		return false, chat.ErrInvalid
 	}
 	hash, err := digest(a)
@@ -25,7 +25,7 @@ func (r *Repository) BeginChatModelAttempt(ctx context.Context, a chat.ModelAtte
 		return false, err
 	}
 	err = r.withConversation(ctx, a.ConversationID, func(tx pgx.Tx) error {
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM chat_model_results WHERE conversation_id=$1 AND turn_id=$2)`, a.ConversationID, a.TurnID).Scan(&cached); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM chat_model_results WHERE conversation_id=$1 AND turn_id=$2 AND logical_step=$3)`, a.ConversationID, a.TurnID, a.LogicalStep).Scan(&cached); err != nil {
 			return err
 		}
 		if cached {
@@ -39,13 +39,13 @@ func (r *Repository) BeginChatModelAttempt(ctx context.Context, a chat.ModelAtte
 			return ErrStaleChatAttempt
 		}
 		var newer bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM model_steps WHERE conversation_id=$1 AND turn_id=$2 AND logical_step=0 AND attempt>$3)`, a.ConversationID, a.TurnID, a.Attempt).Scan(&newer); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM model_steps WHERE conversation_id=$1 AND turn_id=$2 AND logical_step=$4 AND attempt>$3)`, a.ConversationID, a.TurnID, a.Attempt, a.LogicalStep).Scan(&newer); err != nil {
 			return err
 		}
 		if newer {
 			return ErrStaleChatAttempt
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO model_steps(id,conversation_id,turn_id,logical_step,attempt,status,payload_digest) VALUES($1,$2,$3,0,$4,'running',$5) ON CONFLICT DO NOTHING`, a.ID, a.ConversationID, a.TurnID, a.Attempt, hash); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO model_steps(id,conversation_id,turn_id,logical_step,attempt,status,payload_digest) VALUES($1,$2,$3,$6,$4,'running',$5) ON CONFLICT DO NOTHING`, a.ID, a.ConversationID, a.TurnID, a.Attempt, hash, a.LogicalStep); err != nil {
 			return err
 		}
 		var old string
@@ -61,7 +61,7 @@ func (r *Repository) BeginChatModelAttempt(ctx context.Context, a chat.ModelAtte
 		if status != "running" {
 			return ErrStaleChatAttempt
 		}
-		_, err := tx.Exec(ctx, `UPDATE model_steps SET status='failed',error='interrupted' WHERE conversation_id=$1 AND turn_id=$2 AND logical_step=0 AND attempt<$3 AND status='running'`, a.ConversationID, a.TurnID, a.Attempt)
+		_, err := tx.Exec(ctx, `UPDATE model_steps SET status='failed',error='interrupted' WHERE conversation_id=$1 AND turn_id=$2 AND logical_step=$4 AND attempt<$3 AND status='running'`, a.ConversationID, a.TurnID, a.Attempt, a.LogicalStep)
 		return err
 	})
 	return cached, err

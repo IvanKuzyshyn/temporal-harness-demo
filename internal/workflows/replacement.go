@@ -38,12 +38,13 @@ func (s *WebSessionState) claimControl(c chat.CommandIdentity) chat.AdmissionRes
 }
 func validWebIdentity(c chat.CommandIdentity, conversation chat.ConversationID, model string) bool {
 	kind := c.Kind == chat.CommandMessage || c.Kind == chat.CommandStop || c.Kind == chat.CommandReplace || c.Kind == chat.CommandDecide || c.Kind == chat.CommandRevoke
-	return kind && c.ConversationID == conversation && c.Model == model && c.WorkflowID == "web-chat/"+string(conversation) && chat.ValidID(string(c.CommandID)) && chat.ValidID(c.RequestID) && chat.ValidHash(c.PayloadDigest) && c.Sequence > 0 && (c.TurnID == "" || chat.ValidID(string(c.TurnID))) && (c.ExpectedActiveTurnID == "" || chat.ValidID(string(c.ExpectedActiveTurnID)))
+	decisionValid := c.Kind != chat.CommandDecide && c.ApprovalID == "" && c.ActionHash == "" && c.Decision == "" || c.Kind == chat.CommandDecide && chat.ValidID(c.ApprovalID) && chat.ValidHash(c.ActionHash) && (c.Decision == chat.ApprovalOnce || c.Decision == chat.ApprovalAll || c.Decision == chat.ApprovalDeny)
+	return decisionValid && kind && c.ConversationID == conversation && c.Model == model && c.WorkflowID == "web-chat/"+string(conversation) && chat.ValidID(string(c.CommandID)) && chat.ValidID(c.RequestID) && chat.ValidHash(c.PayloadDigest) && c.Sequence > 0 && (c.TurnID == "" || chat.ValidID(string(c.TurnID))) && (c.ExpectedActiveTurnID == "" || chat.ValidID(string(c.ExpectedActiveTurnID)))
 }
 
 func validWebReceipt(r chat.AdmissionResult) bool {
 	if r.State == "accepted" {
-		return r.Code == "" && (r.TargetTurnID == "" || chat.ValidID(string(r.TargetTurnID))) && (r.ReplacementTurnID == "" || chat.ValidID(string(r.ReplacementTurnID)))
+		return r.PolicyRevision >= 0 && len(r.GrantedToolset) <= 128 && r.Code == "" && (r.TargetTurnID == "" || chat.ValidID(string(r.TargetTurnID))) && (r.ReplacementTurnID == "" || chat.ValidID(string(r.ReplacementTurnID)))
 	}
-	return r.State == "rejected" && (r.Code == "invalid_command" || r.Code == "stale_target" || r.Code == "control_conflict") && r.TargetTurnID == "" && r.ReplacementTurnID == ""
+	return r.State == "rejected" && (r.Code == "invalid_command" || r.Code == "stale_target" || r.Code == "control_conflict" || r.Code == "invalid_approval" || r.Code == "approval_expired" || r.Code == "policy_conflict") && r.TargetTurnID == "" && r.ReplacementTurnID == ""
 }

@@ -30,6 +30,11 @@ type WebSessionInput struct {
 	Carry                   *WebSessionState
 }
 type WebSessionState struct {
+	ConversationID              chat.ConversationID
+	Policy                      chat.WebPolicy
+	PendingApproval             *chat.WebApproval
+	Batch                       []chat.WebAction
+	Step, StepsUsed             int
 	Status                      string
 	ActiveTurn                  chat.TurnID
 	Inbox                       []chat.TurnRef
@@ -69,14 +74,15 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 	if in.ContinueAfter <= 0 || in.ContinueAfter > 100 {
 		in.ContinueAfter = 100
 	}
-	state := WebSessionState{Status: "idle"}
+	state := WebSessionState{Status: "idle", ConversationID: in.ConversationID}
 	if in.Carry != nil {
 		state = *in.Carry
 	}
 	in.Carry = nil
+	state.ConversationID = in.ConversationID
 	validCheckpoint := state.ActiveTurn == "" && state.RecoveryPhase == "" && state.PendingResult == nil
 	if state.ActiveTurn != "" && state.Status == "recovering" && chat.ValidID(string(state.ActiveTurn)) {
-		validCheckpoint = state.RecoveryPhase == "start" && state.PendingResult == nil
+		validCheckpoint = (state.RecoveryPhase == "start" || state.RecoveryPhase == "model" || state.RecoveryPhase == "tools") && state.PendingResult == nil
 		if r := state.PendingResult; r != nil {
 			validCheckpoint = (state.RecoveryPhase == "join" || state.RecoveryPhase == "settle") && r.TurnID == state.ActiveTurn && r.ConversationID == in.ConversationID && (r.Status == "completed" || r.Status == "failed")
 			if state.Control != nil && r.Status == "cancelled" && r.TurnID == state.ActiveTurn && r.ConversationID == in.ConversationID {
@@ -87,7 +93,7 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 	for _, cp := range state.PendingAdmissions {
 		c := cp.Command
 		resultValid := cp.Phase == "check" && cp.Result == (chat.AdmissionResult{}) || cp.Phase == "receipt" && validWebReceipt(cp.Result)
-		if !validWebIdentity(c, in.ConversationID, in.Model) || !resultValid || (cp.Eligible && c.Kind != chat.CommandStop && !chat.ValidID(string(c.TurnID))) {
+		if !validWebIdentity(c, in.ConversationID, in.Model) || !resultValid || (cp.Eligible && (c.Kind == chat.CommandMessage || c.Kind == chat.CommandReplace) && !chat.ValidID(string(c.TurnID))) {
 			validCheckpoint = false
 		}
 	}
@@ -104,6 +110,37 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 	}
 	if r := state.PendingResult; r != nil && len(r.Reason) > 128 {
 		validCheckpoint = false
+	}
+	if state.Policy.Revision < 0 || len(state.Policy.GrantedToolset) > 128 || state.Step < 0 || state.Step >= chat.MaxWebSteps || state.StepsUsed < 0 || state.StepsUsed > chat.MaxWebSteps || len(state.Batch) > 4 {
+		validCheckpoint = false
+	}
+	seenActions := map[string]bool{}
+	for _, a := range state.Batch {
+		if seenActions[a.Scope.ToolCallID] {
+			validCheckpoint = false
+		}
+		seenActions[a.Scope.ToolCallID] = true
+		if a.Recorded && a.Outcome == "" {
+			validCheckpoint = false
+		}
+		if !registeredWebScope(a.Scope) || a.Scope.ConversationID != in.ConversationID || a.Scope.TurnID != state.ActiveTurn || (a.Outcome != "" && a.Outcome != "authorized" && a.Outcome != "denied" && a.Outcome != "expired") {
+			validCheckpoint = false
+		}
+	}
+	if p := state.PendingApproval; p != nil {
+		bound := false
+		for _, a := range state.Batch {
+			if !a.Recorded {
+				bound = p.Scope == a.Scope
+				break
+			}
+		}
+		if !bound || (p.Decision != "" && p.Decision != chat.ApprovalOnce && p.Decision != chat.ApprovalAll && p.Decision != chat.ApprovalDeny) {
+			validCheckpoint = false
+		}
+		if !registeredWebScope(p.Scope) || !chat.ValidID(p.ID) || p.Scope.ConversationID != in.ConversationID || p.Scope.TurnID != state.ActiveTurn || p.Deadline.IsZero() || len(state.Batch) == 0 {
+			validCheckpoint = false
+		}
 	}
 	if state.UnconfirmedModelInvocations != 0 || state.DecidingAdmission != nil || len(state.Inbox) > in.MaxInbox || len(state.PendingAdmissions) > 101 || !validCheckpoint || state.RecoveringAdmissions != len(state.PendingAdmissions) || state.RecoveryDelay < 0 || state.RecoveryDelay > time.Minute {
 		return temporal.NewNonRetryableApplicationError("invalid carry", "InvalidRequest", nil)
@@ -129,6 +166,9 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 	}
 	admit := func(c chat.CommandIdentity, eligible bool) chat.AdmissionResult {
 		result := chat.AdmissionResult{State: "rejected", Code: "invalid_command"}
+		if eligible && (c.Kind == chat.CommandDecide || c.Kind == chat.CommandRevoke) {
+			return state.decideWeb(c, workflow.Now(ctx))
+		}
 		if eligible && (c.Kind == chat.CommandStop || c.Kind == chat.CommandReplace) {
 			result = state.claimControl(c)
 			if result.State == "accepted" && turnCancel != nil {
@@ -159,7 +199,7 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 			return reject, nil
 		}
 		eligible := (c.Kind == chat.CommandMessage || c.Kind == chat.CommandReplace) && len(c.Payload.AttachmentIDs) == 0 && c.Payload.Text != "" && len(c.Payload.Text) <= 65536 && chat.ValidID(string(c.TurnID))
-		if c.Kind == chat.CommandStop {
+		if c.Kind == chat.CommandStop || c.Kind == chat.CommandDecide || c.Kind == chat.CommandRevoke {
 			eligible = c.TurnID == ""
 		}
 		if len(state.PendingAdmissions) > 0 {
@@ -202,7 +242,7 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 			// One bounded emergency slot can stop active work after normal
 			// admission fills the run budget. It cannot admit an unbounded
 			// stream of stale controls while inference delays rollover.
-			reservedControl := control && operations <= in.ContinueAfter && state.Control == nil && state.ActiveTurn != "" && c.Payload.ExpectedActiveTurnID == state.ActiveTurn && state.RecoveryPhase == "start"
+			reservedControl := control && operations <= in.ContinueAfter && state.Control == nil && state.ActiveTurn != "" && c.Payload.ExpectedActiveTurnID == state.ActiveTurn && (state.RecoveryPhase == "start" || state.RecoveryPhase == "model" || state.RecoveryPhase == "tools")
 			if ((operations >= in.ContinueAfter || workflow.GetInfo(ctx).GetContinueAsNewSuggested()) && !reservedControl) || (state.Status == "recovering" && !control) || state.RecoveringAdmissions > 0 {
 				return errors.New("session recovery or rollover pending; retry command")
 			}
@@ -250,7 +290,7 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 			if admissionErr != nil {
 				return admissionErr
 			}
-			if state.Control != nil {
+			if state.ActiveTurn != "" {
 				state.Status = "recovering"
 			}
 			in.Carry = &state
@@ -305,6 +345,15 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 				continue
 			}
 			state.Status = "cancelling"
+			if state.PendingApproval != nil {
+				if err := workflow.ExecuteActivity(webStorageContext(ctx), WebApprovalActivity, chat.WebApprovalRecord{Approval: *state.PendingApproval, Outcome: "cancelled"}).Get(ctx, nil); err != nil {
+					if err = recoverTurn(err); err != nil {
+						return err
+					}
+					continue
+				}
+				state.PendingApproval = nil
+			}
 			if err := workflow.ExecuteActivity(webStorageContext(ctx), WebMarkCancellingActivity, ref).Get(ctx, nil); err != nil {
 				if err = recoverTurn(err); err != nil {
 					return err
@@ -330,10 +379,16 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 			if state.Control != nil {
 				continue
 			}
+			state.RecoveryPhase = "model"
+		}
+		if state.RecoveryPhase == "model" {
 			state.RecoveryDelay = 0
 			mctx := workflow.WithActivityOptions(turnCtx, workflow.ActivityOptions{TaskQueue: WebLLMQueue, StartToCloseTimeout: 10 * time.Minute, ScheduleToCloseTimeout: 25 * time.Minute, HeartbeatTimeout: 15 * time.Second, WaitForCancellation: true, RetryPolicy: &temporal.RetryPolicy{MaximumAttempts: 2, InitialInterval: time.Second, NonRetryableErrorTypes: []string{"InvalidRequest", "ModelNotFound"}}})
 			// Service shutdown is not user cancellation; genuine cancellation joins.
-			err := workflow.ExecuteActivity(mctx, WebModelActivity, ref).Get(join, nil)
+			modelRef := ref
+			modelRef.Step = state.Step
+			var output chat.ModelStepResult
+			err := workflow.ExecuteActivity(mctx, WebModelActivity, modelRef).Get(join, &output)
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -342,6 +397,18 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 				// All outcomes pass through the same sealed invocation barrier.
 				continue
 			}
+			state.StepsUsed++
+			if err == nil && len(output.Actions) > 0 {
+				if len(output.Actions) > 4 || state.StepsUsed+len(output.Actions) >= chat.MaxWebSteps {
+					err = errors.New("step budget exhausted")
+				} else {
+					state.StepsUsed += len(output.Actions)
+					state.Batch = output.Actions
+					state.RecoveryPhase = "tools"
+					continue
+				}
+			}
+			ref.Step = state.Step
 			result := chat.TurnResult{TurnRef: ref, Status: "completed"}
 			if err != nil {
 				result.Status = "failed"
@@ -349,6 +416,27 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 			}
 			state.PendingResult = &result
 			state.RecoveryPhase = "join"
+		}
+		if state.RecoveryPhase == "tools" {
+			if err := state.webBatch(ctx, turnCtx, join, func() bool {
+				return operations >= in.ContinueAfter || len(state.PendingAdmissions) > 0 || workflow.GetInfo(ctx).GetContinueAsNewSuggested()
+			}); err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				if state.Control != nil {
+					continue
+				}
+				if !retryWebStorage(err) {
+					state.PendingResult = &chat.TurnResult{TurnRef: ref, Status: "failed", Reason: "tool_error"}
+					state.RecoveryPhase = "join"
+				} else {
+					if err = recoverTurn(err); err != nil {
+						return err
+					}
+				}
+			}
+			continue
 		}
 		if state.RecoveryPhase == "join" || state.RecoveryPhase == "cancel_join" {
 			var pending int64
@@ -400,6 +488,10 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 		turnCtx, turnCancel = nil, nil
 		state.ActiveTurn = ""
 		state.PendingResult = nil
+		state.Batch = nil
+		state.PendingApproval = nil
+		state.Step = 0
+		state.StepsUsed = 0
 		state.RecoveryPhase = ""
 		state.RecoveryDelay = 0
 		state.Status = "idle"

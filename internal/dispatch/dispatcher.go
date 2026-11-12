@@ -65,6 +65,9 @@ func New(repo Repository, gateway SessionGateway, opts Options) (*Dispatcher, er
 	return &Dispatcher{repo: repo, gateway: gateway, opts: opts}, nil
 }
 func validResult(r CommandResult) bool {
+	if r.PolicyRevision < 0 || len(r.GrantedToolset) > 128 || (r.State != "accepted" && (r.PolicyRevision != 0 || r.GrantedToolset != "")) {
+		return false
+	}
 	if r.TargetTurnID != "" && (r.State != "accepted" || !chat.ValidID(string(r.TargetTurnID))) {
 		return false
 	}

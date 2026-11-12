@@ -5,11 +5,16 @@ import (
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/activities"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/workflows"
 	"github.com/stretchr/testify/require"
+	"go.temporal.io/sdk/activity"
 	tc "go.temporal.io/sdk/client"
 	tw "go.temporal.io/sdk/worker"
 	"testing"
 	"time"
 )
+
+func (w *fakeWorker) RegisterActivityWithOptions(v any, _ activity.RegisterOptions) {
+	w.activities = append(w.activities, v)
+}
 
 func TestWebWorkerIsolationAndCleanup(t *testing.T) {
 	c := &fakeClient{}
@@ -28,7 +33,7 @@ func TestWebWorkerIsolationAndCleanup(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"web-chat-agents", "web-chat-llm"}, queues)
 	require.Len(t, workers[0].workflows, 1)
-	require.Len(t, workers[0].activities, 7)
+	require.Len(t, workers[0].activities, 10)
 	require.Len(t, workers[1].activities, 1)
 	require.NoError(t, r.Close())
 	require.Equal(t, 1, c.closed)
