@@ -81,6 +81,8 @@ func TestContextCanonicalEvidenceSurvivesForgetfulSummaryAndStoreRestart(t *test
 	require.NoError(t, e)
 	require.Contains(t, s.Text, "no observation")
 	require.NoError(t, runner.Close())
+	var originalUserID string
+	require.NoError(t, f.pool.QueryRow(f.ctx, "SELECT entry_id::text FROM messages WHERE turn_id=$1 AND role='user'", approvedScope.TurnID).Scan(&originalUserID))
 	require.NoError(t, store.Close())
 	// Only this fixture's own original is moved. Any hidden re-open would fail;
 	// the recorded output must suffice even though the original is unavailable.
@@ -120,4 +122,13 @@ func TestContextCanonicalEvidenceSurvivesForgetfulSummaryAndStoreRestart(t *test
 	require.Len(t, coverage.Included, 1)
 	require.Equal(t, approvedScope, coverage.Included[0].Scope)
 	require.Zero(t, coverage.Omitted)
+	quotes := page.Messages[len(page.Messages)-1].Context.Coverage.Quotations
+	require.NotNil(t, quotes)
+	require.Equal(t, 3, quotes.Eligible)
+	require.Len(t, quotes.Included, 3)
+	require.Equal(t, originalUserID, quotes.Included[0].User.SourceID)
+	require.Contains(t, string(raw), originalUserID, "original user source survives worker/store restart separately from generated notes")
+	require.Contains(t, string(raw), "assistantGeneratedNotes")
+	require.Contains(t, string(raw), "assistantReplies")
+	require.Contains(t, string(raw), "userQuotations")
 }

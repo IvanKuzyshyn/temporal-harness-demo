@@ -96,7 +96,7 @@ Uploads alone do not grant content access.
   Omitted model defaults to **qwen3.5:9b**; explicit empty/null/unknown tags fail.
 - `GET /conversations?cursor=...&limit=50` → 200 `ConversationPage`.
 - `GET /conversations/{id}` → 200 `Metadata`.
-- `GET /conversations/{id}/messages?before=...&limit=50` → 200 `MessagePage`. Final assistant records include nullable `context` accounting/coverage; `context.coverage.evidence` reports bounded authorized-source selection, omitted/deduplicated counts, immutable scope/hashes and original-versus-excerpt truncation. It grants no new original access and is not full-memory certification; see [bounded context](web-chat-context.md).
+- `GET /conversations/{id}/messages?before=...&limit=50` → 200 `MessagePage`. Final assistant records include nullable `context` accounting/coverage; `context.coverage.evidence` reports bounded authorized-source selection, omitted/deduplicated counts, immutable scope/hashes and original-versus-excerpt truncation. `context.coverage.quotations` separately reports whole original user/assistant message pairs, source entry IDs/turn IDs/completion order, text hashes/byte lengths and omitted counts (no raw text). Neither channel grants new original access or certifies full memory; see [bounded context](web-chat-context.md).
 - `POST /conversations/{id}/messages` (`MessageRequest`) → 202 `Receipt`.
 - `POST /conversations/{id}/replace` (`ReplaceRequest`) → 202 `Receipt`.
 - `POST /conversations/{id}/stop` (`StopRequest`) → 202 `Receipt`.

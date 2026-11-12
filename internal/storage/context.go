@@ -132,7 +132,10 @@ func (r *Repository) LoadContext(ctx context.Context, ref chat.TurnRef) (out cha
 				out.Older = append(out.Older, i.exchange)
 			}
 		}
-		return loadContextEvidence(ctx, tx, ref, &out)
+		if e = loadContextEvidence(ctx, tx, ref, &out); e != nil {
+			return e
+		}
+		return loadContextQuotations(ctx, tx, ref, &out)
 	})
 	return
 }

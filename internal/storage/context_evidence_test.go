@@ -139,4 +139,9 @@ func TestContextEvidenceAuthorizationOwnershipAndOrdering(t *testing.T) {
 	require.Len(t, assembled.Coverage.Evidence.Included, 4)
 	require.Equal(t, 3, assembled.Coverage.Evidence.Omitted)
 	require.LessOrEqual(t, assembled.Accounting.Total, 16384)
+	require.Len(t, assembled.Coverage.Quotations.Included, 4)
+	metadata, e := json.Marshal(chat.ContextMetadata{Coverage: assembled.Coverage, Accounting: assembled.Accounting})
+	require.NoError(t, e)
+	require.LessOrEqual(t, len(metadata), 8192, "combined maximum source descriptors fit existing SQL metadata cap")
+	require.NotContains(t, string(metadata), "identical text does not collapse")
 }

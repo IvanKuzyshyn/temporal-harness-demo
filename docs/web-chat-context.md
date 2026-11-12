@@ -1,10 +1,11 @@
 # Bounded context and durable memory (Task10)
 
-**Continuation1 adds independently retained canonical evidence; overall semantic
-acceptance remains BLOCKED.** The latest original both-model document/image-memory
-probe passes unchanged, but a repeat exposed Qwen overriding a user-stated fact
-with an assistant refusal, and a separate captured-refusal regression still fails.
-A passing narrow run is not universal full-fidelity memory qualification. The two failed runs remain recorded:
+**Continuation2 retains bounded, explicitly attributed original user/assistant
+quotations alongside separately labeled generated notes.** The unchanged main
+both-model memory scenario and captured-refusal regression now pass in one live
+qualification run. Generative summaries can still be wrong; this is not universal
+memory fidelity or model-policy reliability. All earlier failures remain recorded,
+including the original two runs:
 `task-10-live-context.jsonl` and `task-10-live-context-data.jsonl` in the controller's
 dispatch directory. Gemma had promoted a contradictory assistant interpretation
 into its summary after the canonical image result left recent history. The fix
@@ -12,7 +13,7 @@ keeps bounded approved observations separately attributed alongside lossy memory
 “Canonical” means immutable recorded output, **not guaranteed factual truth** of
 image/document inference. No semantic waiver, fallback, cap increase or image
 profile expansion. See `task-10-report.md` and the new exclusive
-`task-10-live-canonical-evidence*.jsonl` artifacts.
+`task-10-live-canonical-evidence*.jsonl` and `task-10-c2-*.jsonl` artifacts.
 
 ## Production assembly and admission
 
@@ -25,13 +26,16 @@ and the **separate Task9 image profile branch**. It is not a detached estimator.
 Default limits are context16,384, estimated text input12,000, output2,000,
 reserve2,384, at most six completed recent exchanges, summary bound1,500,
 and readable evidence excerpts4,000 UTF-8 bytes shared across current tool groups
-and separately retained results (and any legacy injected recent-result seam). All sublimits remain subordinate to the final total. Mandatory
+and separately retained results AND original quotation pairs (and any legacy
+injected recent-result seam). All sublimits remain subordinate to the final total. Mandatory
 system instructions, current prompt, replacement provenance, schemas and complete
 current assistant/tool groups are checked before optional history or summary
 inference. Oversized mandatory input fails; it is never silently clipped. Recent
 exchanges are evicted whole, oldest first; assistant/tool pairs are indivisible.
 Current groups consume the excerpt allowance first. Up to four independently
-retained observations are admitted next, then optional summary/recent exchanges.
+retained observations are admitted next, then up to four whole original quotation
+pairs, then optional generated notes/recent exchanges. Quotes get no new budget;
+if either member cannot fit, the pair is omitted whole, never misleadingly clipped.
 An evidence candidate that cannot fit the final total is omitted whole; excerpt
 clipping preserves identity/status and reports truncation. Older summary/evidence
 precede recent completed human corrections, whose distinct attribution remains. Output exhaustion uses both
@@ -92,6 +96,31 @@ authority, extraction or new analysis is involved. Omitted-result counts,
 partial/failed extraction status, chunk byte coverage and excerpt truncation remain
 explicit untrusted evidence. New analysis still needs scoped authorization.
 
+### Original speaker attribution
+
+An additional conversation-scoped query loads at most the earliest four completed
+user/final-assistant message pairs outside the newest six, ordered by assistant
+completion sequence. It reuses the existing completed count; there is no relevance
+search, word/secret detector or unbounded anchoring. Current/cancelled turns and
+other conversations are excluded. Message IDs, turn IDs, completion sequences,
+SHA256 of original UTF-8 text and byte lengths identify each source. Current/recent
+pairs deduplicate; distinct sources are not collapsed by equal text.
+
+The final context combines `assistantGeneratedNotes`, exact `assistantReplies`,
+and exact `userQuotations` in a single structured historical-data block, followed
+by newer human corrections and the current request. The immutable summary text
+is unchanged, but no longer presented as the only representation of older speaker
+attribution. A quotation establishes **what that speaker wrote**, not factual
+truth, compliance with a request, or application policy. In particular an earlier
+assistant refusal remains recorded; recall must not fabricate successful storage.
+No extra inference, summary component, deadline, publication or original attachment
+access is introduced. The tested additive-user-block alternative did not resolve
+Qwen recall and is not implemented.
+
+This earliest-four slice may omit a later relevant fact/correction; recent history
+and the lossy summary remain separate channels. Whole-pair omission under the
+shared excerpt/total limits is explicit. Full original history stays in SQL/API.
+
 Summaries use immutable version and final-assistant-message watermark in
 `conversation_summaries`. Publication serializes under the conversation lock and
 checks the exact contiguous eligible completion interval, prior version/boundary/
@@ -148,6 +177,14 @@ contains it, but history is never reconstructed from display events.
   the bounded model evidence message contains it. `scope.ContentRef` is the
   attachment checksum or canonical URL reference, not authorization to re-read.
   A retained source with zero excerpt bytes is explicitly clipped, not full recall.
+- `quotations`: original-message coverage, with `eligible` older completed pairs,
+  `included` (at most four `{user, assistant}` source-descriptor pairs), `omitted`,
+  and `deduplicated`. Each descriptor has `sourceId` (message entry ID), `speaker`,
+  `turnId`, completion `sequence`, `textHash` (SHA256 of original UTF-8 bytes), and
+  `bytes`. No quotation text is stored in coverage. Pairs are whole, not clipped.
+  These counts are separate from `omittedExchanges`, which continues to describe
+  the summary/recent channels; neither can certify universal fidelity. The combined
+  maximum tool/quotation descriptors fit the existing8192-byte metadata cap.
 - `context.accounting`: `method`, `inputTokens`, `imageTokens`, `outputTokens`,
   `reserve`, `total`. These are admitted request bounds, **not measured tokens**;
   summary generation accounting is recorded separately on the summary version.
@@ -184,11 +221,22 @@ and summary-only no-reasoning configuration; the new live probe passes for both.
 However, a subsequent Qwen run first refused to store the harmless user-supplied
 phrase, then treated its own refusal as overriding that user statement. A general
 summary attribution clarification did not fix the separately forced-refusal
-regression (`TestContextLiveSummaryAttribution`): Qwen still refuses final recall;
-Gemma passes. That probe explicitly injects only the initial assistant response;
+regression (`TestContextLiveSummaryAttribution`) in continuation1: Qwen refused
+final recall while Gemma passed. That probe explicitly injects only the initial assistant response;
 subsequent summaries/final recall use the real registered model. It is **not** a
 fallback or a replacement for the unchanged all-real main fixture. All failed
-artifacts/assertions remain. Do not mark overall memory acceptance complete.
+artifacts/assertions remain.
+
+Continuation2 investigated exactly two predeclared representations, once per model.
+Structured origins passed both; an independent additive user-quote block failed
+Qwen and was rejected. Only structured origins was implemented. The subsequent
+unchanged main and captured-refusal tests passed both exact models, with no output
+exhaustion, on one actual qualification run. Qwen's refusal-case summary still
+claimed no user facts; Gemma's main summary still misinterpreted the image. Correct
+final recall alongside those failures demonstrates the separate-source path, NOT
+that summaries became faithful. No rerun-until-green or assertion weakening.
+The offline investigation test is separately opt-in and its failed candidate remains
+in evidence; it is not a production acceptance gate to repeatedly sample.
 
 Deterministic tests deliberately supply contradictory/forgetful summaries and
 verify the actual final request retains correctly attributed evidence. Real
@@ -196,7 +244,8 @@ worker/store restart also succeeds with the test-owned original unavailable and
 no reanalysis; denied content is never loaded. Budget/dedup/partial-source and
 SQL ownership/order/count-limit cases are covered separately.
 
-The latest-four rule can omit an older relevant source, and total-budget pressure
+The latest-four tool rule and earliest-four quotation rule can omit relevant
+sources or later corrections outside recent context, and total-budget pressure
 can omit any optional evidence. No relevance search or unlimited-history promise
 is implied. Source bounds are estimates, sampled host RSS is not GPU admission,
 and a narrow passing semantic probe is not universal memory or image qualification.
