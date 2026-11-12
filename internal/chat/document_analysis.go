@@ -18,11 +18,14 @@ func (in DocumentAnalysisInput) ChildID() string {
 	return "document/" + in.Scope.ToolCallID + "/" + in.Scope.ActionHash
 }
 
+const NarrowImageProfile = "ollama-0.40.15-mlx-640x160-v1"
+
 type DocumentAnalysisResult struct {
-	ChildID   string `json:"childId"`
-	Chunks    int    `json:"chunks"`
-	Truncated bool   `json:"truncated"`
-	Status    string `json:"status"`
+	ImageProfile string `json:"imageProfile,omitempty"`
+	ChildID      string `json:"childId"`
+	Chunks       int    `json:"chunks"`
+	Truncated    bool   `json:"truncated"`
+	Status       string `json:"status"`
 }
 type DocumentChunkInput struct {
 	Analysis DocumentAnalysisInput

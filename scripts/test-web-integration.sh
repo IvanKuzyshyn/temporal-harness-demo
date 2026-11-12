@@ -117,7 +117,7 @@ PY
   echo "Actual isolated Temporal address=$WEBCHAT_TEST_TEMPORAL_ADDRESS pid=$temporal_pid"
   export WEBCHAT_TEST_RESTART_REQUEST="$work/restart.request"
   default_run=.
-  if [[ "$mode" == analysis ]]; then default_run='Test(Document|AnalysisChild|ParentCancellationJoinsDocumentChild|Attachment|WebToolTimedOutBodyBlocksAcceptedReplacement|ReplacementAfterTimedOutAttemptDoesNotBypassCleanup|OrdinaryHardWorkerDeathRecoversCanonicalResponseAndFollowUp)'; fi
+  if [[ "$mode" == analysis ]]; then default_run='Test(Document|AnalysisChild|ApprovedImage|ImageApplication|ImageScope|ImageChild|ParentCancellationJoinsDocumentChild|Attachment|WebToolTimedOutBodyBlocksAcceptedReplacement|ReplacementAfterTimedOutAttemptDoesNotBypassCleanup|OrdinaryHardWorkerDeathRecoversCanonicalResponseAndFollowUp)'; fi
   if [[ "$mode" == replacement ]]; then default_run='Test(Replacement|ClosedUnreceiptedControl|OrdinaryHardWorkerDeath)'; fi
   if [[ "$mode" == approval ]]; then default_run='Test(Approval|Approve|Revoke|StaleDecision|Expiry|NewTool|WebTool)'; fi
   if [[ "$mode" == fetch ]]; then default_run='Test(Fetch|WebToolTimedOutBodyBlocksAcceptedReplacement|ApproveAllSurvivesRollover|StaleDecisionAfterReplacement)'; fi

@@ -66,6 +66,7 @@ func startWeb(ctx context.Context, address string, a *activities.ChatActivities,
 		} else if q == workflows.WebDocumentsQueue {
 			w.RegisterWorkflow(workflows.DocumentAnalysisWorkflow)
 			w.RegisterActivity(a.PrepareDocumentAnalysis)
+			w.RegisterActivity(a.AnalyzeAttachmentImage)
 			w.RegisterActivity(a.AnalyzeDocumentChunk)
 			w.RegisterActivity(a.FinishDocumentAnalysis)
 		} else {

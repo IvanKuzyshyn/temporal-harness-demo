@@ -30,7 +30,7 @@ func (s *Store) ResolveImage(ctx context.Context, scope chat.ApprovalScope, ref 
 	if err := r.AuthorizeAttachment(ctx, scope, ref.AttachmentID); err != nil {
 		return out, err
 	}
-	if ref.DerivedKey != "model-png-v1" || ref.Checksum != scope.ContentRef {
+	if (ref.DerivedKey != "model-png-v1" && ref.DerivedKey != llm.NarrowImageProfile) || ref.Checksum != scope.ContentRef {
 		return out, ErrInvalid
 	}
 	a, err := s.repo.GetAttachment(ctx, scope.ConversationID, ref.AttachmentID)
@@ -70,7 +70,14 @@ func (s *Store) ResolveImage(ctx context.Context, scope chat.ApprovalScope, ref 
 	if err = ctx.Err(); err != nil {
 		return out, err
 	}
-	return ResolvedImage{Reference: ref, Data: b, Width: w, Height: h}, nil
+	if ref.DerivedKey == llm.NarrowImageProfile {
+		b, err = narrowRaster(b)
+		if err != nil {
+			return out, err
+		}
+		w, h = 640, 160
+	}
+	return ResolvedImage{Reference: ref, Data: b, Width: w, Height: h}, ctx.Err()
 }
 func prepareRaster(data []byte) ([]byte, int, int, error) {
 	if len(data) > MaxBytes {

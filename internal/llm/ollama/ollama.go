@@ -81,37 +81,46 @@ func (m *Model) Chat(ctx context.Context, req llm.Request, emit func(llm.Delta) 
 	if err := ctx.Err(); err != nil {
 		return llm.Response{}, err
 	}
+	imageRequest := req.Image != nil
+	for _, msg := range req.Messages {
+		imageRequest = imageRequest || len(msg.Images) > 0
+	}
 	stream := true
 	wire := &api.ChatRequest{Model: req.Model, Stream: &stream}
-	if req.ContextWindow > 0 || req.MaxOutputTokens > 0 {
-		wire.Options = map[string]any{}
-		if req.ContextWindow > 0 {
-			wire.Options["num_ctx"] = req.ContextWindow
+	if imageRequest {
+		var err error
+		wire, err = m.admittedImage(ctx, req)
+		if err != nil {
+			return llm.Response{}, err
 		}
-		if req.MaxOutputTokens > 0 {
-			wire.Options["num_predict"] = req.MaxOutputTokens
+	} else {
+		if req.ContextWindow > 0 || req.MaxOutputTokens > 0 {
+			wire.Options = map[string]any{}
+			if req.ContextWindow > 0 {
+				wire.Options["num_ctx"] = req.ContextWindow
+			}
+			if req.MaxOutputTokens > 0 {
+				wire.Options["num_predict"] = req.MaxOutputTokens
+			}
 		}
-	}
-	for _, msg := range req.Messages {
-		if len(msg.Images) > 0 {
-			return llm.Response{}, &InvalidRequestError{fmt.Errorf("image_admission_unqualified for exact model %q", req.Model)}
+		for _, msg := range req.Messages {
+			out := api.Message{Role: msg.Role, Content: msg.Content, ToolCallID: msg.ToolCallID, ToolName: msg.ToolName}
+			for _, call := range msg.ToolCalls {
+				var args api.ToolCallFunctionArguments
+				if err := json.Unmarshal(call.Args, &args); err != nil {
+					return llm.Response{}, &InvalidRequestError{err}
+				}
+				out.ToolCalls = append(out.ToolCalls, api.ToolCall{ID: call.ID, Function: api.ToolCallFunction{Name: call.Name, Arguments: args}})
+			}
+			wire.Messages = append(wire.Messages, out)
 		}
-		out := api.Message{Role: msg.Role, Content: msg.Content, ToolCallID: msg.ToolCallID, ToolName: msg.ToolName}
-		for _, call := range msg.ToolCalls {
-			var args api.ToolCallFunctionArguments
-			if err := json.Unmarshal(call.Args, &args); err != nil {
+		for _, tool := range req.Tools {
+			var params api.ToolFunctionParameters
+			if err := json.Unmarshal(tool.Parameters, &params); err != nil {
 				return llm.Response{}, &InvalidRequestError{err}
 			}
-			out.ToolCalls = append(out.ToolCalls, api.ToolCall{ID: call.ID, Function: api.ToolCallFunction{Name: call.Name, Arguments: args}})
+			wire.Tools = append(wire.Tools, api.Tool{Type: "function", Function: api.ToolFunction{Name: tool.Name, Description: tool.Description, Parameters: params}})
 		}
-		wire.Messages = append(wire.Messages, out)
-	}
-	for _, tool := range req.Tools {
-		var params api.ToolFunctionParameters
-		if err := json.Unmarshal(tool.Parameters, &params); err != nil {
-			return llm.Response{}, &InvalidRequestError{err}
-		}
-		wire.Tools = append(wire.Tools, api.Tool{Type: "function", Function: api.ToolFunction{Name: tool.Name, Description: tool.Description, Parameters: params}})
 	}
 	res := llm.Response{Message: llm.Message{Role: "assistant"}}
 	var callbackErr error

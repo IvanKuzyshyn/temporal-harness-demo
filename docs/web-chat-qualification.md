@@ -2,7 +2,11 @@
 
 ## Status: implementation unblocked by user; image admission remains unqualified
 
-### Task9 small-image experiments — 2026-11-12
+### Task9 continuation1 — narrow production image profile, 2026-11-12
+
+Selected option1 is implemented: [profile contract and source derivation](web-chat-image-profile.md), [source hashes/configs/runtime identity](qualification/2026-11-12-task9-image-profile-sources.json), and [actual application evidence](qualification/2026-11-12-task9-image-application.jsonl). Exact640×160 normalized raster yields102 Qwen or87 Gemma image tokens including delimiters from pinned MLX source, not candidate reserves or finite semantic probes. Mandatory text/framing/output admission is checked before dispatch; every request rejects runtime/digest/profile mismatch. Actual approved API→Temporal→resolver→production provider→SQL analysis translated PNG/JPEG/SVG on both models before and after worker/store restart (12 image results). New instructions required new approval. No OCR/fallback or larger-Qwen investigation. **Global `imageAdmissionQualified:false` and original failures remain unchanged.** Earlier application-disabled statements below describe the prior partial checkpoint and are superseded only for this explicitly narrow profile.
+
+### Task9 small-image experiments — 2026-11-12 (prior partial checkpoint)
 
 [New raw evidence](qualification/2026-11-12-task9-small-images.jsonl) records six bounded live qualification-only calls: the known640×160 PNG, JPEG95, and a static-vector SVG reconstruction rasterized by the actual constrained helper. Both exact tags translated all three: Qwen `HELLO WORLD` (129 prompt tokens each), Gemma `Hello world` (111 each). Command: `caffeinate -is env WEBCHAT_TASK9_LIVE=1 WEBCHAT_TASK9_EVIDENCE=<new-exclusive-jsonl-path> mise exec -- go test -p 1 -count=1 -timeout=10m -v ./scripts -run '^TestTask9LiveSmallImageExperiments$'`;18.05s test elapsed. One image/tiny prompt/16K context/2000 output/90-second deadline, serial calls; no shared service restart or model substitution.
 

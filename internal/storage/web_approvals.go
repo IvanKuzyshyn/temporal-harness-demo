@@ -178,6 +178,9 @@ func (r *Repository) SaveWebToolResult(ctx context.Context, s chat.ApprovalScope
 		if s.ToolName != "file_upload" || result.AttachmentID == "" || analysis.ChildID != "document/"+s.ToolCallID+"/"+s.ActionHash || analysis.Chunks != len(result.Coverage) || analysis.Truncated != result.Truncated || analysis.Status != result.ExtractionStatus || (analysis.Status != "completed" && analysis.Status != "partial" && analysis.Status != "unsupported") {
 			return chat.ErrInvalid
 		}
+		if analysis.ImageProfile != "" && (analysis.ImageProfile != chat.NarrowImageProfile || analysis.Chunks != 0 || analysis.Status == "unsupported") {
+			return chat.ErrInvalid
+		}
 		end := 0
 		for i, c := range result.Coverage {
 			if c.Index != i || c.StartByte != end || c.EndByte <= c.StartByte || c.EndByte-c.StartByte > 4000 || c.EndByte > 128000 {

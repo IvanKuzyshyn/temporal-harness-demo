@@ -24,6 +24,13 @@ func DocumentAnalysisWorkflow(ctx workflow.Context, in chat.DocumentAnalysisInpu
 	if result.Chunks < 0 || result.Chunks > in.Budget.MaxChunks || result.ChildID != in.ChildID() {
 		return result, temporal.NewNonRetryableApplicationError("invalid document manifest", "InvalidRequest", nil)
 	}
+	if result.ImageProfile != "" {
+		if result.ImageProfile != chat.NarrowImageProfile || result.Chunks != 0 {
+			return result, temporal.NewNonRetryableApplicationError("invalid image profile", "InvalidRequest", nil)
+		}
+		err := workflow.ExecuteActivity(work, "AnalyzeAttachmentImage", in).Get(join, &result)
+		return result, err
+	}
 	for base := 0; base < result.Chunks; base += in.Budget.Parallelism {
 		if ctx.Err() != nil {
 			return result, ctx.Err()

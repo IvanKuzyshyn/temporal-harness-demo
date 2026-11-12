@@ -3,8 +3,9 @@
 package webintegration_test
 
 import (
+	"bytes"
 	"context"
-	"strings"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -39,7 +40,7 @@ func (i *documentInbound) Init(next interceptor.WorkflowOutboundInterceptor) err
 	return i.Next.Init(&documentOutbound{interceptor.WorkflowOutboundInterceptorBase{Next: next}})
 }
 func (i *documentOutbound) ExecuteActivity(ctx workflow.Context, name string, args ...interface{}) workflow.Future {
-	if name == "AnalyzeDocumentChunk" {
+	if name == "AnalyzeDocumentChunk" || name == "AnalyzeAttachmentImage" {
 		opts := workflow.GetActivityOptions(ctx)
 		opts.StartToCloseTimeout = 3 * time.Second
 		opts.HeartbeatTimeout = time.Second
@@ -71,7 +72,9 @@ func (m *unjoinedDocumentModel) Chat(ctx context.Context, r llm.Request, _ func(
 	<-ctx.Done()
 	return llm.Response{}, ctx.Err()
 }
-func TestParentCancellationJoinsDocumentChild(t *testing.T) {
+func TestParentCancellationJoinsDocumentChild(t *testing.T)    { testAnalysisPhysicalJoin(t, false) }
+func TestImageChildCancellationJoinsPhysicalBody(t *testing.T) { testAnalysisPhysicalJoin(t, true) }
+func testAnalysisPhysicalJoin(t *testing.T, imageInput bool) {
 	f := setup(t)
 	store, e := attachments.NewStore(t.TempDir(), f.repo, nil)
 	require.NoError(t, e)
@@ -90,6 +93,7 @@ func TestParentCancellationJoinsDocumentChild(t *testing.T) {
 			worker.RegisterWorkflow(w.DocumentAnalysisWorkflow)
 			worker.RegisterActivity(a.PrepareDocumentAnalysis)
 			worker.RegisterActivity(a.AnalyzeDocumentChunk)
+			worker.RegisterActivity(a.AnalyzeAttachmentImage)
 			worker.RegisterActivity(a.FinishDocumentAnalysis)
 		case w.WebLLMQueue:
 			worker.RegisterActivityWithOptions(a.ChatStep, activity.RegisterOptions{Name: w.WebModelActivity})
@@ -104,7 +108,14 @@ func TestParentCancellationJoinsDocumentChild(t *testing.T) {
 		}
 	}()
 	c := f.conversation(t, "qwen3.5:9b")
-	file, e := store.Put(f.ctx, c.ID, strings.NewReader("one small chunk"), attachments.UploadMetadata{Name: "held.txt", MediaType: "text/plain"})
+	data := []byte("one small chunk")
+	metadata := attachments.UploadMetadata{Name: "held.txt", MediaType: "text/plain"}
+	if imageInput {
+		data, e = os.ReadFile("../../scripts/testdata/bonjour.png")
+		require.NoError(t, e)
+		metadata = attachments.UploadMetadata{Name: "held.png", MediaType: "image/png"}
+	}
+	file, e := store.Put(f.ctx, c.ID, bytes.NewReader(data), metadata)
 	require.NoError(t, e)
 	cmd := f.attachmentCommand(t, c, file.ID)
 	_, e = f.gateway.Submit(f.ctx, cmd)

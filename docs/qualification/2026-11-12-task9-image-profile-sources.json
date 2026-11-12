@@ -1,0 +1,395 @@
+{
+  "profile": "ollama-0.40.15-mlx-640x160-v1",
+  "imageAdmissionQualified": false,
+  "sourceModule": "github.com/ollama/ollama@v0.40.15",
+  "sourceSHA256": {
+    "mlxrunner/model/qwen3_5/process_image.go": "5b644ec3bbae78292eae2e2d18101024654b3c9766c811145f4fb7d1826251e6",
+    "mlxrunner/model/qwen3_5/vision.go": "3eb84f03d593e1abc57bd2eea08eac765889f2bd4e4745536b8595e0f461d7e8",
+    "mlxrunner/model/gemma4/process_image.go": "bbd854ce99dd82e4ff0a2b169c5f0195341789d94dbcb4cad935872c3651ffcf",
+    "mlxrunner/model/gemma4/vision.go": "e86f21786e987b6e301614da5f10e00e733b9cefe872d9672ae580923241c629",
+    "mlxrunner/model/gemma4/media.go": "9ac38ca121e3b60e74f19344ef3bba95a08765cc49ac498e03d9cb707f53d10f",
+    "mlxrunner/media.go": "460ad6dabd8606aa4272b7c636d8efdbc0095fff3aa1cf0fb8b3bff601f9e2b2",
+    "mlxrunner/pipeline.go": "21e6756dcaa9f25569e5c9e18dedb32a89ecdcbdad443d0e5d65c6bf2a84abec",
+    "mlxrunner/tokenizer/tokenizer_encode.go": "e6705da8a686638f6fd7fd538b732b3756e9dd5f2abfd955158d60449419ace4",
+    "mlxrunner/tokenizer/tokenizer_load.go": "ceaa537486a76acbbb81f0c5d71482ffc17cd340d7657c17b1085f563630d3e8",
+    "mlxrunner/tokenizer/tokenizer_bpe.go": "661d7b4f51762c46b3e444f5d6aa4235131e9193e3fe4e915b82df54617df752",
+    "model/renderers/qwen35.go": "69bca99b53a3db8d599bb9ec8eadf65ce9a72868566a89bfac44d31fe3b565e0",
+    "model/renderers/gemma4.go": "5d6b33862fdbf14f1c6ae64d927eacac8e19dd9cb5398a23f66f6740b1bdf72d",
+    "server/renderer_resolution.go": "d86864240d854d3955f7b575fbb0a7b34f27abafa5c2daa98083538cf9f6c789",
+    "server/routes.go": "0dbc9d5a6909209ab531a12677fe792e17ff7b825dd1396c00e83898901a13ed"
+  },
+  "runtime": {
+    "version": "0.40.15"
+  },
+  "tags": {
+    "models": [
+      {
+        "name": "qwen3.5:9b",
+        "model": "qwen3.5:9b",
+        "modified_at": "2026-11-11T16:31:39.381425058+01:00",
+        "size": 7639229431,
+        "digest": "d63f830f28d515fefea546f213fca7a75e9dd5176ef51a6deabc952d1c99a911",
+        "details": {
+          "parent_model": "",
+          "format": "safetensors",
+          "family": "",
+          "families": null,
+          "parameter_size": "",
+          "quantization_level": "",
+          "runner": "mlx"
+        },
+        "capabilities": [
+          "completion",
+          "vision",
+          "tools",
+          "thinking"
+        ]
+      },
+      {
+        "name": "gemma4:e4b",
+        "model": "gemma4:e4b",
+        "modified_at": "2026-11-09T20:46:21.297728484+01:00",
+        "size": 9461576343,
+        "digest": "eb2177adf7646d15faead94fdad6d3e170dc8015653418a3b7d5d52a6380be5b",
+        "details": {
+          "parent_model": "",
+          "format": "safetensors",
+          "family": "",
+          "families": null,
+          "parameter_size": "",
+          "quantization_level": "",
+          "runner": "mlx"
+        },
+        "capabilities": [
+          "completion",
+          "vision",
+          "audio",
+          "tools",
+          "thinking"
+        ]
+      }
+    ]
+  },
+  "models": {
+    "qwen3.5:9b": {
+      "runner": "mlx",
+      "format": "safetensors",
+      "layers": {
+        "config.json": {
+          "digest": "sha256:b41ca2dedf68279911901d5821598e44cb853c8c1d8b1a8f4905ad5561e80ac3",
+          "vision_config": {
+            "deepstack_visual_indexes": [],
+            "depth": 27,
+            "hidden_act": "gelu_pytorch_tanh",
+            "hidden_size": 1152,
+            "in_channels": 3,
+            "initializer_range": 0.02,
+            "intermediate_size": 4304,
+            "model_type": "qwen3_5",
+            "num_heads": 16,
+            "num_position_embeddings": 2304,
+            "out_hidden_size": 4096,
+            "patch_size": 16,
+            "spatial_merge_size": 2,
+            "temporal_patch_size": 2
+          }
+        },
+        "preprocessor_config.json": {
+          "digest": "sha256:27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516",
+          "config": {
+            "size": {
+              "longest_edge": 16777216,
+              "shortest_edge": 65536
+            },
+            "patch_size": 16,
+            "temporal_patch_size": 2,
+            "merge_size": 2,
+            "image_mean": [
+              0.5,
+              0.5,
+              0.5
+            ],
+            "image_std": [
+              0.5,
+              0.5,
+              0.5
+            ],
+            "processor_class": "Qwen3VLProcessor",
+            "image_processor_type": "Qwen2VLImageProcessorFast"
+          }
+        },
+        "processor_config.json": {
+          "digest": "sha256:d89ef49ce9cd37fbf510158e13c1ef063d9286411c1ec9049932dbe0487143b1",
+          "config": {
+            "image_processor": {
+              "do_convert_rgb": true,
+              "do_normalize": true,
+              "do_rescale": true,
+              "do_resize": true,
+              "image_mean": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "image_processor_type": "Qwen2VLImageProcessor",
+              "image_std": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "merge_size": 2,
+              "patch_size": 16,
+              "resample": 3,
+              "rescale_factor": 0.00392156862745098,
+              "size": {
+                "longest_edge": 16777216,
+                "shortest_edge": 65536
+              },
+              "temporal_patch_size": 2
+            },
+            "processor_class": "Qwen3VLProcessor",
+            "video_processor": {
+              "do_convert_rgb": true,
+              "do_normalize": true,
+              "do_rescale": true,
+              "do_resize": true,
+              "do_sample_frames": true,
+              "fps": 2,
+              "image_mean": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "image_std": [
+                0.5,
+                0.5,
+                0.5
+              ],
+              "max_frames": 768,
+              "merge_size": 2,
+              "min_frames": 4,
+              "patch_size": 16,
+              "resample": 3,
+              "rescale_factor": 0.00392156862745098,
+              "return_metadata": false,
+              "size": {
+                "longest_edge": 25165824,
+                "shortest_edge": 4096
+              },
+              "temporal_patch_size": 2,
+              "video_processor_type": "Qwen3VLVideoProcessor"
+            }
+          }
+        },
+        "tokenizer.json": {
+          "digest": "sha256:5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42",
+          "normalizer": {
+            "type": "NFC"
+          },
+          "pre_tokenizer": {
+            "type": "Sequence",
+            "pretokenizers": [
+              {
+                "type": "Split",
+                "pattern": {
+                  "Regex": "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?[\\p{L}\\p{M}]+|\\p{N}| ?[^\\s\\p{L}\\p{M}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
+                },
+                "behavior": "Isolated",
+                "invert": false
+              },
+              {
+                "type": "ByteLevel",
+                "add_prefix_space": false,
+                "trim_offsets": false,
+                "use_regex": false
+              }
+            ]
+          },
+          "post_processor": {
+            "type": "ByteLevel",
+            "add_prefix_space": false,
+            "trim_offsets": false,
+            "use_regex": false
+          }
+        }
+      },
+      "defaultSystemOrMessagesLayers": []
+    },
+    "gemma4:e4b": {
+      "runner": "mlx",
+      "format": "safetensors",
+      "layers": {
+        "config.json": {
+          "digest": "sha256:7bb76144da67e3735b87184a58c21692ff6c0f69190f952ae03f7737d75cc69a",
+          "vision_config": {
+            "_name_or_path": "",
+            "architectures": null,
+            "attention_bias": false,
+            "attention_dropout": 0.0,
+            "chunk_size_feed_forward": 0,
+            "default_output_length": 280,
+            "dtype": "bfloat16",
+            "global_head_dim": 64,
+            "head_dim": 64,
+            "hidden_activation": "gelu_pytorch_tanh",
+            "hidden_size": 768,
+            "id2label": {
+              "0": "LABEL_0",
+              "1": "LABEL_1"
+            },
+            "initializer_range": 0.02,
+            "intermediate_size": 3072,
+            "is_encoder_decoder": false,
+            "label2id": {
+              "LABEL_0": 0,
+              "LABEL_1": 1
+            },
+            "max_position_embeddings": 131072,
+            "model_type": "gemma4_vision",
+            "num_attention_heads": 12,
+            "num_hidden_layers": 16,
+            "num_key_value_heads": 12,
+            "output_attentions": false,
+            "output_hidden_states": false,
+            "patch_size": 16,
+            "pooling_kernel_size": 3,
+            "position_embedding_size": 10240,
+            "problem_type": null,
+            "return_dict": true,
+            "rms_norm_eps": 1e-06,
+            "rope_parameters": {
+              "rope_theta": 100.0,
+              "rope_type": "default"
+            },
+            "standardize": false,
+            "use_clipped_linears": true
+          }
+        },
+        "processor_config.json": {
+          "digest": "sha256:32bdf45d2ad4cc29a0822ddd157a182de76644f0419a6228d151495256e9813c",
+          "config": {
+            "audio_ms_per_token": 40,
+            "audio_seq_length": 750,
+            "feature_extractor": {
+              "dither": 0.0,
+              "feature_extractor_type": "Gemma4AudioFeatureExtractor",
+              "feature_size": 128,
+              "fft_length": 512,
+              "fft_overdrive": false,
+              "frame_length": 320,
+              "hop_length": 160,
+              "input_scale_factor": 1.0,
+              "max_frequency": 8000.0,
+              "mel_floor": 0.001,
+              "min_frequency": 0.0,
+              "padding_side": "right",
+              "padding_value": 0.0,
+              "per_bin_mean": null,
+              "per_bin_stddev": null,
+              "preemphasis": 0.0,
+              "preemphasis_htk_flavor": true,
+              "return_attention_mask": true,
+              "sampling_rate": 16000
+            },
+            "image_processor": {
+              "do_convert_rgb": true,
+              "do_normalize": false,
+              "do_rescale": true,
+              "do_resize": true,
+              "image_mean": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "image_processor_type": "Gemma4ImageProcessor",
+              "image_seq_length": 280,
+              "image_std": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "max_soft_tokens": 280,
+              "patch_size": 16,
+              "pooling_kernel_size": 3,
+              "resample": 3,
+              "rescale_factor": 0.00392156862745098
+            },
+            "image_seq_length": 280,
+            "processor_class": "Gemma4Processor",
+            "video_processor": {
+              "do_convert_rgb": true,
+              "do_normalize": true,
+              "do_rescale": true,
+              "do_resize": true,
+              "do_sample_frames": true,
+              "image_mean": [
+                0.0,
+                0.0,
+                0.0
+              ],
+              "image_std": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "max_soft_tokens": 70,
+              "num_frames": 32,
+              "patch_size": 16,
+              "pooling_kernel_size": 3,
+              "resample": 3,
+              "rescale_factor": 0.00392156862745098,
+              "return_metadata": false,
+              "video_processor_type": "Gemma4VideoProcessor"
+            }
+          }
+        },
+        "tokenizer.json": {
+          "digest": "sha256:cc8d3a0ce36466ccc1278bf987df5f71db1719b9ca6b4118264f45cb627bfe0f",
+          "normalizer": {
+            "type": "Replace",
+            "pattern": {
+              "String": " "
+            },
+            "content": "\u2581"
+          },
+          "pre_tokenizer": {
+            "type": "Split",
+            "pattern": {
+              "String": " "
+            },
+            "behavior": "MergedWithPrevious",
+            "invert": false
+          },
+          "post_processor": {
+            "type": "TemplateProcessing",
+            "single": [
+              {
+                "Sequence": {
+                  "id": "A",
+                  "type_id": 0
+                }
+              }
+            ],
+            "pair": [
+              {
+                "Sequence": {
+                  "id": "A",
+                  "type_id": 0
+                }
+              },
+              {
+                "Sequence": {
+                  "id": "B",
+                  "type_id": 1
+                }
+              }
+            ],
+            "special_tokens": {}
+          }
+        }
+      },
+      "defaultSystemOrMessagesLayers": []
+    }
+  },
+  "observedLocalBinarySHA256": "faaea124744e725005a7ce66716fd9662b3baa12be65779c990c64fdbfb1ae9c"
+}

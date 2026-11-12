@@ -36,7 +36,7 @@ func TestWebWorkerIsolationAndCleanup(t *testing.T) {
 	require.Len(t, workers[0].activities, 10)
 	require.Len(t, workers[1].activities, 1)
 	require.Len(t, workers[2].workflows, 1)
-	require.Len(t, workers[2].activities, 3)
+	require.Len(t, workers[2].activities, 4)
 	require.NoError(t, r.Close())
 	require.Equal(t, 1, c.closed)
 	for _, w := range workers {

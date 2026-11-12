@@ -119,6 +119,19 @@ func (a *ChatActivities) PrepareDocumentAnalysis(ctx context.Context, in chat.Do
 		if !errors.Is(e, storage.ErrNotFound) {
 			return e
 		}
+		metadata, e := a.Attachments.ApprovedMetadata(ctx, in.Scope, call.AttachmentID)
+		if e != nil {
+			return e
+		}
+		if strings.HasPrefix(metadata.MediaType, "image/") {
+			out = chat.DocumentAnalysisResult{ChildID: in.ChildID(), ImageProfile: chat.NarrowImageProfile, Status: "completed"}
+			if e = r.SaveDocumentPart(ctx, in, call.AttachmentID, -1, id, chat.DocumentPart{Manifest: out}); e != nil {
+				return e
+			}
+			part, e = r.ReadDocumentPart(ctx, in, call.AttachmentID, -1)
+			out = part.Manifest
+			return e
+		}
 		doc, e := a.Attachments.Extract(ctx, in.Scope, call.AttachmentID)
 		if e != nil {
 			return e

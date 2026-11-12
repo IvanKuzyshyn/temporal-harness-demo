@@ -19,6 +19,16 @@ type ImageReference struct {
 	DerivedKey, Checksum string
 }
 
+// NarrowImageProfile is a separate source-bounded profile, not global image
+// qualification. Bytes are activity-local and explicitly excluded from JSON.
+const NarrowImageProfile = chat.NarrowImageProfile
+
+type ResolvedImage struct {
+	Profile   string
+	Reference ImageReference
+	PNG       []byte
+}
+
 type Message struct {
 	Images     []ImageReference `json:"images,omitempty"`
 	Role       string           `json:"role"`
@@ -33,6 +43,7 @@ type ToolDefinition struct {
 	Parameters  json.RawMessage `json:"parameters"`
 }
 type Request struct {
+	Image *ResolvedImage `json:"-"`
 	// Zero preserves legacy provider defaults. Web chat always sets explicit bounds.
 	ContextWindow, MaxOutputTokens, MaxResponseBytes int
 	Model                                            string
