@@ -18,6 +18,7 @@ type SessionCommand struct {
 // CommandIdentity is bounded admission carry. Payload was validated by the
 // original Update; the digest and every identity are rechecked against SQL.
 type CommandIdentity struct {
+	ExpectedActiveTurnID             TurnID
 	CommandID                        CommandID
 	RequestID                        string
 	ConversationID                   ConversationID
@@ -28,7 +29,7 @@ type CommandIdentity struct {
 }
 
 func (c SessionCommand) Identity() CommandIdentity {
-	return CommandIdentity{CommandID: c.CommandID, RequestID: c.RequestID, ConversationID: c.ConversationID, TurnID: c.TurnID, WorkflowID: c.WorkflowID, Model: c.Model, PayloadDigest: c.PayloadDigest, Kind: c.Kind, Sequence: c.Sequence}
+	return CommandIdentity{CommandID: c.CommandID, RequestID: c.RequestID, ConversationID: c.ConversationID, TurnID: c.TurnID, WorkflowID: c.WorkflowID, Model: c.Model, PayloadDigest: c.PayloadDigest, Kind: c.Kind, Sequence: c.Sequence, ExpectedActiveTurnID: c.Payload.ExpectedActiveTurnID}
 }
 
 type AdmissionCheckpoint struct {
@@ -39,8 +40,18 @@ type AdmissionCheckpoint struct {
 }
 
 type AdmissionResult struct {
-	State string `json:"state"`
-	Code  string `json:"code,omitempty"`
+	State             string `json:"state"`
+	Code              string `json:"code,omitempty"`
+	TargetTurnID      TurnID `json:"targetTurnId,omitempty"`
+	ReplacementTurnID TurnID `json:"replacementTurnId,omitempty"`
+}
+
+// ReplacementInput is a correcting prompt, not authority to read attachments.
+type ReplacementInput struct {
+	RequestID            string
+	ExpectedActiveTurnID TurnID
+	Text                 string
+	AttachmentIDs        []AttachmentID
 }
 type Admission struct {
 	Command SessionCommand
@@ -56,6 +67,10 @@ type Turn struct {
 	TurnRef
 	Status, Reason, Text, Model string
 	Sequence                    int64
+	AttachmentIDs               []AttachmentID
+	ReplacementTarget           TurnID
+	OriginalText                string
+	OriginalAttachmentIDs       []AttachmentID
 }
 type TurnResult struct {
 	TurnRef

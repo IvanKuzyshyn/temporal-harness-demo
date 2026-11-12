@@ -2,6 +2,7 @@ package activities
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -26,7 +27,18 @@ func chatRequest(turn chat.Turn, recent []chat.Exchange) (llm.Request, error) {
 	if !chat.ValidModel(turn.Model) || !utf8.ValidString(turn.Text) {
 		return req, &ollama.InvalidRequestError{Err: errors.New("invalid text model input")}
 	}
+	var provenance []llm.Message
+	if turn.ReplacementTarget != "" {
+		ids, _ := json.Marshal(turn.OriginalAttachmentIDs)
+		provenance = []llm.Message{
+			{Role: "user", Content: fmt.Sprintf("Original target prompt (turn %s; attachment IDs only %s):\n%s", turn.ReplacementTarget, ids, turn.OriginalText)},
+			{Role: "system", Content: "The preceding user prompt is retained provenance of the cancelled target. The following user message corrects it. No cancelled assistant draft is completed context. Attachment bytes/content are not authorized and have not been read."},
+		}
+	}
 	used := len(chatSystemPrompt) + len(turn.Text) + 256
+	for _, m := range provenance {
+		used += len(m.Content) + 128
+	}
 	if used > 12000 {
 		return req, &ollama.InvalidRequestError{Err: errors.New("text input budget exceeded")}
 	}
@@ -46,6 +58,7 @@ func chatRequest(turn chat.Turn, recent []chat.Exchange) (llm.Request, error) {
 	for i := len(selected) - 1; i >= 0; i-- {
 		req.Messages = append(req.Messages, llm.Message{Role: "user", Content: selected[i].User}, llm.Message{Role: "assistant", Content: selected[i].Assistant})
 	}
+	req.Messages = append(req.Messages, provenance...)
 	req.Messages = append(req.Messages, llm.Message{Role: "user", Content: turn.Text})
 	return req, nil
 }

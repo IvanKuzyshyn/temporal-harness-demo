@@ -2,7 +2,7 @@
 # Only ephemeral, uniquely named test resources; never targets the developer stack.
 set -euo pipefail
 mode=${1:-}
-[[ "$mode" == storage || "$mode" == api || "$mode" == chat ]] || { echo 'usage: scripts/test-web-integration.sh storage|api|chat' >&2; exit 2; }
+[[ "$mode" == storage || "$mode" == api || "$mode" == chat || "$mode" == replacement ]] || { echo 'usage: scripts/test-web-integration.sh storage|api|chat|replacement' >&2; exit 2; }
 for tool in docker mise python3; do command -v "$tool" >/dev/null || { echo "required: $tool" >&2; exit 1; }; done
 docker info >/dev/null
 docker compose version >/dev/null
@@ -17,9 +17,14 @@ export WEBCHAT_TEST_DATABASE_NAME="$database"
 export WEBCHAT_TEST_APP_PASSWORD
 WEBCHAT_TEST_APP_PASSWORD=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
 temporal_pid=
+test_pid=
 cleanup() {
   status=$?
   trap - EXIT
+  if [[ -n "$test_pid" ]] && kill -0 "$test_pid" 2>/dev/null; then
+    kill -TERM "$test_pid" 2>/dev/null || true
+    wait "$test_pid" || true
+  fi
   if [[ -n "$temporal_pid" ]]; then
     kill -TERM "$temporal_pid" 2>/dev/null || true
     wait "$temporal_pid" || true
@@ -32,7 +37,7 @@ cleanup() {
       docker volume rm "$volume" >/dev/null || status=1
     else echo "REFUSING cleanup of unowned volume $volume" >&2; status=1; fi
   fi
-  rm -f "$work/compose.yaml" "$work/receipt" "$work/temporal.log" "$work/temporal.db" "$work/temporal.db-shm" "$work/temporal.db-wal"
+  rm -f "$work/compose.yaml" "$work/receipt" "$work/temporal.log" "$work/temporal.db" "$work/temporal.db-shm" "$work/temporal.db-wal" "$work/restart.request" "$work/restart.request.done"
   rmdir "$work" || true
   exit "$status"
 }
@@ -45,6 +50,8 @@ config={'services':{'postgres':{'image':image,'environment':{'POSTGRES_PASSWORD'
 Path(sys.argv[2]).write_text(json.dumps(config))
 PY
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 compose=(docker compose -p "$project" -f "$work/compose.yaml")
 "${compose[@]}" up -d --wait --wait-timeout 90
 [[ "$database" =~ ^webchat_test_[a-f0-9]{32}$ ]] || { echo 'unsafe database name' >&2; exit 1; }
@@ -55,9 +62,9 @@ export WEBCHAT_TEST_DATABASE_URL="postgres://webchat:$WEBCHAT_TEST_APP_PASSWORD@
 export WEBCHAT_TEST_TEMPORAL_DATABASE_URL="postgres://temporal:test-temporal-only@$port/temporal?sslmode=disable"
 export WEBCHAT_TEST_RECEIPT="$work/receipt"
 echo "Storage integration project=$project database=$database address=$port volume=$volume"
-run() { mise exec -- go test -p 1 -count=1 -tags integration "$@" ./internal/storage/...; }
+run() { mise exec -- go test -p 1 -count=1 -timeout 3m -tags integration "$@" ./internal/storage/...; }
 WEBCHAT_TEST_PHASE=migration run -v -run '^TestMigration(Cycle|DispatchUpgrade)$'
-run -race -v -run "${WEBCHAT_TEST_STORAGE_RUN:-Test(Accept|Command|Logical|History|Attachment|Control|Database|Projection|Schema|WebChat|ModelAttemptRetry|MissingDisplay|ChatAdmission|ChatResultAttempt|ChatAttempt|ChatFailed|ChatOverlapping|ChatCandidate)}"
+run -race -v -run "${WEBCHAT_TEST_STORAGE_RUN:-Test(Accept|Command|Logical|History|Attachment|Control|Database|Projection|Schema|WebChat|ModelAttemptRetry|MissingDisplay|ChatAdmission|ChatResultAttempt|ChatAttempt|ChatFailed|ChatOverlapping|ChatCandidate|CancelledDraft|ReplacementPrompt)}"
 WEBCHAT_TEST_PHASE=restart-write run -v -run '^TestRestartWrite$'
 before=$("${compose[@]}" exec -T postgres psql -U postgres -Atc 'SELECT pg_postmaster_start_time()')
 "${compose[@]}" restart postgres
@@ -74,12 +81,12 @@ port=$("${compose[@]}" port postgres 5432)
 export WEBCHAT_TEST_DATABASE_URL="postgres://webchat:$WEBCHAT_TEST_APP_PASSWORD@$port/$database?sslmode=disable"
 echo "Restarted Postgres address=$port"
 WEBCHAT_TEST_PHASE=restart-read run -v -run '^TestRestartRead$'
-if [[ "$mode" == api || "$mode" == chat ]]; then
+if [[ "$mode" == api || "$mode" == chat || "$mode" == replacement ]]; then
   # Serial packages: dispatcher scenarios deliberately reschedule commands in
   # this unique test database, never any developer/shared application database.
-  mise exec -- go test -p 1 -count=1 -race -tags integration -v ./cmd/web-api/... ./internal/api/... ./internal/dispatch/...
+  mise exec -- go test -p 1 -count=1 -timeout 3m -race -tags integration -v ./cmd/web-api/... ./internal/api/... ./internal/dispatch/...
 fi
-if [[ "$mode" == chat ]]; then
+if [[ "$mode" == chat || "$mode" == replacement ]]; then
   # Launch the pinned actual server as an owned child, never inherited services.
   read -r grpc_port http_port metrics_port < <(python3 - <<'PY'
 import socket
@@ -90,8 +97,11 @@ print(*(s.getsockname()[1] for s in sockets))
 PY
 )
   temporal_bin=$(mise which temporal)
-  "$temporal_bin" server start-dev --ip 127.0.0.1 --port "$grpc_port" --http-port "$http_port" --metrics-port "$metrics_port" --headless --db-filename "$work/temporal.db" >"$work/temporal.log" 2>&1 &
-  temporal_pid=$!
+  start_temporal() {
+    "$temporal_bin" server start-dev --ip 127.0.0.1 --port "$grpc_port" --http-port "$http_port" --metrics-port "$metrics_port" --headless --db-filename "$work/temporal.db" >>"$work/temporal.log" 2>&1 &
+    temporal_pid=$!
+  }
+  start_temporal
   export WEBCHAT_TEST_TEMPORAL_ADDRESS="127.0.0.1:$grpc_port"
   export WEBCHAT_TEST_POSTGRES_CONTAINER="${project}-postgres-1"
   for i in $(seq 1 60); do
@@ -100,5 +110,39 @@ PY
     sleep 1
   done
   echo "Actual isolated Temporal address=$WEBCHAT_TEST_TEMPORAL_ADDRESS pid=$temporal_pid"
-  mise exec -- go test -p 1 -count=1 -race -tags integration -v -timeout 15m -run "${WEBCHAT_TEST_CHAT_RUN:-.}" ./internal/webintegration/...
+  export WEBCHAT_TEST_RESTART_REQUEST="$work/restart.request"
+  default_run=.
+  if [[ "$mode" == replacement ]]; then default_run='Test(Replacement|ClosedUnreceiptedControl)'; fi
+  mise exec -- go test -p 1 -count=1 -race -tags integration -v -timeout 15m -run "${WEBCHAT_TEST_CHAT_RUN:-$default_run}" ./internal/webintegration/... &
+  test_pid=$!
+  # Only this parent restarts its owned children/Compose project. Tests cannot
+  # supply a PID/container/path to the restart protocol.
+  while kill -0 "$test_pid" 2>/dev/null; do
+    if [[ -f "$WEBCHAT_TEST_RESTART_REQUEST" ]]; then
+      rm "$WEBCHAT_TEST_RESTART_REQUEST"
+      old_pid=$temporal_pid
+      kill -TERM "$temporal_pid"
+      wait "$temporal_pid" || true
+      temporal_pid=
+      "${compose[@]}" restart postgres
+      for i in $(seq 1 60); do
+        if "${compose[@]}" exec -T postgres pg_isready -h 127.0.0.1 -U postgres -d postgres >/dev/null 2>&1; then break; fi
+        sleep 1
+      done
+      port=$("${compose[@]}" port postgres 5432)
+      [[ "$port" =~ ^127\.0\.0\.1:[0-9]+$ ]] || { echo 'unsafe restarted target' >&2; exit 1; }
+      start_temporal
+      for i in $(seq 1 60); do
+        kill -0 "$temporal_pid" 2>/dev/null || { echo 'restarted Temporal exited'; exit 1; }
+        if "$temporal_bin" operator cluster health --address "$WEBCHAT_TEST_TEMPORAL_ADDRESS" >/dev/null 2>&1; then break; fi
+        sleep 1
+      done
+      "$temporal_bin" operator cluster health --address "$WEBCHAT_TEST_TEMPORAL_ADDRESS" >/dev/null
+      echo "Actual isolated Temporal restart pid=$old_pid -> $temporal_pid; Postgres address=$port"
+      printf '%s\n' "$port" >"$WEBCHAT_TEST_RESTART_REQUEST.done"
+    fi
+    sleep 0.1
+  done
+  wait "$test_pid"
+  test_pid=
 fi

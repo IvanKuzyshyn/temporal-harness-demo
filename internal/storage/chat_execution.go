@@ -22,7 +22,7 @@ func (r *Repository) CheckChatCommand(ctx context.Context, c chat.SessionCommand
 func (r *Repository) checkChatCommandIdentity(ctx context.Context, c chat.CommandIdentity) (out chat.AdmissionResult, err error) {
 	var raw []byte
 	err = r.pool.QueryRow(ctx, `SELECT c.execution_receipt FROM commands c JOIN conversations v ON v.id=c.conversation_id
- WHERE c.id=$1 AND c.conversation_id=$2 AND c.request_id=$3 AND coalesce(c.turn_id::text,'')=$4 AND c.payload_digest=$5 AND c.kind=$6 AND c.sequence=$7 AND v.workflow_id=$8 AND v.model=$9`, c.CommandID, c.ConversationID, c.RequestID, c.TurnID, c.PayloadDigest, c.Kind, c.Sequence, c.WorkflowID, c.Model).Scan(&raw)
+ WHERE c.id=$1 AND c.conversation_id=$2 AND c.request_id=$3 AND coalesce(c.turn_id::text,'')=$4 AND c.payload_digest=$5 AND c.kind=$6 AND c.sequence=$7 AND v.workflow_id=$8 AND v.model=$9 AND coalesce(c.payload->>'expectedActiveTurnId','')=$10`, c.CommandID, c.ConversationID, c.RequestID, c.TurnID, c.PayloadDigest, c.Kind, c.Sequence, c.WorkflowID, c.Model, c.ExpectedActiveTurnID).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return out, ErrConflict
 	}
@@ -36,7 +36,7 @@ func (r *Repository) checkChatCommandIdentity(ctx context.Context, c chat.Comman
 }
 
 func (r *Repository) RecordChatAdmission(ctx context.Context, a chat.Admission) error {
-	if a.Result.State != "accepted" && !(a.Result.State == "rejected" && a.Result.Code == "invalid_command") {
+	if !validChatAdmission(a.Command.Identity(), a.Result) {
 		return chat.ErrInvalid
 	}
 	if _, err := r.CheckChatCommand(ctx, a.Command); err != nil {
@@ -45,7 +45,7 @@ func (r *Repository) RecordChatAdmission(ctx context.Context, a chat.Admission) 
 	return r.recordChatAdmissionIdentity(ctx, a.Command.Identity(), a.Result)
 }
 func (r *Repository) recordChatAdmissionIdentity(ctx context.Context, c chat.CommandIdentity, result chat.AdmissionResult) error {
-	if result.State != "accepted" && !(result.State == "rejected" && result.Code == "invalid_command") {
+	if !validChatAdmission(c, result) {
 		return chat.ErrInvalid
 	}
 	if _, err := r.checkChatCommandIdentity(ctx, c); err != nil {
@@ -60,9 +60,16 @@ func (r *Repository) recordChatAdmissionIdentity(ctx context.Context, c chat.Com
 		if tag.RowsAffected() != 1 {
 			return ErrConflict
 		}
-		// An unsupported replacement/attachment still has a queued intent turn.
+		if result.State == "accepted" && (c.Kind == chat.CommandStop || c.Kind == chat.CommandReplace) {
+			// Projection only: the replayable workflow claim already owns the
+			// target. Late receipt retry must not resurrect a terminal turn.
+			if _, err = tx.Exec(ctx, `UPDATE turns SET status='cancelling',updated_at=clock_timestamp() WHERE conversation_id=$1 AND id=$2 AND status IN ('queued','running')`, c.ConversationID, c.ExpectedActiveTurnID); err != nil {
+				return err
+			}
+		}
+		// A rejected replacement/attachment still has a queued intent turn.
 		if result.State == "rejected" && c.TurnID != "" {
-			_, err = tx.Exec(ctx, `UPDATE turns SET status='failed',reason='invalid_command',updated_at=clock_timestamp() WHERE id=$1 AND status='queued'`, c.TurnID)
+			_, err = tx.Exec(ctx, `UPDATE turns SET status='failed',reason=$2,updated_at=clock_timestamp() WHERE id=$1 AND status='queued'`, c.TurnID, result.Code)
 		}
 		return err
 	})
@@ -85,8 +92,28 @@ func (r *Repository) GetTurn(ctx context.Context, ref chat.TurnRef) (chat.Turn, 
 	if !chat.ValidID(string(ref.ConversationID)) || !chat.ValidID(string(ref.TurnID)) {
 		return out, chat.ErrInvalid
 	}
-	err := r.pool.QueryRow(ctx, `SELECT t.status,t.reason,m.text,m.sequence,v.model FROM turns t JOIN conversations v ON v.id=t.conversation_id JOIN messages m ON m.turn_id=t.id AND m.result_kind='prompt' AND m.role='user' WHERE t.conversation_id=$1 AND t.id=$2`, ref.ConversationID, ref.TurnID).Scan(&out.Status, &out.Reason, &out.Text, &out.Sequence, &out.Model)
-	return out, dbError(err)
+	err := r.pool.QueryRow(ctx, `SELECT t.status,t.reason,m.text,m.sequence,v.model,coalesce(t.replacement_target::text,''),coalesce(original.text,'') FROM turns t JOIN conversations v ON v.id=t.conversation_id JOIN messages m ON m.turn_id=t.id AND m.result_kind='prompt' AND m.role='user' LEFT JOIN messages original ON original.turn_id=t.replacement_target AND original.role='user' AND original.result_kind='prompt' WHERE t.conversation_id=$1 AND t.id=$2`, ref.ConversationID, ref.TurnID).Scan(&out.Status, &out.Reason, &out.Text, &out.Sequence, &out.Model, &out.ReplacementTarget, &out.OriginalText)
+	if err != nil {
+		return out, dbError(err)
+	}
+	rows, err := r.pool.Query(ctx, `SELECT m.turn_id::text,ma.attachment_id::text FROM messages m JOIN message_attachments ma ON ma.entry_id=m.entry_id WHERE m.conversation_id=$1 AND m.turn_id IN ($2, $3) AND m.role='user' AND m.result_kind='prompt' ORDER BY ma.ordinal`, ref.ConversationID, ref.TurnID, nullable(string(out.ReplacementTarget)))
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var turn chat.TurnID
+		var id chat.AttachmentID
+		if err = rows.Scan(&turn, &id); err != nil {
+			return out, err
+		}
+		if turn == ref.TurnID {
+			out.AttachmentIDs = append(out.AttachmentIDs, id)
+		} else {
+			out.OriginalAttachmentIDs = append(out.OriginalAttachmentIDs, id)
+		}
+	}
+	return out, rows.Err()
 }
 func (r *Repository) StartChatTurn(ctx context.Context, ref chat.TurnRef) error {
 	return r.withConversation(ctx, ref.ConversationID, func(tx pgx.Tx) error {
@@ -142,13 +169,15 @@ func (r *Repository) SaveChatModelResult(ctx context.Context, a chat.ChatModelRe
 }
 
 // RecentChatExchanges preserves whole text exchanges, never queued prompts,
-// failed drafts, documents or attachment content. The caller applies a byte budget.
+// failed drafts, documents or attachment content. Completion order, not prompt
+// acceptance order, matters after a priority replacement overtakes queued input.
+// The caller applies a byte budget.
 func (r *Repository) RecentChatExchanges(ctx context.Context, ref chat.TurnRef) ([]chat.Exchange, error) {
 	rows, err := r.pool.Query(ctx, `SELECT u.text,a.text,u.sequence FROM turns t
  JOIN messages u ON u.turn_id=t.id AND u.role='user' AND u.result_kind='prompt'
  JOIN messages a ON a.turn_id=t.id AND a.role='assistant' AND a.result_kind='final'
- WHERE t.conversation_id=$1 AND t.status='completed' AND u.sequence<(SELECT sequence FROM messages WHERE turn_id=$2 AND result_kind='prompt')
- ORDER BY u.sequence DESC LIMIT 6`, ref.ConversationID, ref.TurnID)
+ WHERE t.conversation_id=$1 AND t.status='completed' AND t.id<>$2 AND a.completion_state='completed'
+ ORDER BY a.sequence DESC LIMIT 6`, ref.ConversationID, ref.TurnID)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +197,7 @@ func (r *Repository) RecentChatExchanges(ctx context.Context, ref chat.TurnRef) 
 // in ONE transaction. Stable logical IDs and a settlement digest fence changed
 // outcomes. Cached provider output alone is never an assistant completion.
 func (r *Repository) PersistTurnResult(ctx context.Context, a chat.TurnResult) error {
-	if !chat.ValidID(string(a.TurnID)) || (a.Status != "completed" && a.Status != "failed") || len(a.Reason) > 128 || (a.Status == "completed" && a.Reason != "") {
+	if !chat.ValidID(string(a.TurnID)) || (a.Status != "completed" && a.Status != "failed" && a.Status != "cancelled") || len(a.Reason) > 128 || (a.Status == "completed" && a.Reason != "") {
 		return chat.ErrInvalid
 	}
 	hash, err := digest(a)
@@ -207,6 +236,22 @@ func (r *Repository) PersistTurnResult(ctx context.Context, a chat.TurnResult) e
 				if tag.RowsAffected() != 1 {
 					return ErrConflict
 				}
+			}
+		}
+		if a.Status == "cancelled" {
+			// A provider candidate is not a completed answer after cancellation.
+			var text string
+			err := tx.QueryRow(ctx, `SELECT text FROM chat_model_results WHERE conversation_id=$1 AND turn_id=$2`, a.ConversationID, a.TurnID).Scan(&text)
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+			if err == nil && text != "" {
+				if err = appendMessage(ctx, tx, chat.MessageRecord{EntryID: chat.LogicalID(a.TurnID, "cancelled"), ConversationID: a.ConversationID, TurnID: a.TurnID, Role: "assistant", Text: text, ResultKind: "cancelled", CompletionState: "incomplete"}); err != nil {
+					return err
+				}
+			}
+			if _, err = tx.Exec(ctx, `UPDATE model_steps SET status='cancelled',error=$3 WHERE conversation_id=$1 AND turn_id=$2 AND status='running'`, a.ConversationID, a.TurnID, a.Reason); err != nil {
+				return err
 			}
 		}
 		// Heartbeat/time-out exhaustion may leave the final attempt unable to

@@ -65,11 +65,17 @@ func New(repo Repository, gateway SessionGateway, opts Options) (*Dispatcher, er
 	return &Dispatcher{repo: repo, gateway: gateway, opts: opts}, nil
 }
 func validResult(r CommandResult) bool {
+	if r.TargetTurnID != "" && (r.State != "accepted" || !chat.ValidID(string(r.TargetTurnID))) {
+		return false
+	}
+	if r.ReplacementTurnID != "" && (r.TargetTurnID == "" || !chat.ValidID(string(r.ReplacementTurnID))) {
+		return false
+	}
 	if r.State != "pending" && r.State != "accepted" && r.State != "rejected" {
 		return false
 	}
 	switch r.Code {
-	case "", "stale_target", "invalid_approval", "approval_expired", "conversation_closed", "policy_conflict", "invalid_command":
+	case "", "stale_target", "invalid_approval", "approval_expired", "conversation_closed", "policy_conflict", "control_conflict", "invalid_command":
 		return r.State != "rejected" || r.Code != ""
 	}
 	return false

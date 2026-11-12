@@ -15,7 +15,16 @@ Task4 adds migration `000003`, direct `GetTurn`/bounded `RecentChatExchanges`,
 `CheckChatCommand`/`RecordChatAdmission`, `StartChatTurn`,
 `BeginChatModelAttempt`, `GetChatModelResult`/`SaveChatModelResult`, and atomic
 `PersistTurnResult`. See [web-chat-temporal.md](web-chat-temporal.md) for exact
-receipt ordering, bounded carry and completion authority. Domain types are in
+receipt ordering, bounded carry and completion authority. Task5 reuses schema3:
+`MarkChatCancelling` projects the workflow-owned target; accepted control receipts
+also project cancelling without resurrecting a terminal turn. Cancelled
+`PersistTurnResult` atomically closes running attempts, writes `turn.cancelled`,
+and retains any cached provider candidate as an immutable **incomplete** cancelled
+assistant message, never a final answer. Rejected replacement intents become
+failed with `stale_target`/`control_conflict`/`invalid_command`. `GetTurn` now returns
+the target's original prompt and ordered attachment IDs as provenance, never
+attachment bytes/extracted text. These content fields stay in activities, not
+workflow carry. Domain types are in
 `internal/chat/execution.go`; the source interfaces remain authoritative.
 
 Admission recovery uses bounded `CommandIdentity`/`AdmissionCheckpoint` values,
@@ -25,11 +34,13 @@ persists the workflow's already replayable decision (`receipt`). It never decide
 whether to enqueue. The original full-command activity path still recomputes the
 payload digest before using the shared identity helpers.
 
-`ResolveClosedChatCommand(ctx, command, enqueued)` is terminal reconciliation,
+`ResolveClosedChatCommand(ctx, command, enqueued, observedDecision...)` is terminal reconciliation,
 called only after confirming closure and querying that exact run's replayed
 active turn/inbox. A missing receipt alone proves nothing. Under the conversation
 lock, existing receipts win; enqueue evidence or durable execution state implies
 accepted admission, otherwise the command is rejected `conversation_closed`.
+Task5's optional observed decision comes from the pinned run's replayed control
+claim or in-flight/checkpoint receipt and preserves exact control outcomes/IDs.
 The resolved receipt is persisted before returning, fencing late conflicting
 admission writers. Accepted here is not a completion claim or a session restart.
 The method changes neither turn projections nor Task3 dispatcher claim fencing.

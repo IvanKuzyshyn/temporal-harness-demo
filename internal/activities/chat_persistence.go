@@ -16,6 +16,7 @@ type ChatRepository interface {
 	CheckChatCommand(context.Context, chat.SessionCommand) (chat.AdmissionResult, error)
 	RecordChatAdmission(context.Context, chat.Admission) error
 	StartChatTurn(context.Context, chat.TurnRef) error
+	MarkChatCancelling(context.Context, chat.TurnRef) error
 	PersistTurnResult(context.Context, chat.TurnResult) error
 	GetTurn(context.Context, chat.TurnRef) (chat.Turn, error)
 	RecentChatExchanges(context.Context, chat.TurnRef) ([]chat.Exchange, error)
@@ -45,6 +46,9 @@ func (a *ChatActivities) CheckChatCommand(ctx context.Context, c chat.SessionCom
 }
 func (a *ChatActivities) RecordChatAdmission(ctx context.Context, c chat.Admission) error {
 	return chatStorageError(a.Repository.RecordChatAdmission(ctx, c))
+}
+func (a *ChatActivities) MarkChatCancelling(ctx context.Context, r chat.TurnRef) error {
+	return chatStorageError(a.Repository.MarkChatCancelling(ctx, r))
 }
 func (a *ChatActivities) StartChatTurn(ctx context.Context, r chat.TurnRef) error {
 	return chatStorageError(a.Repository.StartChatTurn(ctx, r))
