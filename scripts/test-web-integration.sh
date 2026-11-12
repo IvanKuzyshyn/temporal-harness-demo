@@ -2,7 +2,7 @@
 # Only ephemeral, uniquely named test resources; never targets the developer stack.
 set -euo pipefail
 mode=${1:-}
-[[ "$mode" == storage || "$mode" == api || "$mode" == chat || "$mode" == replacement || "$mode" == approval || "$mode" == fetch ]] || { echo 'usage: scripts/test-web-integration.sh storage|api|chat|replacement|approval|fetch' >&2; exit 2; }
+[[ "$mode" == storage || "$mode" == api || "$mode" == chat || "$mode" == replacement || "$mode" == approval || "$mode" == fetch || "$mode" == attachments ]] || { echo 'usage: scripts/test-web-integration.sh storage|api|chat|replacement|approval|fetch|attachments' >&2; exit 2; }
 for tool in docker mise python3; do command -v "$tool" >/dev/null || { echo "required: $tool" >&2; exit 1; }; done
 docker info >/dev/null
 docker compose version >/dev/null
@@ -81,12 +81,17 @@ port=$("${compose[@]}" port postgres 5432)
 export WEBCHAT_TEST_DATABASE_URL="postgres://webchat:$WEBCHAT_TEST_APP_PASSWORD@$port/$database?sslmode=disable"
 echo "Restarted Postgres address=$port"
 WEBCHAT_TEST_PHASE=restart-read run -v -run '^TestRestartRead$'
-if [[ "$mode" == api || "$mode" == chat || "$mode" == replacement || "$mode" == approval || "$mode" == fetch ]]; then
+if [[ "$mode" == attachments ]]; then
+  docker build -t webchat-attachment-parser:1 infra/attachment-parser
+  export WEBCHAT_TEST_PARSERS=1
+  mise exec -- go test -p 1 -count=1 -timeout 3m -race -tags integration -v ./internal/attachments/...
+fi
+if [[ "$mode" == api || "$mode" == chat || "$mode" == replacement || "$mode" == approval || "$mode" == fetch || "$mode" == attachments ]]; then
   # Serial packages: dispatcher scenarios deliberately reschedule commands in
   # this unique test database, never any developer/shared application database.
   mise exec -- go test -p 1 -count=1 -timeout 3m -race -tags integration -v ./cmd/web-api/... ./internal/api/... ./internal/dispatch/...
 fi
-if [[ "$mode" == chat || "$mode" == replacement || "$mode" == approval || "$mode" == fetch ]]; then
+if [[ "$mode" == chat || "$mode" == replacement || "$mode" == approval || "$mode" == fetch || "$mode" == attachments ]]; then
   # Launch the pinned actual server as an owned child, never inherited services.
   read -r grpc_port http_port metrics_port < <(python3 - <<'PY'
 import socket
@@ -115,6 +120,7 @@ PY
   if [[ "$mode" == replacement ]]; then default_run='Test(Replacement|ClosedUnreceiptedControl|OrdinaryHardWorkerDeath)'; fi
   if [[ "$mode" == approval ]]; then default_run='Test(Approval|Approve|Revoke|StaleDecision|Expiry|NewTool|WebTool)'; fi
   if [[ "$mode" == fetch ]]; then default_run='Test(Fetch|WebToolTimedOutBodyBlocksAcceptedReplacement|ApproveAllSurvivesRollover|StaleDecisionAfterReplacement)'; fi
+  if [[ "$mode" == attachments ]]; then default_run='Test(Attachment|FetchReplacement|WebToolTimedOutBodyBlocksAcceptedReplacement|ApproveAllSurvivesRollover|StaleDecisionAfterReplacement)'; fi
   mise exec -- go test -p 1 -count=1 -race -tags integration -v -timeout 15m -run "${WEBCHAT_TEST_CHAT_RUN:-$default_run}" ./internal/webintegration/... &
   test_pid=$!
   # Only this parent restarts its owned children/Compose project. Tests cannot

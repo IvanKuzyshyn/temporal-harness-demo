@@ -198,7 +198,7 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 		if info := workflow.GetCurrentUpdateInfo(u); info != nil && info.ID != string(c.CommandID) {
 			return reject, nil
 		}
-		eligible := (c.Kind == chat.CommandMessage || c.Kind == chat.CommandReplace) && len(c.Payload.AttachmentIDs) == 0 && c.Payload.Text != "" && len(c.Payload.Text) <= 65536 && chat.ValidID(string(c.TurnID))
+		eligible := (c.Kind == chat.CommandMessage || c.Kind == chat.CommandReplace) && len(c.Payload.AttachmentIDs) <= 4 && (c.Payload.Text != "" || len(c.Payload.AttachmentIDs) > 0) && len(c.Payload.Text) <= 65536 && chat.ValidID(string(c.TurnID))
 		if c.Kind == chat.CommandStop || c.Kind == chat.CommandDecide || c.Kind == chat.CommandRevoke {
 			eligible = c.TurnID == ""
 		}

@@ -206,7 +206,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(w, 400, "invalid_request")
 			return
 		}
-		if len(path) >= 3 && (path[2] == "attachments" || path[2] == "events") {
+		if len(path) >= 3 && path[2] == "attachments" {
+			s.attachment(w, r, id, path[3:])
+			return
+		}
+		if len(path) >= 3 && path[2] == "events" {
 			fail(w, 501, "not_implemented")
 			return
 		}

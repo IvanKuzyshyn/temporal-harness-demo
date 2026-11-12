@@ -139,6 +139,13 @@ func approvalAPI(t *testing.T, f *fixture) (func(), func(string, any, int) []byt
 
 func (f *fixture) approvalCommand(t *testing.T, c chat.Conversation, p *chat.WebApproval, decision chat.ApprovalDecision) chat.SessionCommand {
 	t.Helper()
+	// Workflow pending state precedes RecordWebApproval's SQL commit. Real UI
+	// consent is offered from that durable projection, not the workflow query.
+	require.Eventually(t, func() bool {
+		var exists bool
+		e := f.pool.QueryRow(f.ctx, `SELECT EXISTS(SELECT 1 FROM approvals WHERE conversation_id=$1 AND id=$2 AND action_hash=$3)`, c.ID, p.ID, p.Scope.ActionHash).Scan(&exists)
+		return e == nil && exists
+	}, 10*time.Second, 10*time.Millisecond)
 	in := chat.CommandInput{ConversationID: c.ID, RequestID: uuid.NewString(), Kind: chat.CommandDecide, Payload: chat.CommandPayload{ApprovalID: p.ID, ActionHash: p.Scope.ActionHash, Decision: decision}}
 	rc, err := f.repo.AcceptCommand(f.ctx, in)
 	require.NoError(t, err)

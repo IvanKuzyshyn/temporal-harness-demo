@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/attachments"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/chat"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/storage"
@@ -30,9 +31,10 @@ type ChatRepository interface {
 	CompleteModelAttempt(context.Context, chat.ConversationID, string, string, []byte, string, string) error
 }
 type ChatActivities struct {
-	Repository ChatRepository
-	Model      llm.Model
-	WebTools   *tools.WebRegistry
+	Repository  ChatRepository
+	Model       llm.Model
+	WebTools    *tools.WebRegistry
+	Attachments *attachments.Store
 }
 
 func chatStorageError(err error) error {

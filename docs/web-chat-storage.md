@@ -1,4 +1,6 @@
-# Web-chat application storage (Tasks 2–6)
+# Web-chat application storage (Tasks 2–8)
+
+Current schema **6** adds immutable bounded attachment extraction JSON. The API/worker require schema6. Original bytes stay in the explicitly configured durable host directory. See [attachment contracts](web-chat-attachments.md) for atomic byte-before-ready publication, ownership-verified recovery, exact authorization and parser limits.
 
 Schema **5** adds step-aware immutable model candidates, recorded approval scope
 and outcomes, effective versioned policy, exact tool authorization/result ownership
@@ -127,10 +129,11 @@ the original command/turn identity with its **current durable receipt state**.
   it must do the filesystem write/checksum itself. This does **not** approve
   access to the content.
 - `GetAttachment(ctx, conversationID, attachmentID) (chat.Attachment, error)`:
-  ownership-scoped lookup. Preapproval processing is absent from this task.
+  ownership-scoped lookup. Preapproval model paths use `WebAttachmentChecksum`, which selects metadata only.
+- `AuthorizeAttachment(ctx, scope, id)` verifies durable scope/ID/checksum and an active invocation before content access.
+- `ReadAttachmentExtraction(ctx, conversation, id)` and `SaveAttachmentExtraction(ctx, scope, id, document)` are internal extraction-cache operations; callers authorize before reading. Publication atomically stores text/status/sections/truncation, rejecting changed output.
 
-Original file/image bytes never enter Postgres. Schema includes extraction
-status/text/derived-image metadata for the later authorized processing task.
+Original file/image bytes never enter Postgres. Task8 persists parser text and metadata only after authorization; image model/child results belong to Task9.
 
 ### Worker projection records
 

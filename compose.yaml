@@ -1,6 +1,26 @@
 # Task 1 infrastructure only. Host services/lifecycle are implemented later.
 name: webchat-local
+# Host API/worker use the SAME absolute directory (Task13 exports this mapping).
+# This bind storage is deliberately outside Docker container writable layers;
+# compose down cannot remove original bytes. Never point it at legacy .data.
+x-webchat-host-environment:
+  WEBCHAT_ATTACHMENT_ROOT: ${WEBCHAT_ATTACHMENT_ROOT:-${PWD}/.webchat/attachments}
 services:
+  attachment-parser:
+    profiles: ["tools"]
+    image: webchat-attachment-parser:1
+    build: ./infra/attachment-parser
+    network_mode: none
+    read_only: true
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 1
+    pids_limit: 32
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    user: "65534:65534"
+    # Go creates one isolated stdin-only container per validation/extraction.
+    # No upload directory is mounted into the parser.
   postgres:
     image: postgres:16.14-bookworm@sha256:64154d0babcb1741988719e703419af0382b19953706149f9872fbd0f438efa8
     environment:

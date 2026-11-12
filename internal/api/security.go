@@ -11,9 +11,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/attachments"
 )
 
 type Config struct {
+	Attachments   *attachments.Store
 	ListenAddress string
 	ProxySecret   string
 	BrowserOrigin string

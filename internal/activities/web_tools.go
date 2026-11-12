@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/attachments"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/chat"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm/ollama"
@@ -41,7 +42,7 @@ func (a *ChatActivities) webRepository() (WebRepository, error) {
 func (a *ChatActivities) ChatStep(ctx context.Context, ref chat.TurnRef) (chat.ModelStepResult, error) {
 	local := *a
 	if local.WebTools == nil {
-		local.WebTools = productionWebTools()
+		local.WebTools = productionWebTools(a.Attachments)
 	}
 	attempt := 1
 	if activity.IsActivity(ctx) {
@@ -185,9 +186,9 @@ func (a *ChatActivities) webRequest(ctx context.Context, ref chat.TurnRef, turn 
 			if remaining < 0 {
 				remaining = 0
 			}
-			if result.Error != "" {
+			if result.Error != "" && result.AttachmentID == "" {
 				text = "Tool outcome: " + result.Error
-			} else if result.RequestedURL != "" {
+			} else if result.RequestedURL != "" || result.AttachmentID != "" {
 				// Keep source attribution and explicit excerpt truncation even
 				// when this step's combined readable-text allowance is exhausted.
 				result.Text = text
@@ -267,6 +268,9 @@ func (a *ChatActivities) ExecuteWebTool(ctx context.Context, in chat.WebToolExec
 	// A normal return, NOT a defer, is the only cleanup acknowledgement. Panic,
 	// Goexit or hard worker death retain uncertainty just like inference bodies.
 	retErr = a.runWebTool(ctx, r, in.Scope, id, args, cached)
+	if errors.Is(retErr, attachments.ErrCleanupUnconfirmed) {
+		return retErr
+	}
 	ack, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
 	if err = r.AcknowledgeWebToolCleanup(ack, in.Scope, id); err != nil && retErr == nil {
@@ -294,6 +298,9 @@ func (a *ChatActivities) runWebTool(parent context.Context, r WebRepository, s c
 	defer func() {
 		cancel()
 		<-joined
+		if errors.Is(retErr, attachments.ErrCleanupUnconfirmed) {
+			return
+		}
 		if stopped.Load() {
 			retErr = temporal.NewApplicationError("worker shutting down", "WorkerShutdown")
 		} else if parent.Err() != nil {
@@ -311,9 +318,12 @@ func (a *ChatActivities) runWebTool(parent context.Context, r WebRepository, s c
 	}
 	registry := a.WebTools
 	if registry == nil {
-		registry = productionWebTools()
+		registry = productionWebTools(a.Attachments)
 	}
 	result, err := registry.Execute(ctx, s, args)
+	if errors.Is(err, attachments.ErrCleanupUnconfirmed) || errors.Is(err, attachments.ErrPersistence) {
+		return err
+	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}

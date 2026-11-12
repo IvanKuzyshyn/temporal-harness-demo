@@ -1,0 +1,1 @@
+{"name":"webchat-attachment-parser","version":"1.0.0","private":true,"type":"module","dependencies":{"pdfjs-dist":"6.5.438","yauzl":"3.4.0","saxes":"6.0.0","@resvg/resvg-js":"2.6.2"}}

@@ -105,10 +105,9 @@ Uploads alone do not grant content access.
 - `POST /conversations/{id}/approval-policy/revoke` (`RevokeRequest`) → 202 `Receipt`.
 - `GET /conversations/{id}/commands/{commandId}` → 200 `Receipt`. Mutations return
   this relative URL in `Location`. Poll it to resolve asynchronous admission.
-- Reserved: `POST /conversations/{id}/attachments` (multipart original file),
-  `GET /conversations/{id}/attachments/{attachmentId}` (binary safe download),
-  `GET /conversations/{id}/events` (`text/event-stream`, `Last-Event-ID`). These
-  return **501 `not_implemented`**, never fake upload IDs, bytes, or event streams.
+- `POST /conversations/{id}/attachments` →201 `AttachmentResponse`: exactly one multipart `file`, ≤1,048,576 original bytes; no additional parts. See [attachment validation/storage](web-chat-attachments.md).
+- `GET /conversations/{id}/attachments/{attachmentId}` →200 original binary, conversation-scoped, attachment disposition +nosniff (including SVG). No inline preview in Task8.
+- Reserved: `GET /conversations/{id}/events` (`text/event-stream`, `Last-Event-ID`) returns **501 `not_implemented`**.
 
 Retain request IDs across reload/network retries. Creation has its own global,
 permanent request-ID domain; same ID/same selected model returns the same
@@ -138,7 +137,7 @@ policy yet; the durable activity index is intentionally retained.
 HTTP failures use `Error` below: 400 invalid payload/query/constraint; 403 private
 boundary failure; 404 absent conversation/receipt or missing, foreign, not-ready
 references (including a mismatched approval hash); 409 reused identity with
-changed content/digest; 413 body/prompt too large; 415 wrong media type; 503 DB or
+changed content/digest; 413 body/prompt/file too large; 415 wrong media type; 422 invalid/unreadable file; 503 DB or
 infrastructure unavailable; 501 reserved transport routes. Root known-route
 method mismatches return 405; other unknown route/method combinations return 404.
 No SQL, connection string, stack trace, upstream error text, or credentials enter
@@ -164,7 +163,7 @@ completion/failure without an accepted control retains retry-safe hard-worker-lo
 recovery: missing cleanup acknowledgments do not block canonical settlement or
 normal follow-ups, and are not falsely marked confirmed. See the runtime document for
 completion linearization, recovery and operator limits. Task6 implements approval/revocation Updates. New attachment-bearing
-messages/replacements still reject `invalid_command` until the attachment tasks.
+messages/replacements now admit up to four ready owned attachments. Task8 creates deterministic metadata-only attachment actions before inference; no upload implies content consent. See [attachments](web-chat-attachments.md) for exact validation, recovery and extraction bounds.
 
 Metadata is a repeatable-read Postgres projection. `observedAt` is an API read
 observation, **not a workflow confirmation**. `authoritative:false` and
@@ -214,6 +213,8 @@ message content, digest equality, freshness) are enforced/described above.
     "Models":{"type":"object","additionalProperties":false,"required":["models"],"properties":{"models":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"object","additionalProperties":false,"required":["id","default","availability","capabilities"],"properties":{"id":{"$ref":"#/$defs/Model"},"default":{"type":"boolean"},"availability":{"const":"unknown"},"capabilities":{"type":"object","additionalProperties":false,"required":["text","tools","images","imageAdmissionQualified"],"properties":{"text":{"const":"unverified"},"tools":{"const":"unverified"},"images":{"const":"unverified"},"imageAdmissionQualified":{"const":false}}}}}}}},
     "Health":{"type":"object","additionalProperties":false,"required":["alive","storageReady","acceptingCommands","dispatcher","workersPolling","reconciliationReady"],"properties":{"alive":{"const":true},"storageReady":{"type":"boolean"},"acceptingCommands":{"type":"boolean"},"dispatcher":{"enum":["unavailable","connected"]},"workersPolling":{"type":"boolean"},"reconciliationReady":{"type":"boolean"}}},
     "Error":{"type":"object","additionalProperties":false,"required":["error"],"properties":{"error":{"type":"object","additionalProperties":false,"required":["code"],"properties":{"code":{"enum":["forbidden","invalid_request","invalid_json","invalid_query","not_found","reference_not_found","conflict","body_too_large","prompt_too_large","unsupported_media_type","storage_unavailable","not_implemented","method_not_allowed"]}}}}},
+    "Attachment":{"type":"object","additionalProperties":false,"required":["id","conversationId","name","mediaType","size","checksum","status"],"properties":{"id":{"$ref":"#/$defs/ID"},"conversationId":{"$ref":"#/$defs/ID"},"name":{"type":"string"},"mediaType":{"enum":["text/plain","text/markdown","application/pdf","application/vnd.openxmlformats-officedocument.wordprocessingml.document","image/png","image/jpeg","image/svg+xml"]},"size":{"type":"integer","minimum":0,"maximum":1048576},"checksum":{"type":"string","pattern":"^[0-9a-f]{64}$"},"status":{"const":"ready"}}},
+    "AttachmentResponse":{"type":"object","additionalProperties":false,"required":["attachment"],"properties":{"attachment":{"$ref":"#/$defs/Attachment"}}},
     "Event":{"type":"object","additionalProperties":false,"required":["id","conversationId","turnId","logicalStep","attempt","sequence","type","payload"],"properties":{"id":{"$ref":"#/$defs/ID"},"conversationId":{"$ref":"#/$defs/ID"},"turnId":{"$ref":"#/$defs/NullableID"},"logicalStep":{"type":["integer","null"],"minimum":0},"attempt":{"type":["integer","null"],"minimum":1},"sequence":{"type":"integer","minimum":1},"type":{"type":"string","minLength":1},"payload":{"type":"object","description":"Type-specific bounded lifecycle data, not raw attachment/image bytes. Event names and payload variants are owned by the later workflow/transport tasks."}}}
   }
 }

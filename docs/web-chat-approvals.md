@@ -126,7 +126,7 @@ not a Task10 summary implementation.
   other URLs/files/tools. A future child protocol cannot bypass parent approval.
 - Inject adapters via `activities.ChatActivities.WebTools`. Production nil
   registries now install `web_fetch` through `NewWebFetchAdapter(tools.NewFetcher())`.
-  `file_upload` still returns explicit `adapter_unavailable` until later tasks.
+  With `ChatActivities.Attachments` configured, nil registries also install Task8's `NewWebAttachmentAdapter`; an unset store remains explicitly unavailable. Both production executables use the same `WEBCHAT_ATTACHMENT_ROOT`. See [durable attachments](web-chat-attachments.md).
   Tests may inject network dependencies without weakening the fetch policy.
 - `activities.WebRepository` lists the narrow persistence seam: preparation,
   approval/authorization, invocation registration/publication/acknowledgment,
