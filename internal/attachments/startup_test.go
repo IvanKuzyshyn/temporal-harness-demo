@@ -17,9 +17,9 @@ func TestConcurrentStartupWaitsForLayoutPublication(t *testing.T) {
 			unlock()
 		}
 	}()
-	// Simulate the first constructor paused between O_EXCL and marker fsync.
+	// Simulate the first constructor paused before atomic marker publication.
 	require.NoError(t, s.root.Remove(".webchat-attachments-v1"))
-	f, err := s.root.Create(".webchat-attachments-v1")
+	f, err := s.root.Create(".webchat-attachments-v1.pending-test")
 	require.NoError(t, err)
 	defer f.Close()
 	done := make(chan error, 1)
@@ -39,6 +39,9 @@ func TestConcurrentStartupWaitsForLayoutPublication(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Sync())
 	require.NoError(t, f.Close())
+	require.NoError(t, s.root.Link(".webchat-attachments-v1.pending-test", ".webchat-attachments-v1"))
+	require.NoError(t, s.syncDir("."))
+	require.NoError(t, s.root.Remove(".webchat-attachments-v1.pending-test"))
 	unlock()
 	unlock = nil
 	select {

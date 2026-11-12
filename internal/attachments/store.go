@@ -28,6 +28,10 @@ const MaxBytes = 1048576
 var ErrTooLarge = errors.New("attachment exceeds 1048576 bytes")
 var ErrInvalid = errors.New("invalid or unsupported attachment")
 
+// metadataCreated is an internal filesystem fault barrier, nil in production.
+// Subprocess tests pause here and are killed by their parent, without defers.
+var metadataCreated func(final, temporary string, file *os.File)
+
 type UploadMetadata struct{ Name, MediaType string }
 type Repository interface {
 	CheckAttachmentConversation(context.Context, chat.ConversationID) error
@@ -71,18 +75,18 @@ func NewStore(path string, r Repository, p Parser) (*Store, error) {
 	}
 	defer unlock()
 	// A version marker identifies this application's layout, not a cleanup license.
-	f, e := root.OpenFile(".webchat-attachments-v1", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if e == nil {
-		_, e = f.WriteString("webchat-attachments-v1\n")
-		if e == nil {
-			e = f.Sync()
-		}
-		f.Close()
-	} else if errors.Is(e, os.ErrExist) {
+	// Interrupted initial publications have unique temporary names. Without a
+	// committed owner, leave them alone; they cannot obstruct the next startup.
+	e = s.write(".webchat-attachments-v1", []byte("webchat-attachments-v1\n"), uuid.NewString())
+	if errors.Is(e, os.ErrExist) {
 		var b []byte
 		b, e = root.ReadFile(".webchat-attachments-v1")
 		if e == nil && string(b) != "webchat-attachments-v1\n" {
 			e = ErrInvalid
+		}
+		if e == nil {
+			// Also complete a publisher interrupted after link but before dir fsync.
+			e = s.syncDir(".")
 		}
 	}
 	if e != nil {
@@ -124,10 +128,29 @@ func (s *Store) syncDir(path string) error {
 	defer f.Close()
 	return f.Sync()
 }
-func (s *Store) write(path string, b []byte) error {
-	f, e := s.root.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+
+// write publishes immutable metadata under the writer lock. Link is an atomic
+// no-replace publication (unlike Rename, which can overwrite an existing name).
+// The temporary and final names are siblings on the same filesystem. A final
+// name is never visible until its entire contents have been written and fsynced.
+func (s *Store) write(path string, b []byte, publicationID string) error {
+	if !chat.ValidID(publicationID) {
+		return ErrInvalid
+	}
+	temporary := path + ".pending-" + publicationID
+	f, e := s.root.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if e != nil {
 		return e
+	}
+	// Only this successful O_EXCL grants permission to unlink this temporary.
+	removeTemporary := true
+	defer func() {
+		if removeTemporary {
+			_ = s.root.Remove(temporary)
+		}
+	}()
+	if metadataCreated != nil {
+		metadataCreated(path, temporary, f)
 	}
 	_, e = f.Write(b)
 	if e == nil {
@@ -137,12 +160,44 @@ func (s *Store) write(path string, b []byte) error {
 	if e == nil {
 		e = closeErr
 	}
-	return e
+	if e != nil {
+		return e
+	}
+	if e = s.root.Link(temporary, path); e != nil {
+		return e
+	}
+	if e = s.syncDir(filepath.Dir(path)); e != nil {
+		return e
+	}
+	if e = s.root.Remove(temporary); e != nil {
+		return e
+	}
+	removeTemporary = false
+	return s.syncDir(filepath.Dir(path))
 }
 
 type owner struct {
-	ID           chat.AttachmentID
-	Conversation chat.ConversationID
+	ID            chat.AttachmentID
+	Conversation  chat.ConversationID
+	PublicationID string `json:",omitempty"` // Absent in original v1 owners.
+}
+
+// A committed owner explicitly identifies only its two metadata temporaries.
+// Never glob temporary-looking names or infer ownership from the layout marker.
+func (s *Store) removePendingMetadata(dir string, o owner) error {
+	if o.PublicationID == "" {
+		return nil // Older, already-published owners remain recoverable.
+	}
+	if !chat.ValidID(o.PublicationID) {
+		return ErrInvalid
+	}
+	for _, name := range []string{"owner.json", "manifest.json"} {
+		e := s.root.Remove(dir + "/" + name + ".pending-" + o.PublicationID)
+		if e != nil && !errors.Is(e, os.ErrNotExist) {
+			return e
+		}
+	}
+	return s.syncDir(dir)
 }
 
 func (s *Store) Put(ctx context.Context, c chat.ConversationID, in io.Reader, m UploadMetadata) (chat.Attachment, error) {
@@ -167,8 +222,9 @@ func (s *Store) Put(ctx context.Context, c chat.ConversationID, in io.Reader, m 
 	if e = s.root.Mkdir(dir, 0700); e != nil {
 		return a, e
 	}
-	o, _ := json.Marshal(owner{id, c})
-	if e = s.write(dir+"/owner.json", o); e != nil {
+	ownership := owner{ID: id, Conversation: c, PublicationID: uuid.NewString()}
+	o, _ := json.Marshal(ownership)
+	if e = s.write(dir+"/owner.json", o, ownership.PublicationID); e != nil {
 		return a, e
 	}
 	if e = s.syncDir(dir); e != nil {
@@ -216,7 +272,7 @@ func (s *Store) Put(ctx context.Context, c chat.ConversationID, in io.Reader, m 
 	h := sha256.Sum256(b)
 	a = chat.Attachment{ID: id, ConversationID: c, OriginalName: name, MediaType: media, Size: n, Checksum: hex.EncodeToString(h[:]), StorageKey: dir + "/original", Status: "staged"}
 	manifest, _ := json.Marshal(a)
-	if e = s.write(dir+"/manifest.json", manifest); e != nil {
+	if e = s.write(dir+"/manifest.json", manifest, ownership.PublicationID); e != nil {
 		return a, e
 	}
 	if e = s.syncDir(dir); e != nil {
@@ -329,6 +385,9 @@ func (s *Store) Recover(ctx context.Context) error {
 		var o owner
 		if e != nil || json.Unmarshal(raw, &o) != nil || string(o.ID) != dir || !chat.ValidID(string(o.Conversation)) {
 			continue
+		}
+		if e = s.removePendingMetadata(dir, o); e != nil {
+			return fmt.Errorf("recover %s: %w", dir, e)
 		}
 		raw, e = s.root.ReadFile(dir + "/manifest.json")
 		if errors.Is(e, os.ErrNotExist) { // Owned incomplete transfer, no finalized bytes.
