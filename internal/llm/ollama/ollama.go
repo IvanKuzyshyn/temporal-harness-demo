@@ -85,8 +85,7 @@ func (m *Model) Chat(ctx context.Context, req llm.Request, emit func(llm.Delta) 
 	for _, msg := range req.Messages {
 		imageRequest = imageRequest || len(msg.Images) > 0
 	}
-	stream := true
-	wire := &api.ChatRequest{Model: req.Model, Stream: &stream}
+	var wire *api.ChatRequest
 	if imageRequest {
 		var err error
 		wire, err = m.admittedImage(ctx, req)
@@ -94,35 +93,10 @@ func (m *Model) Chat(ctx context.Context, req llm.Request, emit func(llm.Delta) 
 			return llm.Response{}, err
 		}
 	} else {
-		if req.Think != nil {
-			wire.Think = &api.ThinkValue{Value: *req.Think}
-		}
-		if req.ContextWindow > 0 || req.MaxOutputTokens > 0 {
-			wire.Options = map[string]any{}
-			if req.ContextWindow > 0 {
-				wire.Options["num_ctx"] = req.ContextWindow
-			}
-			if req.MaxOutputTokens > 0 {
-				wire.Options["num_predict"] = req.MaxOutputTokens
-			}
-		}
-		for _, msg := range req.Messages {
-			out := api.Message{Role: msg.Role, Content: msg.Content, ToolCallID: msg.ToolCallID, ToolName: msg.ToolName}
-			for _, call := range msg.ToolCalls {
-				var args api.ToolCallFunctionArguments
-				if err := json.Unmarshal(call.Args, &args); err != nil {
-					return llm.Response{}, &InvalidRequestError{err}
-				}
-				out.ToolCalls = append(out.ToolCalls, api.ToolCall{ID: call.ID, Function: api.ToolCallFunction{Name: call.Name, Arguments: args}})
-			}
-			wire.Messages = append(wire.Messages, out)
-		}
-		for _, tool := range req.Tools {
-			var params api.ToolFunctionParameters
-			if err := json.Unmarshal(tool.Parameters, &params); err != nil {
-				return llm.Response{}, &InvalidRequestError{err}
-			}
-			wire.Tools = append(wire.Tools, api.Tool{Type: "function", Function: api.ToolFunction{Name: tool.Name, Description: tool.Description, Parameters: params}})
+		var err error
+		wire, err = textWire(req)
+		if err != nil {
+			return llm.Response{}, err
 		}
 	}
 	if req.Bounded && !imageRequest {

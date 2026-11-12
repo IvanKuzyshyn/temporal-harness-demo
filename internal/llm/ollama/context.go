@@ -12,9 +12,21 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
+// textWire is the shared text conversion for dispatch and rendered admission.
+// Nonpositive options and nil thinking preserve legacy provider defaults.
+// Image envelopes and bounded dispatch enforcement remain separate.
 func textWire(req llm.Request) (*api.ChatRequest, error) {
 	stream := true
-	wire := &api.ChatRequest{Model: req.Model, Stream: &stream, Options: map[string]any{"num_ctx": req.ContextWindow, "num_predict": req.MaxOutputTokens}}
+	wire := &api.ChatRequest{Model: req.Model, Stream: &stream}
+	if req.ContextWindow > 0 || req.MaxOutputTokens > 0 {
+		wire.Options = map[string]any{}
+		if req.ContextWindow > 0 {
+			wire.Options["num_ctx"] = req.ContextWindow
+		}
+		if req.MaxOutputTokens > 0 {
+			wire.Options["num_predict"] = req.MaxOutputTokens
+		}
+	}
 	if req.Think != nil {
 		wire.Think = &api.ThinkValue{Value: *req.Think}
 	}
