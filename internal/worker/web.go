@@ -14,7 +14,7 @@ import (
 )
 
 // StartWeb owns its Temporal client/workers, but borrows the DB/model activities.
-// documents queue is reserved, deliberately not falsely advertised as polling.
+// Document bodies poll separately; all model calls share a one-generation gate.
 func StartWeb(ctx context.Context, address string, a *activities.ChatActivities) (*Runner, error) {
 	return startWeb(ctx, address, a, tc.DialContext, tw.New)
 }
@@ -28,6 +28,11 @@ func startWeb(ctx context.Context, address string, a *activities.ChatActivities,
 	if err != nil {
 		return nil, err
 	}
+	local := *a
+	if local.Model != nil {
+		local.Model = &serialWebModel{model: local.Model, gate: make(chan struct{}, 1)}
+	}
+	a = &local
 	r := &Runner{client: c, done: make(chan struct{})}
 	started := false
 	defer func() {
@@ -36,10 +41,13 @@ func startWeb(ctx context.Context, address string, a *activities.ChatActivities,
 			_ = r.Close()
 		}
 	}()
-	for _, q := range []string{workflows.WebAgentsQueue, workflows.WebLLMQueue} {
+	for _, q := range []string{workflows.WebAgentsQueue, workflows.WebLLMQueue, workflows.WebDocumentsQueue} {
 		opts := tw.Options{WorkerStopTimeout: 10 * time.Second}
 		if q == workflows.WebLLMQueue {
 			opts.MaxConcurrentActivityExecutionSize = 1
+		}
+		if q == workflows.WebDocumentsQueue {
+			opts.MaxConcurrentActivityExecutionSize = 4
 		}
 		w := factory(c, q, opts)
 		r.workers = append(r.workers, w)
@@ -55,6 +63,11 @@ func startWeb(ctx context.Context, address string, a *activities.ChatActivities,
 			w.RegisterActivity(a.RecordWebApproval)
 			w.RegisterActivity(a.RecordWebAuthorization)
 			w.RegisterActivity(a.ExecuteWebTool)
+		} else if q == workflows.WebDocumentsQueue {
+			w.RegisterWorkflow(workflows.DocumentAnalysisWorkflow)
+			w.RegisterActivity(a.PrepareDocumentAnalysis)
+			w.RegisterActivity(a.AnalyzeDocumentChunk)
+			w.RegisterActivity(a.FinishDocumentAnalysis)
 		} else {
 			w.RegisterActivityWithOptions(a.ChatStep, activity.RegisterOptions{Name: workflows.WebModelActivity})
 		}

@@ -171,6 +171,21 @@ func (r *Repository) SaveWebToolResult(ctx context.Context, s chat.ApprovalScope
 	if (result.AttachmentID != "" && !chat.ValidID(string(result.AttachmentID))) || result.Pages < 0 || len(result.ExtractionStatus) > 32 || len(result.Text) > 16000 || len(result.Error) > 128 || len(result.RequestedURL) > 2048 || len(result.FinalURL) > 2048 || len(result.ContentType) > 128 {
 		return chat.ErrInvalid
 	}
+	if len(result.Coverage) > 32 || (result.Analysis == nil && len(result.Coverage) > 0) {
+		return chat.ErrInvalid
+	}
+	if analysis := result.Analysis; analysis != nil {
+		if s.ToolName != "file_upload" || result.AttachmentID == "" || analysis.ChildID != "document/"+s.ToolCallID+"/"+s.ActionHash || analysis.Chunks != len(result.Coverage) || analysis.Truncated != result.Truncated || analysis.Status != result.ExtractionStatus || (analysis.Status != "completed" && analysis.Status != "partial" && analysis.Status != "unsupported") {
+			return chat.ErrInvalid
+		}
+		end := 0
+		for i, c := range result.Coverage {
+			if c.Index != i || c.StartByte != end || c.EndByte <= c.StartByte || c.EndByte-c.StartByte > 4000 || c.EndByte > 128000 {
+				return chat.ErrInvalid
+			}
+			end = c.EndByte
+		}
+	}
 	raw, _ := json.Marshal(result)
 	scope, _ := json.Marshal(s)
 	return r.withConversation(ctx, s.ConversationID, func(tx pgx.Tx) error {

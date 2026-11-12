@@ -28,13 +28,14 @@ Additional configuration:
 
 `worker.StartWeb` registers `WebChatSessionWorkflow` and persistence activities
 on `web-chat-agents`, and `ChatStep` under the `ChatModel` activity name on
-`web-chat-llm`. Inference concurrency is
-one per worker. `web-chat-documents` is reserved, **not polling or advertised as
-ready** until a real child is implemented. Child registration is not done here; Task6 registers the restricted web-tool
+`web-chat-llm`. `web-chat-documents` now polls the real `DocumentAnalysisWorkflow`
+and its scoped extraction/chunk/finalization activities. Four document bodies may
+run concurrently; one shared generation gate covers chat and document inference
+per runner. See [analysis contracts](web-chat-analysis.md). Task6 registers the restricted web-tool
 approval/execution activities. Updates are named `message`, `stop`, `replace`, `decide`, `revoke`; query
 `state` returns `WebSessionState` without database/network access. Stop and text
 replacement execute as described below. Task6 implements approvals/revocation. Messages or replacements with new
-attachments still return `invalid_command`, not fake success or attachment authorization. Rejected message/replacement intent turns
+attachments are accepted after owned-ready metadata validation; upload alone is never content authorization. Rejected message/replacement intent turns
 are marked failed with their rejection code; terminal receipt reconciliation does
 not rewrite turn projections.
 
@@ -171,11 +172,11 @@ publisher fencing, worker concurrency, and elapsed time are never cleanup proof.
 For an accepted stop/replacement, only sealed zero allows target settlement and
 newer inference. A positive count parks `cancelling_interrupted`, exposes
 `UnconfirmedModelInvocations`, and leaves SQL nonterminal. Replacement/FIFO do not
-start, even after a late acknowledgment. Operator investigation is required; no
-automatic reset/reuse is attempted. A lost acknowledgment may conservatively park
-controlled work whose body actually returned. Worker/server restart cannot erase
-the ledger. The current runtime has no document children; Task9 must add their
-cleanup evidence to the same turn-local barrier.
+start until every ACK is durable. Task9 rechecks the seal every five seconds so
+a late real acknowledgment can resume work; elapsed time never substitutes for
+zero outstanding bodies. A permanently lost acknowledgment still blocks controlled
+work. Worker/server restart cannot erase the ledger. Scoped document extraction,
+chunk and finalization bodies now use this same barrier, after logical child join.
 
 **Ordinary completion/failure without an accepted control is different.** It seals
 new registrations but does not require missing acknowledgments to arrive. A hard

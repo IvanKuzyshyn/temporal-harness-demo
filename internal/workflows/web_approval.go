@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/chat"
+	enumspb "go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 )
@@ -56,7 +57,7 @@ func (s *WebSessionState) decideWeb(c chat.CommandIdentity, now time.Time) chat.
 // webBatch records each authorization in deterministic order before scheduling
 // any of the (at most four) calls. Only references cross the workflow boundary.
 // It yields to the outer admission/CAN loop with no live activity when requested.
-func (s *WebSessionState) webBatch(ctx, turnCtx, join workflow.Context, pause func() bool) error {
+func (s *WebSessionState) webBatch(ctx, turnCtx, join workflow.Context, model string, pause func() bool) error {
 	for i := range s.Batch {
 		a := &s.Batch[i]
 		if !registeredWebScope(a.Scope) || a.Scope.ConversationID != s.ConversationID || a.Scope.TurnID != s.ActiveTurn {
@@ -152,7 +153,13 @@ func (s *WebSessionState) webBatch(ctx, turnCtx, join workflow.Context, pause fu
 	opts := workflow.ActivityOptions{TaskQueue: WebAgentsQueue, StartToCloseTimeout: time.Minute, ScheduleToCloseTimeout: 3 * time.Minute, HeartbeatTimeout: 15 * time.Second, WaitForCancellation: true, RetryPolicy: &temporal.RetryPolicy{MaximumAttempts: 2, InitialInterval: time.Second}}
 	for _, a := range s.Batch {
 		if a.Outcome == "authorized" {
-			futures = append(futures, workflow.ExecuteActivity(workflow.WithActivityOptions(turnCtx, opts), WebToolActivity, chat.WebToolExecution{Scope: a.Scope}))
+			if a.Scope.ToolName == "file_upload" {
+				in := chat.DocumentAnalysisInput{Scope: a.Scope, Model: model, Budget: chat.DefaultDocumentBudget()}
+				child := workflow.WithChildOptions(turnCtx, workflow.ChildWorkflowOptions{WorkflowID: in.ChildID(), TaskQueue: WebDocumentsQueue, WorkflowExecutionTimeout: 15 * time.Minute, WaitForCancellation: true, ParentClosePolicy: enumspb.PARENT_CLOSE_POLICY_REQUEST_CANCEL, WorkflowIDReusePolicy: enumspb.WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE})
+				futures = append(futures, workflow.ExecuteChildWorkflow(child, DocumentAnalysisName, in))
+			} else {
+				futures = append(futures, workflow.ExecuteActivity(workflow.WithActivityOptions(turnCtx, opts), WebToolActivity, chat.WebToolExecution{Scope: a.Scope}))
+			}
 		}
 	}
 	var first error

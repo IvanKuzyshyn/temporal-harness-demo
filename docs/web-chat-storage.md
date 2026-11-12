@@ -1,6 +1,6 @@
 # Web-chat application storage (Tasks 2–8)
 
-Current schema **6** adds immutable bounded attachment extraction JSON. The API/worker require schema6. Original bytes stay in the explicitly configured durable host directory. See [attachment contracts](web-chat-attachments.md) for atomic byte-before-ready publication, ownership-verified recovery, exact authorization and parser limits.
+Current schema **7** adds immutable action-scoped document manifest/chunk summaries in `document_analysis_parts`; schema6's pure extraction cache is unchanged. The API/worker require schema7. See [analysis contracts](web-chat-analysis.md). Original bytes stay in the explicitly configured durable host directory. See [attachment contracts](web-chat-attachments.md) for atomic byte-before-ready publication, ownership-verified recovery, exact authorization and parser limits.
 
 Schema **5** adds step-aware immutable model candidates, recorded approval scope
 and outcomes, effective versioned policy, exact tool authorization/result ownership

@@ -4,6 +4,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/chat"
 )
 
 type ToolCall struct {
@@ -11,12 +12,20 @@ type ToolCall struct {
 	Name string          `json:"name"`
 	Args json.RawMessage `json:"args"`
 }
+
+// ImageReference is safe for durable history. It never carries original bytes.
+type ImageReference struct {
+	AttachmentID         chat.AttachmentID
+	DerivedKey, Checksum string
+}
+
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content,omitempty"`
-	ToolCalls  []ToolCall `json:"toolCalls,omitempty"`
-	ToolCallID string     `json:"toolCallId,omitempty"`
-	ToolName   string     `json:"toolName,omitempty"`
+	Images     []ImageReference `json:"images,omitempty"`
+	Role       string           `json:"role"`
+	Content    string           `json:"content,omitempty"`
+	ToolCalls  []ToolCall       `json:"toolCalls,omitempty"`
+	ToolCallID string           `json:"toolCallId,omitempty"`
+	ToolName   string           `json:"toolName,omitempty"`
 }
 type ToolDefinition struct {
 	Name        string          `json:"name"`

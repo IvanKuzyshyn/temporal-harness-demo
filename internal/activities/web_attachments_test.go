@@ -48,6 +48,9 @@ func TestUnapprovedFileNeverEntersModel(t *testing.T) {
 	require.NotNil(t, repo.saved)
 	require.Len(t, repo.saved.Calls, 1)
 	require.Equal(t, "file_upload", repo.saved.Calls[0].Name)
+	var action tools.AttachmentAnalysisArgs
+	require.NoError(t, json.Unmarshal(repo.saved.Calls[0].Arguments, &action))
+	require.Equal(t, "analyse attachment", action.Instruction, "approval must bind the actual analysis instruction")
 	require.Contains(t, string(repo.saved.Calls[0].Arguments), string(id))
 	require.NotContains(t, string(repo.saved.Calls[0].Arguments), "SECRET ORIGINAL CONTENT")
 	ref.Step = 1

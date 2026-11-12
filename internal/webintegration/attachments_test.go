@@ -29,6 +29,9 @@ func (m *attachmentInspectModel) Chat(_ context.Context, r llm.Request, _ func(l
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.requests = append(m.requests, r)
+	if len(r.Tools) == 0 {
+		return llm.Response{Message: llm.Message{Role: "assistant", Content: r.Messages[len(r.Messages)-1].Content}}, nil
+	}
 	return llm.Response{Message: llm.Message{Role: "assistant", Content: "Document outcome recorded"}}, nil
 }
 func (f *fixture) attachmentCommand(t *testing.T, c chat.Conversation, id chat.AttachmentID) chat.SessionCommand {
@@ -51,7 +54,7 @@ func TestAttachmentApprovalExtractionAndRestart(t *testing.T) {
 	require.NoError(t, e)
 	m := &attachmentInspectModel{}
 	start := func() *worker.Runner {
-		r, e := worker.StartWeb(f.ctx, f.address, &activities.ChatActivities{Repository: f.repo, Model: m, WebTools: tools.NewWebRegistry(map[string]tools.WebAdapter{"web_fetch": activities.NewWebFetchAdapter(tools.NewFetcher()), "file_upload": activities.NewWebAttachmentAdapter(store)})})
+		r, e := worker.StartWeb(f.ctx, f.address, &activities.ChatActivities{Repository: f.repo, Model: m, Attachments: store, WebTools: tools.NewWebRegistry(map[string]tools.WebAdapter{"web_fetch": activities.NewWebFetchAdapter(tools.NewFetcher()), "file_upload": activities.NewWebAttachmentAdapter(store)})})
 		require.NoError(t, e)
 		return r
 	}
@@ -98,12 +101,15 @@ func TestAttachmentApprovalExtractionAndRestart(t *testing.T) {
 	require.Equal(t, "completed", status)
 	require.Equal(t, content, text)
 	m.mu.Lock()
-	require.Len(t, m.requests, 2)
+	require.Len(t, m.requests, 3)
 	raw, _ = json.Marshal(m.requests[1])
-	require.Contains(t, string(raw), content)
+	require.Contains(t, string(raw), content, "approved child model request")
+	raw, _ = json.Marshal(m.requests[2])
+	require.Contains(t, string(raw), content, "only the approved persisted summary enters parent context")
 	m.mu.Unlock()
 	result, e := f.repo.WebToolResult(f.ctx, c.ID, pending.Scope.ToolCallID)
 	require.NoError(t, e)
-	require.Equal(t, content, result.Text)
+	require.Contains(t, result.Text, content)
+	require.NotNil(t, result.Analysis)
 	t.Log("real Temporal/SQL/worker/store restart: pending preserved, denied original absent from captured model request; authorized text persisted and enters actual request builder")
 }

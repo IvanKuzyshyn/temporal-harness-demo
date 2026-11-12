@@ -74,8 +74,9 @@ terminal/cancelling turns. The existing `SealChatModelInvocations` name now seal
 and counts **both** model and tool ledgers. Accepted stop/replacement requires
 sealed zero across every target body, including older timed-out attempts. Logical
 future cancellation, publisher status and elapsed time are not cleanup proof.
-Missing evidence parks `cancelling_interrupted`; no newer turn runs. There is no
-automatic unpark/reset and no physical provider/GPU reclamation claim.
+Missing evidence parks `cancelling_interrupted`; no newer turn runs. Task9 rechecks
+durable counts every five seconds and resumes only after actual ACKs yield zero;
+there is no timeout-based reset or physical provider/GPU reclamation claim.
 
 Ordinary completed/failed turns retain the Task5 fix2 distinction: registration is
 sealed, canonical result ownership remains fenced, and old missing acknowledgments

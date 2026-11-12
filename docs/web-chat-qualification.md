@@ -2,6 +2,12 @@
 
 ## Status: implementation unblocked by user; image admission remains unqualified
 
+### Task9 small-image experiments — 2026-11-12
+
+[New raw evidence](qualification/2026-11-12-task9-small-images.jsonl) records six bounded live qualification-only calls: the known640×160 PNG, JPEG95, and a static-vector SVG reconstruction rasterized by the actual constrained helper. Both exact tags translated all three: Qwen `HELLO WORLD` (129 prompt tokens each), Gemma `Hello world` (111 each). Command: `caffeinate -is env WEBCHAT_TASK9_LIVE=1 WEBCHAT_TASK9_EVIDENCE=<new-exclusive-jsonl-path> mise exec -- go test -p 1 -count=1 -timeout=10m -v ./scripts -run '^TestTask9LiveSmallImageExperiments$'`;18.05s test elapsed. One image/tiny prompt/16K context/2000 output/90-second deadline, serial calls; no shared service restart or model substitution.
+
+These observations are separate from authorization, arbitrary image-context admission and semantic generalization. No larger-Qwen investigation was repeated. **Original failures and `imageAdmissionQualified:false` remain unchanged.** Application image translation/restart-follow-up is still blocked by unqualified context admission, not by the deferred quality investigation. Production rejects opaque image requests rather than silently dropping them; [Task9 contracts and concrete completion options](web-chat-analysis.md). Document child/parser/SQL and document worker/store restart evidence are real but are not image restart evidence. All historical sections below remain as originally recorded.
+
 **User amendment (2026-11-11, before Task 2):** “Let's move on even knowing this qwen issue. We can investigate it later.” Investigation of the known larger-image Qwen quality failures is deferred; the Task 1 progression gate is removed for that accepted issue. The historical blocked assessment and all original raw evidence below are preserved. `imageAdmissionQualified:false` remains unchanged. This is not image certification, does not waive downstream context admission/resource bounds, and does not authorize fallback. Task 2 performs no Qwen rerun/investigation.
 
 ### Historical Task 1 assessment (before the amendment)

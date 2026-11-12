@@ -1,4 +1,6 @@
-# Durable attachments (Task8, schema6)
+# Durable attachments (Task8 foundation, current schema7)
+
+Task9 supersedes the extraction-only runtime seam below with [scoped document children](web-chat-analysis.md), action-specific summaries, authorized raster preparation, and exact user-instruction binding. Image inference remains explicitly unqualified/disabled; raster preparation is not model admission. The original storage/parser guarantees below remain in force.
 
 ## Runtime
 

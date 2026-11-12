@@ -93,6 +93,9 @@ func (m *Model) Chat(ctx context.Context, req llm.Request, emit func(llm.Delta) 
 		}
 	}
 	for _, msg := range req.Messages {
+		if len(msg.Images) > 0 {
+			return llm.Response{}, &InvalidRequestError{fmt.Errorf("image_admission_unqualified for exact model %q", req.Model)}
+		}
 		out := api.Message{Role: msg.Role, Content: msg.Content, ToolCallID: msg.ToolCallID, ToolName: msg.ToolName}
 		for _, call := range msg.ToolCalls {
 			var args api.ToolCallFunctionArguments
