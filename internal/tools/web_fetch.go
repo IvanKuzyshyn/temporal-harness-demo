@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"golang.org/x/net/html"
@@ -90,10 +91,12 @@ func parseFetchURL(raw string) (*url.URL, error) {
 
 // Fail closed for special-purpose ranges, including translation/tunneling
 // prefixes which can encode a private IPv4 destination. IPv6 is limited to
-// currently allocated global unicast, excluding its special-purpose blocks.
+// global-unicast-shaped space, excluding the documented special/retired blocks.
+// This static policy is not an allocation or routing certificate. Sources and
+// conservative coverage are recorded in docs/web-chat-fetch.md.
 var blockedFetchPrefixes = func() []netip.Prefix {
 	var out []netip.Prefix
-	for _, s := range []string{"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24", "192.88.99.0/24", "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4", "2001::/23", "2001:db8::/32", "2002::/16", "3fff::/20"} {
+	for _, s := range []string{"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24", "192.88.99.0/24", "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4", "2001::/23", "2001:db8::/32", "2002::/16", "3ffe::/16", "3fff::/20"} {
 		out = append(out, netip.MustParsePrefix(s))
 	}
 	return out
@@ -309,7 +312,7 @@ func readFetchResponse(ctx context.Context, resp *http.Response) (FetchResult, e
 	}
 	text := string(raw)
 	if media == "text/html" {
-		text, err = readableHTML(text)
+		text, err = readableHTML(ctx, text)
 		if err != nil {
 			return FetchResult{}, err
 		}
@@ -326,27 +329,69 @@ func readFetchResponse(ctx context.Context, resp *http.Response) (FetchResult, e
 	result.ContentType = media
 	return result, nil
 }
-func readableHTML(raw string) (string, error) {
-	root, err := html.Parse(strings.NewReader(raw))
+func readableHTML(ctx context.Context, raw string) (string, error) {
+	root, err := parseFetchHTML(ctx, raw)
 	if err != nil {
 		return "", err
 	}
+	return extractFetchHTML(ctx, root)
+}
+
+// Keep the third-party parser on this goroutine, with bounded buffered input
+// between context checks. Its own token/tree work remains bounded by the decoded
+// body limit and pinned parser's nesting limit; this is cooperative cancellation.
+const fetchHTMLCheckBytes = 4096
+
+type fetchHTMLReader struct {
+	ctx    context.Context
+	reader *strings.Reader
+}
+
+func (r *fetchHTMLReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if len(p) > fetchHTMLCheckBytes {
+		p = p[:fetchHTMLCheckBytes]
+	}
+	return r.reader.Read(p)
+}
+func parseFetchHTML(ctx context.Context, raw string) (*html.Node, error) {
+	root, err := html.Parse(&fetchHTMLReader{ctx: ctx, reader: strings.NewReader(raw)})
+	if err != nil {
+		return nil, err
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
+	return root, nil
+}
+func extractFetchHTML(ctx context.Context, root *html.Node) (string, error) {
 	var b strings.Builder
-	var visit func(*html.Node)
-	visit = func(n *html.Node) {
+	var visit func(*html.Node) error
+	visit = func(n *html.Node) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if n.Type == html.ElementNode {
 			switch n.Data {
 			case "head", "script", "style", "noscript", "template", "svg", "math", "iframe", "object", "embed", "canvas", "audio", "video", "form", "input", "button", "select", "textarea":
-				return
+				return nil
 			}
 			for _, a := range n.Attr {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
 				if a.Key == "hidden" || (a.Key == "aria-hidden" && strings.EqualFold(a.Val, "true")) {
-					return
+					return nil
 				}
 				if a.Key == "style" {
-					v := strings.ToLower(strings.Join(strings.Fields(a.Val), ""))
-					if strings.Contains(v, "display:none") || strings.Contains(v, "visibility:hidden") {
-						return
+					hidden, err := hiddenFetchStyle(ctx, a.Val)
+					if err != nil {
+						return err
+					}
+					if hidden {
+						return nil
 					}
 				}
 			}
@@ -356,11 +401,21 @@ func readableHTML(raw string) (string, error) {
 			}
 		}
 		if n.Type == html.TextNode {
-			b.WriteString(n.Data)
+			// A single shallow text node can contain the entire decoded body.
+			for text := n.Data; len(text) > 0; {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				end := min(len(text), fetchHTMLCheckBytes)
+				b.WriteString(text[:end])
+				text = text[end:]
+			}
 			b.WriteByte(' ')
 		}
 		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			visit(c)
+			if err := visit(c); err != nil {
+				return err
+			}
 		}
 		if n.Type == html.ElementNode {
 			switch n.Data {
@@ -368,13 +423,70 @@ func readableHTML(raw string) (string, error) {
 				b.WriteByte('\n')
 			}
 		}
+		return nil
 	}
-	visit(root)
-	var lines []string
-	for _, line := range strings.Split(b.String(), "\n") {
-		if s := strings.Join(strings.Fields(line), " "); s != "" {
-			lines = append(lines, s)
+	if err := visit(root); err != nil {
+		return "", err
+	}
+	return normalizeFetchHTML(ctx, b.String())
+}
+
+// Streaming normalization avoids whole-buffer Fields/Split/Join/ToLower work.
+// Keep one extra code point so the caller can mark and UTF-8-trim output exactly.
+func normalizeFetchHTML(ctx context.Context, raw string) (string, error) {
+	var b strings.Builder
+	var pending byte
+	nextCheck := 0
+	for i, r := range raw {
+		if i >= nextCheck {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+			nextCheck = i + fetchHTMLCheckBytes
+		}
+		if unicode.IsSpace(r) {
+			if r == '\n' {
+				pending = '\n'
+			} else if pending == 0 {
+				pending = ' '
+			}
+			continue
+		}
+		if b.Len() > 0 && pending != 0 {
+			b.WriteByte(pending)
+		}
+		pending = 0
+		b.WriteRune(r)
+		if b.Len() > fetchTextLimit {
+			break
 		}
 	}
-	return strings.Join(lines, "\n"), nil
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return b.String(), nil
+}
+
+func hiddenFetchStyle(ctx context.Context, raw string) (bool, error) {
+	recent := ""
+	nextCheck := 0
+	for i, r := range raw {
+		if i >= nextCheck {
+			if err := ctx.Err(); err != nil {
+				return false, err
+			}
+			nextCheck = i + fetchHTMLCheckBytes
+		}
+		if unicode.IsSpace(r) {
+			continue
+		}
+		recent += string(unicode.ToLower(r))
+		if len(recent) > len("visibility:hidden") {
+			recent = recent[len(recent)-len("visibility:hidden"):]
+		}
+		if strings.Contains(recent, "display:none") || strings.Contains(recent, "visibility:hidden") {
+			return true, nil
+		}
+	}
+	return false, ctx.Err()
 }

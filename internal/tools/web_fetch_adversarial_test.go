@@ -98,6 +98,46 @@ func TestFetchOutputTruncationPreservesUTF8(t *testing.T) {
 	require.True(t, utf8.ValidString(r.Text))
 	require.Len(t, r.Text, 15999)
 }
+func TestFetchRejectsRetiredIPv6BeforeDial(t *testing.T) {
+	for _, ip := range []string{"3ffe::1", "3ffe:ffff:ffff:ffff:ffff:ffff:ffff:ffff"} {
+		for _, mode := range []string{"literal", "dns", "mixed_dns", "literal_redirect", "dns_redirect"} {
+			t.Run(ip+"/"+mode, func(t *testing.T) {
+				target := "http://source.example/"
+				if mode == "literal" {
+					target = "http://[" + ip + "]/"
+				}
+				f, w := wireFetcher(t, func(_ context.Context, host string) ([]netip.Addr, error) {
+					if mode == "dns" || mode == "mixed_dns" || host == "retired.example" {
+						ips := []netip.Addr{netip.MustParseAddr(ip)}
+						if mode == "mixed_dns" {
+							ips = append([]netip.Addr{netip.MustParseAddr("2606:4700:4700::1111")}, ips...)
+						}
+						return ips, nil
+					}
+					return publicDNS(context.Background(), host)
+				}, func(n int, r *http.Request, c net.Conn) {
+					if n == 0 && strings.HasSuffix(mode, "redirect") {
+						location := "http://[" + ip + "]/"
+						if mode == "dns_redirect" {
+							location = "http://retired.example/"
+						}
+						response(c, 302, "Location: "+location+"\r\n", "")
+						return
+					}
+					textResponse(n, r, c)
+				})
+				_, err := f.Fetch(context.Background(), FetchArgs{URL: target})
+				require.Error(t, err)
+				if strings.HasSuffix(mode, "redirect") {
+					require.Equal(t, []string{"93.184.216.34:80"}, w.addresses)
+				} else {
+					require.Empty(t, w.addresses)
+				}
+			})
+		}
+	}
+}
+
 func TestFetchPublicIPv6Pinned(t *testing.T) {
 	f, w := wireFetcher(t, func(context.Context, string) ([]netip.Addr, error) {
 		return []netip.Addr{netip.MustParseAddr("2606:4700:4700::1111")}, nil

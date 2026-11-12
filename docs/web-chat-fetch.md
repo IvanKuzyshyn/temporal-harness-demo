@@ -37,8 +37,9 @@ results remain in SQL; workflow history carries references rather than bodies.
 - Every initial destination and redirect is validated. All DNS answers must be
   public. Reject special-use IPv4, private, loopback, link-local, multicast,
   unspecified, IPv4-mapped IPv6, translation/tunneling/documentation/reserved
-  destinations. IPv6 admission is conservative: current global unicast `2000::/3`
-  minus special-purpose ranges. No alternative local-address policy exists.
+  destinations. IPv6 admission is conservative: global-unicast-shaped `2000::/3`
+  minus the documented special-purpose/retired ranges below. This is not proof of
+  current allocation or routability. No alternative local-address policy exists.
 - Dial only the validated literal IPs, never the original hostname a second time.
   Each hop uses a new connection and a new transport, with no pool reuse. HTTP Host
   and HTTPS SNI/certificate verification still use the URL hostname.
@@ -63,7 +64,45 @@ results remain in SQL; workflow history carries references rather than bodies.
   parsing, removes active/nonreadable subtrees and explicit hidden content, and
   emits text only. It does not run JavaScript, load CSS or resolve links. It is a
   conservative text extractor, not a browser layout/CSS visibility engine. The
-  parser's excessive-nesting errors fail closed.
+  parser's excessive-nesting errors fail closed. Buffered parsing uses a
+  context-checking reader supplying at most 4,096 bytes per read. DOM traversal
+  checks context at every node/attribute and copies large text nodes in chunks;
+  style inspection and text normalization check at most every 4,096 input bytes
+  (plus one UTF-8 code point). Normalization retains only enough output to detect
+  the readable-text cap. All phases stay on the calling goroutine; cancellation
+  never returns around a detached parser. Cancellation is cooperative, not hard
+  preemption inside the pinned parser's individual token operations. Those remain
+  bounded by the 2 MiB decoded input and the parser's nesting limit.
+
+### Static address policy sources and limits
+
+The policy is based on the categories in the IANA
+[IPv4 special-purpose registry](https://www.iana.org/assignments/iana-ipv4-special-registry/),
+[IPv6 special-purpose registry](https://www.iana.org/assignments/iana-ipv6-special-registry/)
+and [IPv6 address-space registry](https://www.iana.org/assignments/ipv6-address-space/),
+with explicit retired-range treatment from
+[RFC 3701](https://www.rfc-editor.org/rfc/rfc3701) (`3ffe::/16`, former 6bone).
+The documentation prefixes include `2001:db8::/32` (RFC 3849) and `3fff::/20`
+(RFC 9637); tunneling `2002::/16` (6to4) is rejected as a whole.
+
+IPv4 exclusions cover this-network, private/shared, loopback, link-local, protocol
+assignments `192.0.0.0/24`, documentation, retired relay `192.88.99.0/24`, benchmark,
+multicast and reserved space. IPv6 outside `2000::/3` is rejected, which includes
+unspecified/loopback/compatible/mapped, translation (`64:ff9b::/96` and
+`64:ff9b:1::/48`), discard/dummy, ULA/site-local/link-local, multicast and SRv6
+`5f00::/16`. Within `2000::/3`, the whole `2001::/23` protocol-assignment block,
+6to4, documentation and retired 6bone are excluded. This deliberately rejects
+some globally reachable special-purpose exceptions too. Globally reachable
+public service ranges such as AS112 are not automatically forbidden merely
+because they have a special-purpose registry entry.
+
+This is a maintained static exclusion policy, not an online IANA/RIR allocation
+lookup, BGP validation or a guarantee that an allowed address is assigned today.
+`IsGlobalUnicast` is only an additional shape check, never an allocation
+certificate. Registry/RFC references document the policy basis; no live registry
+refresh is implied by the tests. New reserved/special-use assignments require
+policy review and regression tests. Every answer in a mixed DNS set still has to
+pass; neither mapped nor retired addresses are unmapped or retried as public.
 
 ## APIs and test seams
 
