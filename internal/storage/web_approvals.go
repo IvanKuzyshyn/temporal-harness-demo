@@ -168,7 +168,7 @@ func (r *Repository) BeginWebTool(ctx context.Context, s chat.ApprovalScope, id 
 	return
 }
 func (r *Repository) SaveWebToolResult(ctx context.Context, s chat.ApprovalScope, id string, result chat.WebToolResult) error {
-	if len(result.Text) > 16000 || len(result.Error) > 128 {
+	if len(result.Text) > 16000 || len(result.Error) > 128 || len(result.RequestedURL) > 2048 || len(result.FinalURL) > 2048 || len(result.ContentType) > 128 {
 		return chat.ErrInvalid
 	}
 	raw, _ := json.Marshal(result)

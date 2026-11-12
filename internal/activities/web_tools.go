@@ -41,7 +41,7 @@ func (a *ChatActivities) webRepository() (WebRepository, error) {
 func (a *ChatActivities) ChatStep(ctx context.Context, ref chat.TurnRef) (chat.ModelStepResult, error) {
 	local := *a
 	if local.WebTools == nil {
-		local.WebTools = tools.NewWebRegistry(nil)
+		local.WebTools = productionWebTools()
 	}
 	attempt := 1
 	if activity.IsActivity(ctx) {
@@ -179,6 +179,7 @@ func (a *ChatActivities) webRequest(ctx context.Context, ref chat.TurnRef, turn 
 			text := result.Text
 			if len(text) > remaining {
 				text = bounded(text, remaining)
+				result.Truncated = true
 			}
 			remaining -= len(text)
 			if remaining < 0 {
@@ -186,6 +187,15 @@ func (a *ChatActivities) webRequest(ctx context.Context, ref chat.TurnRef, turn 
 			}
 			if result.Error != "" {
 				text = "Tool outcome: " + result.Error
+			} else if result.RequestedURL != "" {
+				// Keep source attribution and explicit excerpt truncation even
+				// when this step's combined readable-text allowance is exhausted.
+				result.Text = text
+				encoded, e := json.Marshal(result)
+				if e != nil {
+					return req, e
+				}
+				text = string(encoded)
 			}
 			req.Messages = append(req.Messages, llm.Message{Role: "tool", ToolCallID: c.ID, ToolName: c.Name, Content: text})
 		}
@@ -301,7 +311,7 @@ func (a *ChatActivities) runWebTool(parent context.Context, r WebRepository, s c
 	}
 	registry := a.WebTools
 	if registry == nil {
-		registry = tools.NewWebRegistry(nil)
+		registry = productionWebTools()
 	}
 	result, err := registry.Execute(ctx, s, args)
 	if ctx.Err() != nil {

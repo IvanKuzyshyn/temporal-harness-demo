@@ -14,9 +14,9 @@ The registered set is exactly `web_fetch@1,file_upload@1`, identified by
 name prefix or a dynamically growing registry. A tool/version addition must
 change the set identity; old grants cannot authorize it. Unknown names, extra or
 duplicate argument keys, unsupported schemes and malformed attachment identities
-fail closed. This task does not implement the Task7 public-address/DNS/redirect
-fetch policy, Task8 extraction, or Task9 document child. Those belong inside their
-adapters; canonical URL parsing here is not an SSRF defense or a fetch.
+fail closed. The [Task7 fetch adapter](web-chat-fetch.md) now implements the
+public-address/DNS/redirect policy; canonical URL parsing alone is not an SSRF
+defense. Task8 extraction and Task9 document children remain separate adapters.
 
 `chat.ApprovalScope` binds conversation, turn, stable tool-call ID, tool name and
 version, toolset version, canonical action hash, immutable content digest and
@@ -124,9 +124,10 @@ not a Task10 summary implementation.
   check the approved original; Task9 must put children under the same joined
   turn-local cancellation barrier. Passing a scope is not permission for arbitrary
   other URLs/files/tools. A future child protocol cannot bypass parent approval.
-- Inject adapters via `activities.ChatActivities.WebTools`. Production currently
-  injects none: approved calls return the explicit `adapter_unavailable` outcome,
-  never fake fetched/extracted data. Tests inject only fake transport.
+- Inject adapters via `activities.ChatActivities.WebTools`. Production nil
+  registries now install `web_fetch` through `NewWebFetchAdapter(tools.NewFetcher())`.
+  `file_upload` still returns explicit `adapter_unavailable` until later tasks.
+  Tests may inject network dependencies without weakening the fetch policy.
 - `activities.WebRepository` lists the narrow persistence seam: preparation,
   approval/authorization, invocation registration/publication/acknowledgment,
   recorded results and checksum-only metadata lookup. `storage.Repository`
