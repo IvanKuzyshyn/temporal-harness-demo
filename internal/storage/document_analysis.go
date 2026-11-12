@@ -24,11 +24,14 @@ func (r *Repository) ReadDocumentPart(ctx context.Context, in chat.DocumentAnaly
 	err := r.pool.QueryRow(ctx, `SELECT result FROM document_analysis_parts WHERE tool_call_id=$1 AND part_index=$2 AND input=$3::jsonb`, in.Scope.ToolCallID, index, raw).Scan(&result)
 	if err == nil {
 		err = json.Unmarshal(result, &out)
+		if err == nil && index >= 0 && !out.ValidSummary() {
+			err = chat.ErrInvalid
+		}
 	}
 	return out, dbError(err)
 }
 func (r *Repository) SaveDocumentPart(ctx context.Context, in chat.DocumentAnalysisInput, attachment chat.AttachmentID, index int, owner string, out chat.DocumentPart) error {
-	if !in.Valid() || index < -1 || index >= in.Budget.MaxChunks || !chat.ValidID(owner) || !utf8.ValidString(out.Text) || len(out.Text) > 1000 || len(out.Reason) > 128 || out.Pages < 0 || out.Manifest.Chunks < 0 || out.Manifest.Chunks > 32 {
+	if !in.Valid() || index < -1 || index >= in.Budget.MaxChunks || (index >= 0 && !out.ValidSummary()) || !chat.ValidID(owner) || !utf8.ValidString(out.Text) || len(out.Text) > 1000 || len(out.Reason) > 128 || out.Pages < 0 || out.Manifest.Chunks < 0 || out.Manifest.Chunks > 32 {
 		return chat.ErrInvalid
 	}
 	raw, _ := json.Marshal(in)

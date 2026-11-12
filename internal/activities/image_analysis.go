@@ -3,6 +3,7 @@ package activities
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -65,7 +66,7 @@ func (a *ChatActivities) AnalyzeAttachmentImage(ctx context.Context, in chat.Doc
 		if e = ctx.Err(); e != nil {
 			return e
 		}
-		if res.Message.Content == "" || !utf8.ValidString(res.Message.Content) || len(res.Message.Content) > 16000 || len(res.Message.ToolCalls) > 0 {
+		if strings.TrimSpace(res.Message.Content) == "" || !utf8.ValidString(res.Message.Content) || len(res.Message.Content) > 16000 || len(res.Message.ToolCalls) > 0 {
 			return chat.ErrInvalid
 		}
 		out = part.Manifest

@@ -1,5 +1,10 @@
 package chat
 
+import (
+	"strings"
+	"unicode/utf8"
+)
+
 // Analysis references contain no original or extracted text. Instruction is
 // resolved from the immutable approved tool call inside each activity.
 type DocumentAnalysisInput struct {
@@ -44,4 +49,10 @@ type DocumentPart struct {
 	Coverage DocumentCoverage
 	Pages    int
 	Reason   string
+}
+
+// ValidSummary applies to chunk parts only, never the index -1 manifest.
+// Source coverage is not usable analysis when the persisted text is blank.
+func (p DocumentPart) ValidSummary() bool {
+	return utf8.ValidString(p.Text) && len(p.Text) <= 1000 && strings.TrimSpace(p.Text) != ""
 }

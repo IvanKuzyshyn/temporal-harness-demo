@@ -180,7 +180,10 @@ func (a *ChatActivities) AnalyzeDocumentChunk(ctx context.Context, in chat.Docum
 	}
 	return a.documentBody(ctx, in.Analysis, func(ctx context.Context, _ WebRepository, r documentRepository, call tools.AttachmentAnalysisArgs, id string) error {
 		scope := in.Analysis
-		if _, e := r.ReadDocumentPart(ctx, scope, call.AttachmentID, in.Index); e == nil {
+		if part, e := r.ReadDocumentPart(ctx, scope, call.AttachmentID, in.Index); e == nil {
+			if !part.ValidSummary() {
+				return chat.ErrInvalid
+			}
 			return nil
 		} else if !errors.Is(e, storage.ErrNotFound) {
 			return e
@@ -229,7 +232,13 @@ func (a *ChatActivities) AnalyzeDocumentChunk(ctx context.Context, in chat.Docum
 			start += len(c)
 		}
 		text := bounded(res.Message.Content, 1000)
-		return r.SaveDocumentPart(ctx, scope, call.AttachmentID, in.Index, id, chat.DocumentPart{Text: text, Coverage: chat.DocumentCoverage{Index: in.Index, StartByte: start, EndByte: start + len(chunks[in.Index]), SummaryTruncated: len(text) < len(res.Message.Content)}})
+		part := chat.DocumentPart{Text: text, Coverage: chat.DocumentCoverage{Index: in.Index, StartByte: start, EndByte: start + len(chunks[in.Index]), SummaryTruncated: len(text) < len(res.Message.Content) || res.Tokens >= req.MaxOutputTokens}}
+		// Thinking may exhaust output tokens before any visible answer. Even a
+		// nonblank response can become unusable after the bounded byte clipping.
+		if !part.ValidSummary() {
+			return chat.ErrInvalid
+		}
+		return r.SaveDocumentPart(ctx, scope, call.AttachmentID, in.Index, id, part)
 	})
 }
 func (a *ChatActivities) FinishDocumentAnalysis(ctx context.Context, in chat.DocumentAnalysisInput) (out chat.DocumentAnalysisResult, err error) {
@@ -245,6 +254,9 @@ func (a *ChatActivities) FinishDocumentAnalysis(ctx context.Context, in chat.Doc
 			chunk, e := r.ReadDocumentPart(ctx, in, call.AttachmentID, i)
 			if e != nil {
 				return e
+			}
+			if !chunk.ValidSummary() {
+				return chat.ErrInvalid
 			}
 			summaries = append(summaries, fmt.Sprintf("Chunk %d: %s", i+1, chunk.Text))
 			result.Coverage = append(result.Coverage, chunk.Coverage)
