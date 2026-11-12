@@ -92,11 +92,26 @@ approval-resolution write remains attached to its **same** action until resolved
 never reused as consent for the next call. Stale decisions after replacement,
 expiry or revision change reject durably, independent of display events.
 
+Pending workflow state can precede the approval creation commit. Cancellation
+atomically establishes and resolves that same request, even after creation retry
+exhaustion with no commit or a lost acknowledgment. Both creation and resolution
+verify the full stored scope, deadline, call/hash and policy revision. Late
+same-scope creation cannot reopen a resolved request or change its decision;
+conflicting creation/resolution fails, rather than being silently ignored. This
+approval tombstone is not invocation cleanup evidence: accepted-control settlement
+still passes through the existing sealed-zero barrier.
+
 A completed recorded tool result is loaded as subsequent model context without
 reexecution/reapproval. Model context preserves assistant/tool grouping; result
-text is bounded to 4,000 bytes combined and all messages/tool schemas count toward
-the 12,000 estimated-input-token limit. Oversized mandatory context fails explicitly.
-Full results remain in SQL. This is not a Task10 summary implementation.
+text is bounded to 4,000 bytes combined. The web builder reserves the mandatory
+prompt, replacement provenance, current-turn assistant/tool groups and schemas
+before selecting up to six whole completed exchanges (newest first, emitted in
+chronological order). One final-representation estimate counts JSON-encoded UTF-8
+bytes plus 128 per message and the encoded tool schemas against the unchanged
+12,000 estimated-input-token limit. Optional history is omitted at exchange
+boundaries; oversized mandatory context fails explicitly before inference.
+Full results remain in SQL. Limited-history disclosure remains present; this is
+not a Task10 summary implementation.
 
 ## Task7/8/9 integration seams
 

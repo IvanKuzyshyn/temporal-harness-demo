@@ -42,26 +42,35 @@ func (r *Repository) RecordWebApproval(ctx context.Context, a chat.WebApprovalRe
 	if !chat.ValidID(p.ID) || !validWebScope(s) || p.Deadline.IsZero() {
 		return chat.ErrInvalid
 	}
+	if a.Outcome != "" && a.Outcome != "authorized" && a.Outcome != "denied" && a.Outcome != "expired" && a.Outcome != "cancelled" && a.Outcome != "revoked" {
+		return chat.ErrInvalid
+	}
 	raw, _ := json.Marshal(s)
-	hash, _ := digest(p)
+	creation := p
+	creation.Decision = "" // Decision audit belongs exclusively to the receipt writer.
+	hash, _ := digest(creation)
 	return r.withConversation(ctx, s.ConversationID, func(tx pgx.Tx) error {
-		if a.Outcome == "" {
+		// Pending workflow state precedes the creation commit. Cancellation may
+		// therefore be the first successful write, or retry a lost acknowledgment.
+		// Establish and resolve the SAME request atomically; never ignore conflicts.
+		if a.Outcome == "" || a.Outcome == "cancelled" {
 			_, err := tx.Exec(ctx, `INSERT INTO approvals(id,conversation_id,tool_call_id,action_hash,deadline,policy_revision,payload_digest,scope) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO NOTHING`, p.ID, s.ConversationID, s.ToolCallID, s.ActionHash, p.Deadline, s.PolicyRevision, hash, raw)
 			if err != nil {
 				return err
 			}
-			var same bool
-			if err = tx.QueryRow(ctx, `SELECT scope=$3::jsonb AND deadline=$4 FROM approvals WHERE conversation_id=$1 AND id=$2`, s.ConversationID, p.ID, raw, p.Deadline).Scan(&same); err != nil {
-				return err
-			}
-			if !same {
-				return ErrConflict
-			}
-			_, err = tx.Exec(ctx, `UPDATE turns SET status='awaiting_approval',updated_at=clock_timestamp() WHERE conversation_id=$1 AND id=$2 AND status='running'`, s.ConversationID, s.TurnID)
+		}
+		var same bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM approvals WHERE conversation_id=$1 AND id=$2 AND scope=$3::jsonb AND deadline=$4 AND tool_call_id=$5 AND action_hash=$6 AND policy_revision=$7)`, s.ConversationID, p.ID, raw, p.Deadline, s.ToolCallID, s.ActionHash, s.PolicyRevision).Scan(&same); err != nil {
 			return err
 		}
-		if a.Outcome != "authorized" && a.Outcome != "denied" && a.Outcome != "expired" && a.Outcome != "cancelled" && a.Outcome != "revoked" {
-			return chat.ErrInvalid
+		if !same {
+			return ErrConflict
+		}
+		if a.Outcome == "" {
+			// A late creation is a no-op for a resolved/decided request, including
+			// a cancellation tombstone. It must not reopen the turn projection.
+			_, err := tx.Exec(ctx, `UPDATE turns SET status='awaiting_approval',updated_at=clock_timestamp() WHERE conversation_id=$1 AND id=$2 AND status='running' AND EXISTS(SELECT 1 FROM approvals WHERE id=$3 AND outcome IS NULL AND decision IS NULL)`, s.ConversationID, s.TurnID, p.ID)
+			return err
 		}
 		tag, err := tx.Exec(ctx, `UPDATE approvals SET outcome=$3 WHERE conversation_id=$1 AND id=$2 AND scope=$4::jsonb AND (outcome IS NULL OR outcome=$3 OR ($3='cancelled' AND EXISTS(SELECT 1 FROM turns WHERE id=$5 AND conversation_id=$1 AND status IN ('cancelling','cancelled'))))`, s.ConversationID, p.ID, a.Outcome, raw, s.TurnID)
 		if err == nil && tag.RowsAffected() != 1 {
