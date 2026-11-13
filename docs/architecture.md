@@ -1,106 +1,36 @@
-# Architecture
+# Architecture — durable local web chat
 
-[Quickstart](../README.md) · [Operations](operations.md) · [Testing](testing.md)
+Browser → Next.js same-origin proxy → private Go API → Temporal → Go activities → Postgres/Ollama/managed attachments.
 
-## Durable control, activity-side I/O
+## Authority and runtime
 
-```mermaid
-flowchart LR
-    UI[CLI or Bubble Tea] -->|Update-with-Start: message| S[SessionWorkflow]
-    UI -->|Updates: stop / continue / decide| S
-    S -->|state Query| UI
-    S -->|agents queue| IO[Context / preflight / tools / persistence]
-    S -->|llm queue| LLM[LLMStream activity]
-    LLM --> O[Local Ollama or mock]
-    S -->|child on subagents queue| C[ExplorerWorkflow]
-    C --> LLM
-    C --> IO
-    IO --> F[Local artifacts and event stream]
-    LLM --> F
-    F -.->|best-effort display| UI
-    T[(Temporal database)] --- S
-    T --- C
-```
+Next.js presents history, bounded live drafts, tool approvals, attachments and queued/replacement controls. It never writes application SQL or runs a second agent loop. The loopback API rejects unexpected Host/Origin/fetch context and requires a server-only proxy secret. Every command uses a retained request ID and payload digest; SQL transactionally stores durable intent before asynchronous Temporal dispatch. Acceptance is not completion.
 
-- [Client](../internal/client/client.go): Update-with-Start returns a completed **enqueue receipt**, not a model response. Open sessions are reused; closed IDs are rejected. Queries and Updates omit the run ID so they follow Continue-As-New.
-- [Session workflow](../internal/workflows/session.go): stays open and queryable after logical-run settlement. `idle` can describe either the last success or a last failure; inspect `LastRunFailure`, not status alone.
-- [Worker](../internal/worker/worker.go): polls fixed queues `agents`, `llm`, `subagents`. The LLM worker permits one concurrent activity per worker. Multiple harness processes on the same server/namespace share queues, not private sessions; isolate experiments with a separate server.
-- [Activities](../internal/activities) own filesystem, processes, model calls, and display emission. Workflow code uses deterministic Temporal primitives, not filesystem/network I/O or native goroutines.
-- [Contracts](../internal/workflows/contracts.go) define the bounded state snapshot and activity inputs/results. Full transcript text is artifact-backed rather than copied wholesale into workflow history.
+`WebChatSessionWorkflow` owns execution, policy, cancellation/join and bounded Continue-As-New state. Durable command receipts survive retries/rollover. No filesystem/network/database I/O occurs in workflow code. Activities own I/O and idempotent canonical result writes. Completed logical results are not duplicated by overlapping attempts; incomplete draft events are not durable answers.
 
-## The four patterns
+`cmd/web-worker` registers three queues: `web-chat-agents` (session/SQL/tool work), `web-chat-llm` (model steps), `web-chat-documents` (document child workflow/chunks/image work). Actual pollers for workflow and activity queues are checked by API readiness. Default one model generation per runner, four document activities, twelve agent steps, fifteen-minute document child limit. Poller readiness is an observation (recent pollers can be stale), not a lease.
 
-### 1. Long-running activity
+## Four retained Temporal patterns
 
-[Workflow loop](../internal/workflows/loop.go) calls [LLMStream](../internal/activities/model.go) on `llm`: 10-minute start-to-close, 30-minute schedule-to-close, 15-second heartbeat timeout, at most two attempts. [Independent heartbeats](../internal/activities/partial.go) continue even while the provider is silent; they carry token progress and a partial-artifact reference. Missing models and invalid requests are nonretryable. A failed attempt restarts the turn, not the provider's hidden partial state. A persisted completed response is reused on retry.
+- Long-running streaming model activities heartbeat and honor cancellation; retries have distinct attempt identity and durable cleanup records.
+- Approved safe fetches and bounded document chunks run in parallel; model calls remain serialized per runner.
+- `DocumentAnalysisWorkflow` is a real child with immutable parent-authorized attachment/instruction/budget scope. No arbitrary child tools or approval bypass.
+- Recorded, action-bound approval: once, conversation/version-scoped all, deny/expiry/revoke. Upload is not consent. Replacement joins owned work before it starts, ahead of queued follow-ups.
 
-[RunCommand](../internal/activities/command.go) demonstrates a second heartbeating activity: streamed stdout/stderr, a bounded tail, silence/hang timeout, and process-group cancellation. Commands are unsafe and use **one attempt**, not the LLM retry policy.
+See [execution](web-chat-temporal.md), [analysis](web-chat-analysis.md), [approvals](web-chat-approvals.md), [context](web-chat-context.md) and [streaming](web-chat-streaming.md).
 
-### 2. Parallel execution
+## Storage and containment
 
-[Tool executor](../internal/workflows/toolexec.go) preflights and authorizes in model order before execution. All-parallel-safe batches use a workflow semaphore of four; any sequential/unknown tool makes the whole batch sequential. Results remain in model order, while display events can arrive in completion order. All futures are joined rather than failing fast. New logical runs gather one bounded, fresh project-evidence snapshot in an activity. A per-run version gate retains the original concurrent git/tree/README/TODO schedule for old histories. [Project grounding](project-grounding.md) describes discovery bounds, retry keys, quoted-data request preparation, and model reliability limits.
+Postgres has separate application/Temporal/visibility databases. Original/derived attachment bytes reside in one persistent absolute host directory shared by API and workers; SQL holds ownership/metadata/extracted text. Hard-link publication and atomic metadata are required. Recovery does not delete unknown metadata or infer ownership from a loose prefix. The pinned stdin-only parser runs without network/mounts, read-only/nonroot with CPU/memory/PID limits; uncertain cleanup fails closed.
 
-### 3. Child workflow
+Only `web_fetch` and `file_upload` are registered. Fetch rejects private/reserved destinations and validates DNS/redirects; external content and filenames are untrusted data. There are no coding tools, shell execution, project discovery, fixture forcing or repair loops. Context admission preserves provenance and enforces bounds; exact models never silently fall back. [Security and parser details](web-chat-attachments.md).
 
-[ExplorerWorkflow and delegation](../internal/workflows/explorer.go) use deterministic `<session>/explore-N` child IDs, the `subagents` queue, a separate transcript, read-only tools, and bounded step/token budgets. The parent receives a bounded summary plus `SummaryRef`. Parent and child retain distinct workflow/run identities while writing into the parent's display stream. Cancellation joins child cleanup; parent-close policy requests child cancellation. The real explorer still calls the selected provider; it is not replaced by the parent's fixture action plan.
+## Local lifecycle
 
-### 4. Approval as recorded control
+Public `mise run setup|up|down` uses `scripts/dev/` and a private runtime home. Setup builds a new immutable source/output snapshot, checks exact helper/model identity and leaves no newly owned service. Up migrates and verifies the background stack and current served CSS. Down closes API streams, Next and workers then verified Docker resources, retaining volumes/files/models and never cancelling workflows. OS locks, pre-acquisition journals and kernel process identities protect concurrency, rollback, stale/reused PIDs and controller death. [Ownership/backup contract](web-chat-operations.md).
 
-[Approval workflow](../internal/workflows/approval.go) combines pure [tool policy](../internal/workflows/toolexec.go), activity-side validation/hash/preview, a durable pending request, a `decide` Update validator, and a workflow timer. Decisions bind the current request ID and canonical action hash; stale, mismatched, expired, or conflicting decisions are rejected. Denial needs a reason. [TUI](../internal/tui/modal.go) and [CLI](../cmd/harness/approval.go) re-query before submitting; notification/display failure is not an approval bypass. Timeout, denial, and Stop do not authorize execution.
+Local client closure, OS process exit, remote TCP ConnEnd and provider/GPU reclamation are different evidence. The intermittent ConnEnd observer test remains uncertain; lifecycle does not claim shared GPU unloading. Known larger-image Qwen and narrow parent semantic failures remain explicit deferred limitations, not safety waivers.
 
-```mermaid
-sequenceDiagram
-    participant W as SessionWorkflow
-    participant A as Preflight activity
-    participant U as User / CLI / TUI
-    participant X as Tool activity
-    W->>A: validate action, hash, bounded preview
-    A-->>W: policy and preview
-    W->>W: store PendingApproval and deadline
-    U->>W: state Query
-    W-->>U: request ID, action hash, action
-    U->>W: decide Update
-    W->>W: validate identity, deadline, decision
-    alt approved before timeout
-        W->>X: execute with execution-time guards
-        X-->>W: actual result
-    else denied / timed out / stopped
-        W->>W: no authorized execution
-    end
-```
+## Retirement boundary
 
-## Inbox, stop, and rollover
-
-[Inbox implementation](../internal/workflows/inbox.go):
-
-- A maximum of 64 queued messages and 1 MiB of serialized inbox JSON; individual text is limited to 64 KiB. External callers cannot supply internal provenance fields.
-- `followUp` waits for a new logical run. A `steer` can be consumed at a safe boundary in the current run; a late steer becomes next-run work. Submit receipts are `started`, `queued`, or `steered`.
-- A FIFO window of 64 request receipts records payload digests. Same ID/same payload returns the receipt; changed payload is rejected within that window. This is **bounded idempotency**, not eternal exactly-once delivery.
-- Stop cancels the current logical run, joins work, records failure, and pauses retained input; idle Stop is a no-op. Continue resumes unanswered context or retained FIFO work and rejects busy/nothing-to-answer cases. New genuine input also resumes retained work, oldest first.
-- Continue-As-New is checked between runs, after 100 turns per execution by default or an SDK/server suggestion. It waits for Update handlers and excludes live children. Carry includes transcript reference, queued input, receipts, counters, failure/paused state, and verification provenance; it does not nest old carry objects.
-
-## Post-write verification and guided demo
-
-[afterRun](../internal/workflows/afterrun.go) runs before logical settlement, only after an otherwise successful run that wrote a file or inherited a pending verification obligation. It submits `go test ./...` through the **normal preflight and explicit approval gate**. The synthetic assistant intent and tool outcome are persisted together after joining execution.
-
-- A confirmed zero exit, no execution/interruption error, and a log reference clear verification.
-- A completed positive test exit may enqueue an internal fix follow-up: at most **two** per originating input. That follow-up retains its origin, consumed budget, and sticky verification obligation even if intervening genuine user work changes current state or Continue-As-New occurs.
-- Verification remains required when a repair makes no further write. Continue does not replenish an exhausted origin budget. Genuine new user work starts a new origin; old queued repairs keep their own provenance.
-- Denial, timeout, Stop, infrastructure failure, or unknown exit is not an automatic repair trigger. Failed model runs skip afterRun. Exhausted repair budget reports `restart_limit`; retained context remains available for explicit user action.
-- [Joined-result persistence](../internal/workflows/persistence.go) exhausting retries fails the workflow closed rather than claiming settled success over an unresolved transcript.
-
-[Scenario routing](../internal/workflows/loop.go) recognizes explicit `/demo` for that run or the initial configured demo, not ordinary natural-language fixture prompts. Old version branches alone retain legacy exact-prompt aliases. [Forced demo plan](../internal/activities/demo_plan.go) runs **after a successful provider call**, replaces all parent provider-selected calls, and labels its commentary. It reads the fixture in parallel, delegates review, proposes an approved write, requests an approved test, and summarizes actual persisted results. It recognizes only the exact bundled broken/fixed fixture and a legacy fixed form; unrelated content is refused. It is an instructional script, not autonomous-tool-selection evidence. The scripted test and afterRun verification have distinct approvals.
-
-## Truth and storage boundaries
-
-- Authoritative control/completion: Temporal history and `state` Query, including bounded `Answer`, failure, inbox, and current approval. Final answers are capped at 8 KiB in workflow state.
-- Authoritative conversation: activity-persisted transcript (bounded to 32 MiB) with stable entry identities and joined tool results. Artifacts must remain available at the stored paths.
-- Observational only: JSONL events, streamed provider commentary, partial text, and command log bytes. A log is useful evidence, but a recovered tail alone cannot certify process completion or success. These artifacts do not replace Query or recorded tool results.
-- [Event store](../internal/events/store.go) uses per-stream advisory locking/sequence allocation; [display emission](../internal/activities/basic.go) is best effort. Missing final events are not completion failures. Partial/log filesystem failures can still fail the owning activity: “display-only” does not mean every storage failure is ignored.
-- [Native journal](terminal-journal.md) measures chrome before allocating a scrollable viewport above the fixed composer. Explicit follow/browse state freezes a bounded reading window; details and scoped command-log byte pages remain read-only commands. Observation-only workflow phase/mode/timestamps use `workflow.Now` without scheduling changes; event timestamps, not Query success, supply observed heartbeat freshness.
-- [TUI reconciliation](../internal/tui/model.go) tails before querying, buffers, then applies only contiguous events newer than `LastSeq`; gaps, overflow, and truncation trigger re-query. Display is bounded and sanitized; the TUI does not load the full transcript artifact. See the [event protocol](events.md).
-
-- [Committed replay coverage](../internal/workflows/replay_test.go) checks genuine mock-model histories for two Continue-As-New links, retained receipts/counters, completed explorer linkage with nil child Carry, three approvals, and successful scripted/afterRun command results. Replay uses original execution IDs and runs no activities. The four-event successor is only an open-history prefix; it proves no later execution. See [replay commands and limits](testing.md#recorded-replay-integrated18).
-- Live mock and Gemma CLI demos passed the four patterns with the harness-enforced parent plan; the keyboard TUI smoke used mock. Neither establishes native model action selection. The reviewed [isolated durability suite](../internal/integration/README.md) exercises approval restart, unsafe worker loss, and Stop/Continue with mock. Its observed orphan is explicitly cleaned by the test, not by recovery.
-
-Durability depends on both Temporal's database and local artifacts, not replay alone. There is no multi-host shared-storage guarantee or compatibility promise for intermediate draft workflow histories. Fresh IDs are recommended after workflow code changes; captured replay fixtures only test current code against those particular histories.
+Terminal UI, CLI/automatic desktop ownership, sample project, local tools, filesystem transcript/JSONL transport and legacy workflows are removed. Shared heartbeat/join, startup-RPC scope and UTF-8 bounds remain in web runtime and tests. New web integration tests exercise the four patterns and restart/approval/child/cancellation boundaries. Old captured histories in `docs/historical/terminal-replay/` are historical only—not replay compatibility evidence for `WebChatSessionWorkflow`. No legacy workflow/data migration is promised; user artifacts are untouched.

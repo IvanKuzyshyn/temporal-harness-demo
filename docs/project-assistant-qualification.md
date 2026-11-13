@@ -1,4 +1,6 @@
-# Project-assistant qualification
+# Historical: project-assistant qualification
+
+> The coding/sample-project product is retired. These results do not qualify the new web workflows/models. See [web qualification](web-chat-qualification.md).
 
 The follow-up stack adds launch-directory workspaces, authoritative original session configuration, fresh bounded file evidence, durable paged history, and the native terminal journal. These notes describe controlled verification, not guarantees about every model response or terminal.
 

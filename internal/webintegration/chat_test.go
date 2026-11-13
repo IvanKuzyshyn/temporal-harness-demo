@@ -277,9 +277,7 @@ func TestDatabaseOutageDuringFinalPersistence(t *testing.T) {
 	case <-time.After(20 * time.Second):
 		t.Fatal("settlement not reached")
 	}
-	events, err := f.repo.ListEvents(f.ctx, c.ID, 0, 20)
-	require.NoError(t, err)
-	require.Empty(t, events)
+	assertTextOutcome(t, f, c.ID, map[chat.TurnID]textOutcome{cmd.TurnID: {maxAttempt: 1}})
 	out, err := exec.Command("docker", "pause", container).CombinedOutput()
 	require.NoError(t, err, string(out))
 	paused := true
@@ -300,10 +298,7 @@ func TestDatabaseOutageDuringFinalPersistence(t *testing.T) {
 	require.NoError(t, err, string(out))
 	paused = false
 	f.completed(t, cmd)
-	events, err = f.repo.ListEvents(f.ctx, c.ID, 0, 20)
-	require.NoError(t, err)
-	require.Len(t, events, 1)
-	require.Equal(t, "turn.completed", events[0].Type)
+	assertTextOutcome(t, f, c.ID, map[chat.TurnID]textOutcome{cmd.TurnID: {completed: true, maxAttempt: 1}})
 	t.Log("actual test Postgres paused through settlement timeout; Temporal completion stayed zero until DB recovered")
 }
 func TestRealAPITextChat(t *testing.T) {

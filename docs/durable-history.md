@@ -1,4 +1,6 @@
-# Durable paged terminal history
+# Historical: durable paged terminal history
+
+> Retired filesystem/terminal protocol, not the web storage contract. No legacy migration or workflow compatibility is promised. See [web storage](web-chat-storage.md).
 
 The local TUI uses the persisted transcript for completed conversation, not the
 optional display JSONL or a workflow Query answer. Query still owns session

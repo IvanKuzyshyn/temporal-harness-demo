@@ -30,6 +30,13 @@ cleanup() {
     wait "$temporal_pid" || true
     if [[ "$status" != 0 ]]; then tail -60 "$work/temporal.log"; fi
   fi
+  # Explicit retention mode for acceptance sessions that must not delete data.
+  # Stops only this test-owned stack; keeps SQL volume, receipts and server DB.
+  if [[ "${WEBCHAT_TEST_RETAIN:-0}" == 1 ]]; then
+    docker compose -p "$project" -f "$work/compose.yaml" stop --timeout 10 || status=1
+    echo "Retained test artifacts: work=$work project=$project volume=$volume"
+    exit "$status"
+  fi
   docker compose -p "$project" -f "$work/compose.yaml" down --timeout 10 || status=1
   if docker volume inspect "$volume" >/dev/null 2>&1; then
     owner=$(docker volume inspect --format '{{index .Labels "com.docker.compose.project"}}' "$volume")

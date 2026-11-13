@@ -10,5 +10,8 @@ web/*.tsbuildinfo
 web/playwright-report/
 web/test-results/
 .runtime/
+.webchat*/
+web/.webchat-builds/
+__pycache__/
 .worktrees/
 .superpowers/

@@ -1,4 +1,6 @@
-# Pinned API verification
+# Historical: pinned terminal API verification
+
+> Superseded by the web runtime. Historical pins/links below are not current operations or compatibility guarantees. See [architecture](architecture.md) and [testing](testing.md).
 
 Pins come from [go.mod](../go.mod), [go.sum](../go.sum), and [mise.toml](../mise.toml), not “latest” documentation. Public signatures below were rechecked in the downloaded pinned module sources during the documentation pass on integrated17 (`c75db0e`). A compiled adapter/test is stronger evidence than merely finding an API name.
 

@@ -1,4 +1,6 @@
-# Native terminal journal
+# Historical: native terminal journal
+
+> Terminal UI and filesystem transport have been retired. The following qualification is archival, not a web compatibility promise. Existing user artifacts are preserved; see [web operations](web-chat-operations.md).
 
 This is the existing Go/Bubble Tea application, not the browser design reference.
 The pinned Charm dependencies, Backend operations, and exact approval binding are

@@ -1,4 +1,6 @@
-# Conversation-first terminal
+# Historical: conversation-first terminal
+
+> Retired product. Commands, source links and screenshots below are archival only; do not execute them as current setup. See [web operations](web-chat-operations.md).
 
 This follow-up corrects the readability problems in draft22 rather than replacing the durable-session implementation.
 

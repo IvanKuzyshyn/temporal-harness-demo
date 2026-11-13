@@ -1,6 +1,7 @@
-# Task 1 infrastructure only. Host services/lifecycle are implemented later.
+# Internal Docker dependencies. Public lifecycle: mise run setup|up|down.
+# Host processes and exact ownership are managed by scripts/dev/.
 name: webchat-local
-# Host API/worker use the SAME absolute directory (Task13 exports this mapping).
+# Host API/worker use the SAME absolute directory (lifecycle exports this mapping).
 # This bind storage is deliberately outside Docker container writable layers;
 # compose down cannot remove original bytes. Never point it at legacy .data.
 x-webchat-host-environment:
