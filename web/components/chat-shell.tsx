@@ -8,7 +8,14 @@ import {
   useRef,
   useState,
 } from "react";
-import { api, forget, save, saved, watchConversation } from "../lib/api";
+import {
+  APIError,
+  api,
+  forget,
+  save,
+  saved,
+  watchConversation,
+} from "../lib/api";
 import type {
   Conversation,
   ConversationPage,
@@ -327,6 +334,7 @@ function ChatSession({
   );
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<Intent | null>(null);
+  const pendingRef = useRef<Intent | null>(null);
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
   const [paging, setPaging] = useState(false);
@@ -334,18 +342,30 @@ function ChatSession({
   const scroll = useRef<HTMLDivElement>(null),
     atBottom = useRef(true),
     opened = useRef(false),
-    pagePosition = useRef<{ height: number; top: number } | null>(null),
+    pagePosition = useRef<{
+      entryId?: string;
+      top: number;
+      scrollTop: number;
+    } | null>(null),
     alive = useRef(true);
   const draftKey = "chat.draft." + id,
-    pendingKey = "chat.pending." + id;
+    pendingKey = "chat.pending." + id,
+    rejectionKey = "chat.rejection." + id;
   useEffect(() => {
     alive.current = true;
     setDraft(saved<string>(draftKey) ?? "");
-    setPending(saved<Intent>(pendingKey));
+    const restored = saved<Intent>(pendingKey);
+    pendingRef.current = restored;
+    setPending(restored);
+    const rejected = saved<{ status: number; code: string }>(rejectionKey);
+    if (!restored && rejected)
+      setError(
+        new APIError(rejected.status, rejected.code).messageCorrection ?? "",
+      );
     return () => {
       alive.current = false;
     };
-  }, [draftKey, pendingKey]);
+  }, [draftKey, pendingKey, rejectionKey]);
   useEffect(
     () =>
       watchConversation(
@@ -367,13 +387,7 @@ function ChatSession({
         (c) => c.requestId === pending.requestId,
       )
     ) {
-      forget(pendingKey);
-      if (draft === pending.text) {
-        setDraft("");
-        save(draftKey, "");
-      }
-      setError("");
-      setPending(null);
+      settlePending(pending, true);
     }
   }, [state.commands, pending, pendingKey, draft, draftKey]);
   // Stable key: one-second snapshots must not continually restart this timer.
@@ -423,10 +437,13 @@ function ChatSession({
     const el = scroll.current;
     if (!el) return;
     if (pagePosition.current) {
-      el.scrollTop =
-        pagePosition.current.top +
-        el.scrollHeight -
-        pagePosition.current.height;
+      const position = pagePosition.current;
+      const anchor = Array.from(
+        el.querySelectorAll<HTMLElement>("[data-message-id]"),
+      ).find((node) => node.dataset.messageId === position.entryId);
+      el.scrollTop = anchor
+        ? el.scrollTop + anchor.getBoundingClientRect().top - position.top
+        : position.scrollTop;
       pagePosition.current = null;
       return;
     }
@@ -434,30 +451,61 @@ function ChatSession({
       el.scrollTop = el.scrollHeight;
       opened.current = true;
     }
-  }, [contentKey, state.loaded]);
+  }, [contentKey, state.loaded, paging]);
   async function older() {
     if (!state.before || paging) return;
+    const request = { before: state.before, generation: state.pageGeneration };
     setPaging(true);
     setError("");
     try {
       const page = await api<MessagePage>(
-        `/conversations/${id}/messages?limit=20&before=${encodeURIComponent(state.before)}`,
+        `/conversations/${id}/messages?limit=20&before=${encodeURIComponent(request.before)}`,
       );
       if (!alive.current) return;
       const el = scroll.current;
-      if (el)
-        pagePosition.current = { height: el.scrollHeight, top: el.scrollTop };
+      if (el) {
+        const top = el.getBoundingClientRect().top;
+        const anchor = Array.from(
+          el.querySelectorAll<HTMLElement>("[data-message-id]"),
+        ).find((node) => node.getBoundingClientRect().bottom > top);
+        pagePosition.current = {
+          entryId: anchor?.dataset.messageId,
+          top: anchor?.getBoundingClientRect().top ?? top,
+          scrollTop: el.scrollTop,
+        };
+      }
       atBottom.current = false;
-      setState((s) => mergePage(s, id, page));
+      setState((s) => mergePage(s, id, page, request));
     } catch (e) {
       if (alive.current) setError((e as Error).message);
     } finally {
       if (alive.current) setPaging(false);
     }
   }
+  // Both storage and UI belong to an intent in this mounted session, not merely
+  // to a conversation. Snapshot ACKs can finish A before its HTTP response does.
+  function settlePending(intent: Intent, clearDraft: boolean) {
+    if (
+      !alive.current ||
+      pendingRef.current?.requestId !== intent.requestId ||
+      saved<Intent>(pendingKey)?.requestId !== intent.requestId
+    )
+      return false;
+    forget(pendingKey);
+    forget(rejectionKey);
+    pendingRef.current = null;
+    setPending(null);
+    setSending(false);
+    setError("");
+    if (clearDraft) {
+      if (saved<string>(draftKey) === intent.text) save(draftKey, "");
+      setDraft((current) => (current === intent.text ? "" : current));
+    }
+    return true;
+  }
   async function send() {
     if (sending || (!pending && !draft.trim())) return;
-    const intent = pending ?? {
+    const intent = pendingRef.current ?? {
       requestId: crypto.randomUUID(),
       text: draft,
       attachmentIds: [],
@@ -466,6 +514,7 @@ function ChatSession({
       setError("Browser storage unavailable; request was not sent.");
       return;
     }
+    pendingRef.current = intent;
     setPending(intent);
     setSending(true);
     setError("");
@@ -474,26 +523,38 @@ function ChatSession({
         `/conversations/${id}/messages`,
         intent,
       );
-      forget(pendingKey);
-      if (saved<string>(draftKey) === intent.text) save(draftKey, "");
       if (!alive.current) return;
-      setState((s) => ({
-        ...s,
-        commands: { ...s.commands, [receipt.commandId]: receipt },
-      }));
-      setPending(null);
-      // A snapshot may already have acknowledged this request and reopened the
-      // composer. Do not erase text typed while its original POST was in flight.
-      setDraft((current) => (current === intent.text ? "" : current));
-      atBottom.current = true;
+      setState((s) =>
+        reduceEvent(s, {
+          id: s.cursor,
+          conversationId: id,
+          turnId: receipt.turnId,
+          stepId: null,
+          attempt: null,
+          type: "command.result",
+          data: receipt,
+        }),
+      );
+      if (settlePending(intent, true)) atBottom.current = true;
     } catch (e) {
-      if (alive.current)
+      if (!alive.current || pendingRef.current?.requestId !== intent.requestId)
+        return;
+      if (
+        e instanceof APIError &&
+        e.messageCorrection &&
+        settlePending(intent, false)
+      ) {
+        save(rejectionKey, { status: e.status, code: e.code });
+        setError(e.messageCorrection);
+      } else {
         setError(
           (e as Error).message +
             " · Delivery is uncertain. Retry the saved submission, not a new message.",
         );
+      }
     } finally {
-      if (alive.current) setSending(false);
+      if (alive.current && pendingRef.current?.requestId === intent.requestId)
+        setSending(false);
     }
   }
   const active = Object.values(state.turns).some((t) =>
@@ -531,7 +592,7 @@ function ChatSession({
         }}
       >
         <div className="reading-column">
-          {state.before && (
+          {state.before ? (
             <button
               className="history-button"
               onClick={older}
@@ -539,7 +600,11 @@ function ChatSession({
             >
               {paging ? "Loading earlier messages…" : "Load earlier messages"}
             </button>
-          )}
+          ) : state.pageGeneration > 1 ? (
+            <p className="history-start" role="status">
+              Beginning of conversation
+            </p>
+          ) : null}
           {!state.loaded && (
             <p className="empty-note" role="status">
               Restoring saved conversation…
@@ -593,6 +658,8 @@ function ChatSession({
               onChange={(e) => {
                 setDraft(e.target.value);
                 save(draftKey, e.target.value);
+                forget(rejectionKey);
+                setError("");
               }}
               onKeyDown={(e) => {
                 if (

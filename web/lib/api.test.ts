@@ -1,5 +1,17 @@
 import { it, expect, vi } from "vitest";
-import { watchConversation } from "./api";
+import { api, watchConversation } from "./api";
+it("preserves structured status/code for a definitive HTTP rejection", async () => {
+  vi.stubGlobal("fetch", async () =>
+    Response.json({ error: { code: "prompt_too_large" } }, { status: 413 }),
+  );
+  try {
+    await expect(
+      api("/conversations/a/messages", { text: "too large" }),
+    ).rejects.toMatchObject({ status: 413, code: "prompt_too_large" });
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
 it("a closed stream cannot deliver queued callbacks into a replacement reader", () => {
   let source: {
     onmessage: (e: { data: string }) => void;

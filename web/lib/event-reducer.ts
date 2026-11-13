@@ -19,6 +19,7 @@ export type ChatState = {
   tools: Record<string, Tool>;
   metadata: Metadata | null;
   before: string | null;
+  pageGeneration: number;
   cursor: string;
   loaded: boolean;
 };
@@ -33,6 +34,7 @@ export function initialState(conversationId: string): ChatState {
     tools: {},
     metadata: null,
     before: null,
+    pageGeneration: 0,
     cursor: "0",
     loaded: false,
   };
@@ -71,16 +73,27 @@ function clearSettled(s: ChatState) {
       delete s.drafts[k];
   }
 }
+export type PageRequest = { before: string | null; generation: number };
 export function mergePage(
   s: ChatState,
   conversationId: string,
   page: MessagePage,
+  request: PageRequest,
 ): ChatState {
   if (s.conversationId !== conversationId) return s;
   const next = {
     ...s,
     messages: messages(s.messages, page.messages, conversationId),
-    before: page.before,
+    // Safe canonical rows can merge even if a reset superseded this request.
+    // Only the owner of the current boundary may advance/close pagination.
+    before:
+      request.before === s.before && request.generation === s.pageGeneration
+        ? page.before
+        : s.before,
+    pageGeneration:
+      request.before === s.before && request.generation === s.pageGeneration
+        ? s.pageGeneration + 1
+        : s.pageGeneration,
     drafts: { ...s.drafts },
   };
   clearSettled(next);
@@ -101,13 +114,15 @@ export function reduceEvent(s: ChatState, e: Envelope): ChatState {
     n.messages = messages(s.messages, d.messages, s.conversationId);
     n.metadata = d.metadata;
     n.loaded = true;
-    const newest = s.messages.at(-1)?.sequence;
+    const newest = s.messages.at(-1)?.sequence ?? 0;
     const earliest = d.messages[0]?.sequence;
     if (
       n.before === null ||
-      (newest !== undefined && earliest !== undefined && earliest > newest + 1)
-    )
+      (earliest !== undefined && earliest > newest + 1)
+    ) {
       n.before = d.before;
+      n.pageGeneration++;
+    }
     if (d.reset) n.drafts = {};
     for (const a of d.attempts) {
       const k = key(a.turnId, a.stepId);

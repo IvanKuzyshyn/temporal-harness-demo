@@ -76,7 +76,14 @@ describe("canonical reconciliation", () => {
   it("testStaleConversationEventIgnored", () => {
     const s = initialState("b");
     expect(reduceEvent(s, delta())).toEqual(s);
-    expect(mergePage(s, "a", { messages: [message], before: "" })).toEqual(s);
+    expect(
+      mergePage(
+        s,
+        "a",
+        { messages: [message], before: "" },
+        { before: s.before, generation: s.pageGeneration },
+      ),
+    ).toEqual(s);
   });
   it("testRetryDraftReplaced", () => {
     let s = reduceEvent(initialState("a"), delta());
@@ -110,7 +117,12 @@ describe("canonical reconciliation", () => {
   it("paging and reset keep older canonical records and accepted receipts", () => {
     let s = reduceEvent(initialState("a"), snap());
     const older = { ...message, entryId: "m0", turnId: "old", sequence: 1 };
-    s = mergePage(s, "a", { messages: [older, message], before: "" });
+    s = mergePage(
+      s,
+      "a",
+      { messages: [older, message], before: "" },
+      { before: s.before, generation: s.pageGeneration },
+    );
     s = reduceEvent(
       s,
       snap({ ...snapshot, commands: [], before: "older" }, "4"),
@@ -148,6 +160,62 @@ describe("canonical reconciliation", () => {
     );
     expect(s.messages.map((m) => m.entryId)).toEqual(["m1", "m30"]);
     expect(s.before).toBe("gap");
+  });
+  it("an in-flight older page cannot erase a newer reset gap; subsequent pages recover all 119 rows", () => {
+    const rows = (first: number, last: number) =>
+      Array.from({ length: last - first + 1 }, (_, i) => ({
+        ...message,
+        entryId: `m${first + i}`,
+        sequence: first + i,
+        turnId: `t${first + i}`,
+      }));
+    let s = reduceEvent(
+      initialState("a"),
+      snap({ ...snapshot, messages: rows(6, 25), before: "before6" }, "25"),
+    );
+    const oldRequest = { before: s.before, generation: s.pageGeneration };
+    const reset = snap(
+      { ...snapshot, messages: rows(100, 119), before: "before100" },
+      "119",
+    );
+    s = reduceEvent(s, reset);
+    s = mergePage(s, "a", { messages: rows(1, 5), before: "" }, oldRequest);
+    expect(s.before).toBe("before100");
+    s = reduceEvent(s, reset);
+    expect(s.before).toBe("before100");
+    for (const [first, last, before] of [
+      [80, 99, "before80"],
+      [60, 79, "before60"],
+      [40, 59, "before40"],
+      [20, 39, "before20"],
+      [1, 19, ""],
+    ] as const) {
+      const request = { before: s.before, generation: s.pageGeneration };
+      s = mergePage(s, "a", { messages: rows(first, last), before }, request);
+    }
+    expect(s.messages.map((m) => m.sequence)).toEqual(
+      Array.from({ length: 119 }, (_, i) => i + 1),
+    );
+    expect(new Set(s.messages.map((m) => m.entryId)).size).toBe(119);
+    expect(reduceEvent(s, reset).before).toBe("");
+  });
+  it("an initially empty restored chat can recover earlier history after a long disconnect", () => {
+    let s = reduceEvent(
+      initialState("a"),
+      snap({ ...snapshot, messages: [], before: "" }),
+    );
+    s = reduceEvent(
+      s,
+      snap(
+        {
+          ...snapshot,
+          messages: [{ ...message, entryId: "m100", sequence: 100 }],
+          before: "before100",
+        },
+        "100",
+      ),
+    );
+    expect(s.before).toBe("before100");
   });
   it("snapshot attempt fences late drafts and completed steps", () => {
     const s = reduceEvent(

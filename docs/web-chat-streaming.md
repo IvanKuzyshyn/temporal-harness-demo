@@ -119,8 +119,26 @@ a missing middle reopens older paging rather than silently hiding that gap.
 - Conversation switching closes only its reader. Requests are stored locally
   **before** send with stable request IDs. Uncertain delivery is retried with that
   same identity; the snapshot can acknowledge an accepted request after reload.
-- History prepending preserves the visible scroll anchor. Live text follows only
-  while already near the end. Reload restores canonical history, never stale
+  Late HTTP responses may settle only their matching pending identity in the
+  original mounted session; they cannot clear a newer request or draft.
+- HTTP errors retain their status/code. Only `413 prompt_too_large` and
+  `413 body_too_large` are treated as definitive pre-acceptance size rejection
+  by the message composer: release the matching pending ID, preserve editable
+  text and correction guidance across reload, then use a new ID for corrected
+  text. These validations precede command acceptance. The prompt limit is
+  **65,536 UTF-8 bytes**, not JavaScript characters. Unknown codes, conflicts,
+  server failures and transport uncertainty retain the original retry identity;
+  other status codes are not blanket-classified as safe to resend with a new ID.
+- Queue activity has a compact count with expandable, identifiable entries from
+  the bounded recent-turn projection. Per-message status and actionable errors,
+  approval/policy and context warnings remain visible outside collapsed details.
+- History prepending preserves the visible message anchor (including when gap
+  recovery inserts rows below that anchor). Each page request captures its cursor
+  and pagination generation. A stale response can merge immutable rows but cannot
+  advance or close a newer gap-recovery boundary. On exhaustion, a same-height
+  beginning marker replaces the paging button to avoid shifting the top anchor.
+  Live text follows only while already near the end. Reload restores canonical
+  history, never stale
   in-memory token text; unsent drafts are per-conversation local storage.
 - Approval-required, policy, failed/cancelled/incomplete output, source failures,
   partial/omitted context and lossy-memory qualifications remain visible outside

@@ -66,7 +66,10 @@ export function Coverage({ context }: { context: ContextMetadata }) {
 export function WorkStatus({ state }: { state: ChatState }) {
   const m = state.metadata;
   const unresolved = Object.values(state.turns).filter(
-    (t) => !["completed", "failed", "cancelled"].includes(t.status),
+    (t) => !["completed", "failed", "cancelled", "queued"].includes(t.status),
+  );
+  const queued = Object.values(state.turns).filter(
+    (t) => t.status === "queued",
   );
   const rejected = Object.values(state.commands).filter(
     (c) => c.resultState === "rejected",
@@ -110,6 +113,27 @@ export function WorkStatus({ state }: { state: ChatState }) {
             the next task.
           </p>
         </aside>
+      )}
+      {queued.length > 0 && (
+        <details className="queued-work">
+          <summary>
+            {queued.length} queued{" "}
+            {queued.length === 1 ? "message" : "messages"}
+          </summary>
+          <ol>
+            {queued.map((t) => {
+              const message = state.messages.find(
+                (m) => m.turnId === t.id && m.role === "user",
+              );
+              return (
+                <li key={t.id} title={t.id}>
+                  {message?.text.replace(/\s+/g, " ").slice(0, 100) ||
+                    `Message ${t.id}`}
+                </li>
+              );
+            })}
+          </ol>
+        </details>
       )}
     </section>
   );
