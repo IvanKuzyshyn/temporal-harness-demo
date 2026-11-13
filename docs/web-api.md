@@ -29,7 +29,7 @@ Export configuration explicitly (the binary does not automatically source `.env`
   passwords; edit credentials deliberately rather than reinitializing volumes.
 
 `bin/web-api -migrate` applies embedded migrations and exits. `bin/web-api` requires
-schema version 8 and serves HTTP. Effective pgx user/database/startup parameters
+schema version 9 and serves HTTP. Effective pgx user/database/startup parameters
 are validated before connecting, including query/environment/service overrides;
 only the validated config is used. Application identity must be `webchat`, never
 Temporal's database/role. Runtime connection hosts and fallback hosts must be
@@ -86,7 +86,7 @@ not defend against a local process that can read server credentials.
 All JSON mutations require `Content-Type: application/json` (parameters allowed),
 a single object, valid UTF-8, no unknown/duplicate keys, null field values, or
 trailing data. Maximum encoded body is **400KiB** (allows escaped 64KiB text);
-maximum decoded prompt is **65,536 UTF-8 bytes**; at most four distinct attachment
+maximum decoded prompt is **65,536 UTF-8 bytes**; at most one attachment
 IDs. IDs are nonzero canonical lowercase hyphenated UUIDs. A message must contain
 text or attachments. References are ownership-checked in the acceptance transaction.
 Uploads alone do not grant content access.
@@ -163,7 +163,7 @@ completion/failure without an accepted control retains retry-safe hard-worker-lo
 recovery: missing cleanup acknowledgments do not block canonical settlement or
 normal follow-ups, and are not falsely marked confirmed. See the runtime document for
 completion linearization, recovery and operator limits. Task6 implements approval/revocation Updates. New attachment-bearing
-messages/replacements now admit up to four ready owned attachments. Task8 creates deterministic metadata-only attachment actions before inference; no upload implies content consent. See [attachments](web-chat-attachments.md) for exact validation, recovery and extraction bounds.
+messages/replacements admit at most one ready owned attachment. Task8 creates deterministic metadata-only attachment actions before inference; no upload implies content consent. See [attachments](web-chat-attachments.md) for exact validation, recovery and extraction bounds.
 
 Metadata is a repeatable-read Postgres projection. `observedAt` is an API read
 observation, **not a workflow confirmation**. `authoritative:false` and
@@ -180,6 +180,9 @@ Draft 2020-12. Select the named `$defs` for each route above. `additionalPropert
 is false for request/response records unless explicitly open. Semantic checks
 not expressible here (UTF-8 **byte** limit, nonzero UUID, distinct/owned references,
 message content, digest equality, freshness) are enforced/described above.
+The model/attachment bounds below describe current admission and newly written
+records. Preserved historical reads may contain disabled model tags or multiple
+attachment IDs; they never authorize a new submission under those old limits.
 
 ```json
 {
@@ -189,9 +192,9 @@ message content, digest equality, freshness) are enforced/described above.
     "NullableID":{"anyOf":[{"$ref":"#/$defs/ID"},{"type":"null"}]},
     "Digest":{"type":"string","pattern":"^[0-9a-f]{64}$"},
     "DigestAssertion":{"anyOf":[{"$ref":"#/$defs/Digest"},{"const":""}]},
-    "Model":{"enum":["qwen3.5:9b","gemma4:e4b"]},
+    "Model":{"enum":["qwen3.5:9b"]},
     "Time":{"type":"string","format":"date-time"},
-    "Attachments":{"type":"array","maxItems":4,"uniqueItems":true,"items":{"$ref":"#/$defs/ID"}},
+    "Attachments":{"type":"array","maxItems":1,"uniqueItems":true,"items":{"$ref":"#/$defs/ID"}},
     "Text":{"type":"string","description":"Maximum 65536 UTF-8 bytes"},
     "CreateRequest":{"type":"object","additionalProperties":false,"required":["requestId"],"properties":{"requestId":{"$ref":"#/$defs/ID"},"model":{"$ref":"#/$defs/Model"},"payloadDigest":{"$ref":"#/$defs/DigestAssertion"}}},
     "MessageRequest":{"type":"object","additionalProperties":false,"required":["requestId"],"properties":{"requestId":{"$ref":"#/$defs/ID"},"payloadDigest":{"$ref":"#/$defs/DigestAssertion"},"text":{"$ref":"#/$defs/Text"},"attachmentIds":{"$ref":"#/$defs/Attachments"}}},
@@ -212,7 +215,7 @@ message content, digest equality, freshness) are enforced/described above.
     "PendingApproval":{"type":"object","additionalProperties":false,"required":["id","toolCallId","actionHash","deadline","policyRevision","toolName","arguments","contentRef","toolsetVersion"],"properties":{"toolName":{"enum":["web_fetch","file_upload"]},"arguments":{"type":"object"},"contentRef":{"type":"string"},"toolsetVersion":{"type":"string","maxLength":128},"id":{"$ref":"#/$defs/ID"},"toolCallId":{"$ref":"#/$defs/ID"},"actionHash":{"$ref":"#/$defs/Digest"},"deadline":{"$ref":"#/$defs/Time"},"policyRevision":{"type":"integer","minimum":0}}},
     "Freshness":{"type":"object","additionalProperties":false,"required":["source","authoritative","observedAt","workflowConfirmedAt"],"properties":{"source":{"const":"postgres_projection"},"authoritative":{"const":false},"observedAt":{"$ref":"#/$defs/Time"},"workflowConfirmedAt":{"type":"null"}}},
     "Metadata":{"type":"object","additionalProperties":false,"required":["conversation","activeTurn","pendingApproval","policy","freshness","dispatcherConnected"],"properties":{"conversation":{"$ref":"#/$defs/Conversation"},"activeTurn":{"anyOf":[{"$ref":"#/$defs/ActiveTurn"},{"type":"null"}]},"pendingApproval":{"anyOf":[{"$ref":"#/$defs/PendingApproval"},{"type":"null"}]},"policy":{"type":"object","additionalProperties":false,"required":["revision","approvalAll","toolsetVersion"],"properties":{"revision":{"type":"integer","minimum":0},"approvalAll":{"type":"boolean"},"toolsetVersion":{"type":"string","maxLength":128}}},"freshness":{"$ref":"#/$defs/Freshness"},"dispatcherConnected":{"type":"boolean"}}},
-    "Models":{"type":"object","additionalProperties":false,"required":["models"],"properties":{"models":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"object","additionalProperties":false,"required":["id","default","availability","capabilities"],"properties":{"id":{"$ref":"#/$defs/Model"},"default":{"type":"boolean"},"availability":{"const":"unknown"},"capabilities":{"type":"object","additionalProperties":false,"required":["text","tools","images","imageAdmissionQualified"],"properties":{"text":{"const":"unverified"},"tools":{"const":"unverified"},"images":{"const":"unverified"},"imageAdmissionQualified":{"const":false}}}}}}}},
+    "Models":{"type":"object","additionalProperties":false,"required":["models"],"properties":{"models":{"type":"array","minItems":1,"maxItems":1,"items":{"type":"object","additionalProperties":false,"required":["id","default","availability","capabilities"],"properties":{"id":{"$ref":"#/$defs/Model"},"default":{"type":"boolean"},"availability":{"const":"unknown"},"capabilities":{"type":"object","additionalProperties":false,"required":["text","tools","images","imageAdmissionQualified"],"properties":{"text":{"const":"unverified"},"tools":{"const":"unverified"},"images":{"const":"unverified"},"imageAdmissionQualified":{"const":false}}}}}}}},
     "Health":{"type":"object","additionalProperties":false,"required":["alive","storageReady","acceptingCommands","dispatcher","workersPolling","reconciliationReady"],"properties":{"alive":{"const":true},"storageReady":{"type":"boolean"},"acceptingCommands":{"type":"boolean"},"dispatcher":{"enum":["unavailable","connected"]},"workersPolling":{"type":"boolean"},"reconciliationReady":{"type":"boolean"}}},
     "Error":{"type":"object","additionalProperties":false,"required":["error"],"properties":{"error":{"type":"object","additionalProperties":false,"required":["code"],"properties":{"code":{"enum":["forbidden","invalid_request","invalid_json","invalid_query","not_found","reference_not_found","conflict","body_too_large","prompt_too_large","unsupported_media_type","storage_unavailable","not_implemented","method_not_allowed","attachment_store_unavailable","multipart_required","one_file_required","file_exceeds_1048576_bytes","invalid_signature_or_unreadable_file","upstream_unavailable"]}}}}},
     "Attachment":{"type":"object","additionalProperties":false,"required":["id","conversationId","name","mediaType","size","checksum","status"],"properties":{"id":{"$ref":"#/$defs/ID"},"conversationId":{"$ref":"#/$defs/ID"},"name":{"type":"string"},"mediaType":{"enum":["text/plain","text/markdown","application/pdf","application/vnd.openxmlformats-officedocument.wordprocessingml.document","image/png","image/jpeg","image/svg+xml"]},"size":{"type":"integer","minimum":0,"maximum":1048576},"checksum":{"type":"string","pattern":"^[0-9a-f]{64}$"},"status":{"const":"ready"}}},

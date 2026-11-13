@@ -114,7 +114,7 @@ a missing middle reopens older paging rather than silently hiding that gap.
 
 ## Browser behavior and safety
 
-- Sidebar/new chat, exact fixed models `qwen3.5:9b` and `gemma4:e4b`, first-prompt
+- Sidebar/new chat, only enabled model `qwen3.5:9b`, first-prompt
   titles, chronological paging, bottom composer, and ordinary safe Markdown.
 - Conversation switching closes only its reader. Requests are stored locally
   **before** send with stable request IDs. Uncertain delivery is retried with that
@@ -129,9 +129,9 @@ a missing middle reopens older paging rather than silently hiding that gap.
   **65,536 UTF-8 bytes**, not JavaScript characters. Unknown codes, conflicts,
   server failures and transport uncertainty retain the original retry identity;
   other status codes are not blanket-classified as safe to resend with a new ID.
-- Queue activity has a compact count with expandable, identifiable entries from
-  the bounded recent-turn projection. Per-message status and actionable errors,
-  approval/policy and context warnings remain visible outside collapsed details.
+- Queued/thinking/stopping states, concise failures and required approvals remain
+  visible. Diagnostic counts, context/provenance, tool/attempt dumps and collapsed
+  Details/Work panels are removed. Durable reducer/API records are unchanged.
 - History prepending preserves the visible message anchor (including when gap
   recovery inserts rows below that anchor). Each page request captures its cursor
   and pagination generation. A stale response can merge immutable rows but cannot

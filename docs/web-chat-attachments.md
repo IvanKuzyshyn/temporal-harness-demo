@@ -1,4 +1,4 @@
-# Durable attachments (Task8 foundation, current schema8)
+# Durable attachments (Task8 foundation, current schema9)
 
 Task10 adds [bounded context](web-chat-context.md) metadata without changing original-byte storage or attachment authorization. Up to four already-authorized persisted results can be retained independently of lossy summaries, with exact instruction/scope, source hashes and partial/error/truncation metadata. This neither reopens originals nor permits new analysis; immutable recorded output is not guaranteed factual truth.
 
