@@ -9,6 +9,20 @@ export type Conversation = {
   createdAt: string;
   updatedAt: string;
 };
+export type Attachment = {
+  id: string;
+  conversationId: string;
+  name: string;
+  mediaType: string;
+  size: number;
+  checksum: string;
+  status: "ready";
+};
+export type SelectedAttachment = {
+  id: string;
+  name?: string;
+  mediaType?: string;
+};
 export type Receipt = {
   commandId: string;
   requestId?: string;
