@@ -17,19 +17,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Qualification-only experiments, not application admission. Fixed known small
-// fixture, one image/request, tiny prompt, exact tags, output/deadline caps and
-// serial calls. This does NOT change imageAdmissionQualified or admit arbitrary
-// text+image/aspect ratios. Semantic outcomes are recorded, not hidden as success.
-func TestTask9LiveSmallImageExperiments(t *testing.T) {
-	if os.Getenv("WEBCHAT_TASK9_LIVE") != "1" {
-		t.Skip("explicit bounded live experiments only")
-	}
-	evidence := os.Getenv("WEBCHAT_TASK9_EVIDENCE")
-	require.NotEmpty(t, evidence)
-	file, e := os.OpenFile(evidence, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-	require.NoError(t, e)
-	defer file.Close()
+// Preparation is independently testable without opening evidence or entering
+// the live inference loop. Keep the same known fixture and conversion bounds.
+func task9ImageFixtures(t *testing.T) []struct {
+	name string
+	data []byte
+} {
+	t.Helper()
 	pngData, e := os.ReadFile("testdata/bonjour.png")
 	require.NoError(t, e)
 	img, _, e := image.Decode(bytes.NewReader(pngData))
@@ -57,14 +51,33 @@ func TestTask9LiveSmallImageExperiments(t *testing.T) {
 	}
 	svg.WriteString(`</svg>`)
 	require.LessOrEqual(t, svg.Len(), 1048576)
-	raster, e := (attachments.ContainerParser{}).Rasterize(context.Background(), []byte(svg.String()))
+	parser, e := attachments.NewContainerParser(os.Getenv("WEBCHAT_PARSER_IMAGE_ID"))
 	require.NoError(t, e)
+	raster, e := parser.Rasterize(context.Background(), []byte(svg.String()))
+	require.NoError(t, e)
+	return []struct {
+		name string
+		data []byte
+	}{{"png", pngData}, {"jpeg", jpegData.Bytes()}, {"safe-svg-raster", raster}}
+}
+
+// Qualification-only experiments, not application admission. Fixed known small
+// fixture, one image/request, tiny prompt, exact tags, output/deadline caps and
+// serial calls. This does NOT change imageAdmissionQualified or admit arbitrary
+// text+image/aspect ratios. Semantic outcomes are recorded, not hidden as success.
+func TestTask9LiveSmallImageExperiments(t *testing.T) {
+	if os.Getenv("WEBCHAT_TASK9_LIVE") != "1" {
+		t.Skip("explicit bounded live experiments only")
+	}
+	evidence := os.Getenv("WEBCHAT_TASK9_EVIDENCE")
+	require.NotEmpty(t, evidence)
+	file, e := os.OpenFile(evidence, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	require.NoError(t, e)
+	defer file.Close()
+	fixtures := task9ImageFixtures(t)
 	enc := json.NewEncoder(file)
 	for _, model := range []string{"qwen3.5:9b", "gemma4:e4b"} {
-		for _, fixture := range []struct {
-			name string
-			data []byte
-		}{{"png", pngData}, {"jpeg", jpegData.Bytes()}, {"safe-svg-raster", raster}} {
+		for _, fixture := range fixtures {
 			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 			client := &http.Client{Timeout: 90 * time.Second}
 			res := qualifyChat(ctx, client, "http://127.0.0.1:11434", model, "image", fixture.data)
