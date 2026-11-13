@@ -198,6 +198,7 @@ func appendMessage(ctx context.Context, tx pgx.Tx, m chat.MessageRecord) error {
 	// Server-assigned order and time are not part of write identity.
 	m.Sequence = 0
 	m.Context = nil // derived from the immutable final model result on reads
+	m.TurnStatus, m.TurnReason = "", ""
 	m.CreatedAt = chat.MessageRecord{}.CreatedAt
 	if len(m.AttachmentIDs) == 0 {
 		m.AttachmentIDs = nil
@@ -237,6 +238,15 @@ func (r *Repository) AppendMessage(ctx context.Context, m chat.MessageRecord) er
 // ListMessages returns a page in ascending commit order. Before is an exclusive,
 // conversation-bound high-water mark; later appends cannot enter older pages.
 func (r *Repository) ListMessages(ctx context.Context, id chat.ConversationID, before string, limit int) (chat.MessagePage, error) {
+	return listMessages(ctx, r.pool, id, before, limit)
+}
+
+type readQuery interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func listMessages(ctx context.Context, q readQuery, id chat.ConversationID, before string, limit int) (chat.MessagePage, error) {
 	page := chat.MessagePage{Messages: []chat.MessageRecord{}}
 	if !chat.ValidID(string(id)) || !limitOK(limit) {
 		return page, chat.ErrInvalid
@@ -256,10 +266,11 @@ func (r *Repository) ListMessages(ctx context.Context, id chat.ConversationID, b
 			return page, chat.ErrInvalid
 		}
 	}
-	rows, err := r.pool.Query(ctx, `SELECT m.entry_id::text,m.turn_id::text,m.sequence,m.role,m.text,m.logical_step,m.result_kind,m.completion_state,m.created_at,
+	rows, err := q.Query(ctx, `SELECT m.entry_id::text,m.turn_id::text,m.sequence,m.role,m.text,m.logical_step,m.result_kind,m.completion_state,m.created_at,
  coalesce((SELECT jsonb_agg(attachment_id::text ORDER BY ordinal) FROM message_attachments WHERE entry_id=m.entry_id),'[]'::jsonb),
  (SELECT context_metadata FROM chat_model_results r WHERE r.turn_id=m.turn_id AND m.result_kind='final' AND m.role='assistant' AND r.calls='[]'::jsonb ORDER BY r.logical_step DESC LIMIT 1)
- FROM messages m WHERE m.conversation_id=$1 AND m.sequence<$2 ORDER BY m.sequence DESC LIMIT $3`, id, boundary, limit+1)
+, t.status,t.reason
+ FROM messages m JOIN turns t ON t.id=m.turn_id AND t.conversation_id=m.conversation_id WHERE m.conversation_id=$1 AND m.sequence<$2 ORDER BY m.sequence DESC LIMIT $3`, id, boundary, limit+1)
 	if err != nil {
 		return page, err
 	}
@@ -267,7 +278,7 @@ func (r *Repository) ListMessages(ctx context.Context, id chat.ConversationID, b
 	for rows.Next() {
 		m := chat.MessageRecord{ConversationID: id}
 		var ids []byte
-		err = rows.Scan(&m.EntryID, &m.TurnID, &m.Sequence, &m.Role, &m.Text, &m.LogicalStep, &m.ResultKind, &m.CompletionState, &m.CreatedAt, &ids, &m.Context)
+		err = rows.Scan(&m.EntryID, &m.TurnID, &m.Sequence, &m.Role, &m.Text, &m.LogicalStep, &m.ResultKind, &m.CompletionState, &m.CreatedAt, &ids, &m.Context, &m.TurnStatus, &m.TurnReason)
 		if err != nil {
 			return page, err
 		}

@@ -178,6 +178,8 @@ func (a *ChatActivities) runChatModel(ctx context.Context, ref chat.TurnRef, att
 	if a.Model == nil {
 		return errors.New("chat model not configured")
 	}
+	pushDraft, joinDraft := chatDeltas(ctx, a.Repository, ref, attempt)
+	defer joinDraft()
 	size := 0
 	response, err := a.Model.Chat(ctx, req, func(d llm.Delta) error {
 		tokens.Add(int64(d.Tokens))
@@ -185,6 +187,7 @@ func (a *ChatActivities) runChatModel(ctx context.Context, ref chat.TurnRef, att
 		if size > 65536 {
 			return &ollama.InvalidRequestError{Err: errors.New("response byte budget exceeded")}
 		}
+		pushDraft(d.Text)
 		return ctx.Err()
 	})
 	if err == nil {

@@ -136,6 +136,8 @@ type StoredCommand struct {
 	Receipt CommandReceipt
 }
 type MessageRecord struct {
+	TurnStatus                  string           `json:",omitempty"` // read-only projection; excluded from identity
+	TurnReason                  string           `json:",omitempty"`
 	Context                     *ContextMetadata `json:",omitempty"` // read-only final-result metadata
 	EntryID                     string
 	ConversationID              ConversationID

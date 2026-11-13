@@ -14,26 +14,27 @@ import (
 // A unique logical-key collision with another entry ID is a conflict, not a
 // second completion. Every write locks the owning conversation first.
 func (r *Repository) insertRecord(ctx context.Context, c chat.ConversationID, hash string, query string, args []any, lookup string, key string) error {
-	return r.withConversation(ctx, c, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, query, args...)
-		if err != nil {
-			return err
-		}
-		if tag.RowsAffected() == 1 {
-			return nil
-		}
-		var existing string
-		if err = tx.QueryRow(ctx, lookup, key).Scan(&existing); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrConflict
-			}
-			return err
-		}
-		if hash != existing {
+	return r.withConversation(ctx, c, func(tx pgx.Tx) error { return insertRecord(ctx, tx, hash, query, args, lookup, key) })
+}
+func insertRecord(ctx context.Context, tx pgx.Tx, hash, query string, args []any, lookup, key string) error {
+	tag, err := tx.Exec(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 1 {
+		return nil
+	}
+	var existing string
+	if err = tx.QueryRow(ctx, lookup, key).Scan(&existing); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrConflict
 		}
-		return nil
-	})
+		return err
+	}
+	if hash != existing {
+		return ErrConflict
+	}
+	return nil
 }
 
 // CreateAttachment registers metadata only. Status must be staged; the caller
@@ -171,8 +172,8 @@ func (r *Repository) LatestSummary(ctx context.Context, c chat.ConversationID) (
 	return a, dbError(err)
 }
 
-// AppendEvent caps each payload at 64KiB (also DB-enforced). Retention and
-// semantic filtering of event payloads are the transport layer's responsibility.
+// AppendEvent caps each payload at 64KiB (also DB-enforced). Only transient
+// message.delta rows expire (latest 128 per conversation); durable facts remain.
 func (r *Repository) AppendEvent(ctx context.Context, a chat.Event) error {
 	if !chat.ValidID(a.ID) || (a.TurnID != "" && !chat.ValidID(string(a.TurnID))) || a.Type == "" || a.Attempt < 0 || a.LogicalStep < 0 || (a.Attempt == 0 && a.LogicalStep != 0) || len(a.Payload) == 0 || len(a.Payload) > 65536 {
 		return chat.ErrInvalid
@@ -192,8 +193,15 @@ func (r *Repository) AppendEvent(ctx context.Context, a chat.Event) error {
 		step = a.LogicalStep
 		attempt = a.Attempt
 	}
-	return r.insertRecord(ctx, a.ConversationID, hash, `INSERT INTO events(id,conversation_id,turn_id,logical_step,attempt,type,payload,payload_digest)
+	return r.withConversation(ctx, a.ConversationID, func(tx pgx.Tx) error {
+		err := insertRecord(ctx, tx, hash, `INSERT INTO events(id,conversation_id,turn_id,logical_step,attempt,type,payload,payload_digest)
  VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`, []any{a.ID, a.ConversationID, nullable(string(a.TurnID)), step, attempt, a.Type, []byte(a.Payload), hash}, "SELECT payload_digest FROM events WHERE id=$1", a.ID)
+		if err != nil || a.Type != "message.delta" {
+			return err
+		}
+		_, err = tx.Exec(ctx, `DELETE FROM events WHERE conversation_id=$1 AND type='message.delta' AND sequence < (SELECT sequence FROM events WHERE conversation_id=$1 AND type='message.delta' ORDER BY sequence DESC OFFSET 127 LIMIT 1)`, a.ConversationID)
+		return err
+	})
 }
 func (r *Repository) ListEvents(ctx context.Context, c chat.ConversationID, after int64, limit int) ([]chat.Event, error) {
 	if !chat.ValidID(string(c)) || after < 0 || !limitOK(limit) {

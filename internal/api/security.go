@@ -82,7 +82,7 @@ func (s *Server) secure(w http.ResponseWriter, r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	site := r.Header.Get("Sec-Fetch-Site")
 	mode := r.Header.Get("Sec-Fetch-Mode")
-	if len(r.Header.Values("Origin")) > 1 || (origin != "" && origin != s.config.BrowserOrigin) || (site != "" && site != "same-origin") || (mode != "" && mode != "cors" && mode != "same-origin") {
+	if len(r.Header.Values("Sec-Fetch-Site")) > 1 || len(r.Header.Values("Sec-Fetch-Mode")) > 1 || len(r.Header.Values("Origin")) > 1 || (origin != "" && origin != s.config.BrowserOrigin) || (site != "" && site != "same-origin") || (mode != "" && mode != "cors" && mode != "same-origin") {
 		fail(w, 403, "forbidden")
 		return false
 	}

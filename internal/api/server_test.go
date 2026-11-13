@@ -66,7 +66,7 @@ func TestBoundedStrictJSON(t *testing.T) {
 	} {
 		require.Equal(t, tc.status, request(handler(t), "POST", "/conversations", tc.body, map[string]string{"Content-Type": tc.media}).Code)
 	}
-	require.Equal(t, 501, request(handler(t), "GET", "/conversations/11111111-1111-4111-8111-111111111111/events", "", nil).Code)
+	require.Equal(t, 503, request(handler(t), "GET", "/conversations/11111111-1111-4111-8111-111111111111/events", "", nil).Code)
 }
 func TestConfigurationRejectsInsecureValues(t *testing.T) {
 	good := api.Config{ListenAddress: "127.0.0.1:18081", ProxySecret: secret, BrowserOrigin: "http://localhost:3000"}

@@ -164,6 +164,13 @@ func (r *Repository) GetConversationProjection(ctx context.Context, id chat.Conv
 		return out, err
 	}
 	defer tx.Rollback(context.Background())
+	out, err = conversationProjection(ctx, tx, id)
+	if err != nil {
+		return out, err
+	}
+	return out, tx.Commit(ctx)
+}
+func conversationProjection(ctx context.Context, tx readQuery, id chat.ConversationID) (out ConversationProjection, err error) {
 	out.Conversation, err = scanConversation(tx.QueryRow(ctx, "SELECT "+conversationColumns+" FROM conversations WHERE id=$1", id))
 	if err != nil {
 		return out, err
@@ -188,5 +195,5 @@ func (r *Repository) GetConversationProjection(ctx context.Context, id chat.Conv
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return out, err
 	}
-	return out, tx.Commit(ctx)
+	return out, nil
 }
