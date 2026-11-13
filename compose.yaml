@@ -9,6 +9,8 @@ x-webchat-host-environment:
 services:
   attachment-parser:
     profiles: ["tools"]
+    # Tooling profile only; this mutable convenience tag is NOT runtime identity.
+    # Trusted host setup uses an exclusive build tag and binds its immutable ID.
     image: webchat-attachment-parser:1
     build: ./infra/attachment-parser
     network_mode: none

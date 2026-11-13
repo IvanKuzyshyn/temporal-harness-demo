@@ -65,12 +65,14 @@ func pdfFixture(text string) []byte {
 	fmt.Fprintf(&b, "trailer\n<< /Root 1 0 R /Size 6 >>\nstartxref\n%d\n%%%%EOF\n", xref)
 	return b.Bytes()
 }
-func realParser(t *testing.T) Parser {
+func realParser(t *testing.T) ContainerParser {
 	t.Helper()
 	if os.Getenv("WEBCHAT_TEST_PARSERS") != "1" {
 		t.Skip("explicit isolated parser container gate")
 	}
-	return ContainerParser{}
+	p, err := NewContainerParser(os.Getenv("WEBCHAT_PARSER_IMAGE_ID"))
+	require.NoError(t, err)
+	return p
 }
 func TestParsersValidateWithoutSemanticExtraction(t *testing.T) {
 	p := realParser(t)

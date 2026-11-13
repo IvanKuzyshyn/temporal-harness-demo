@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 MODULE = Path(__file__).resolve().parents[1] / 'lifecycle.py'
 
@@ -37,6 +38,67 @@ class LifecycleTests(unittest.TestCase):
         driver = FakeDriver(**faults)
         app = self.m.Lifecycle(self.home, driver)
         return app, driver
+
+    def test_build_receipt_uses_owned_tag_not_shared_alias_or_unroutable_iid(self):
+        d = self.m.Driver(self.home)
+        image_a, image_b = 'sha256:'+'a'*64, 'sha256:'+'b'*64
+        calls, owned_tags = [], []
+        def run(argv, **kwargs):
+            calls.append(argv)
+            if argv[:2] == ['docker', 'build']:
+                if '-t' in argv: owned_tags.append(argv[argv.index('-t')+1])
+                if '--iidfile' in argv:
+                    # Docker 29/containerd can emit an unroutable config digest
+                    # here, while image inspect returns a manifest content ID.
+                    Path(argv[argv.index('--iidfile')+1]).write_text('sha256:'+'c'*64+'\n')
+            # Simulate another home moving the SHARED alias after our build.
+            if argv[:3] == ['docker', 'image', 'inspect']:
+                return (image_a if argv[-1] in owned_tags and argv[-1] != 'webchat-attachment-parser:1' else image_b)+'\n'
+            if argv[0] == 'pnpm' and 'build' in argv:
+                out = Path(argv[2])/'.next'; out.mkdir(parents=True)
+                (out/'BUILD_ID').write_text('test')
+            return ''
+        d.run = run
+        with patch.object(self.m, 'stage_frontend', lambda target: target.mkdir()): d.build()
+        built = json.loads((self.home/'build.json').read_text())
+        self.assertEqual(built['parserImage'], image_a)
+        docker_build = next(c for c in calls if c[:2] == ['docker', 'build'])
+        self.assertIn('--iidfile', docker_build)
+        self.assertEqual(len(owned_tags), 1)
+        self.assertTrue(owned_tags[0].startswith('webchat-parser-build:'))
+        self.assertNotIn('webchat-attachment-parser:1', owned_tags)
+        self.assertEqual([c[-1] for c in calls if c[:3] == ['docker', 'image', 'inspect']], owned_tags)
+
+    def test_both_consumer_launches_receive_receipt_identity_not_inherited_env(self):
+        d = self.m.Driver(self.home)
+        image_a = 'sha256:'+'a'*64
+        d.env['WEBCHAT_PARSER_IMAGE_ID'] = 'sha256:'+'b'*64
+        self.m.atomic(self.home/'build.json', {'bin':str(self.home), 'web':str(self.home), 'parserImage':image_a})
+        d.active = lambda name: True
+        d.receipt = lambda name: {'exited':True, 'child':{'test':True}}
+        with open(self.home/'test-lock','w') as lock:
+            d.lock = lock
+            for consumer in ('api', 'worker'):
+                with self.subTest(consumer=consumer), patch.object(self.m.subprocess, 'Popen') as popen:
+                    d.start(consumer)
+                    self.assertEqual(popen.call_args.kwargs['env']['WEBCHAT_PARSER_IMAGE_ID'], image_a)
+
+    def test_preflight_executes_immutable_image_even_after_alias_moves(self):
+        d = self.m.Driver(self.home)
+        image_a = 'sha256:'+'a'*64
+        self.m.atomic(self.home/'build.json', {'parserImage':image_a})
+        d.active = lambda name: True
+        calls = []
+        def run(argv, **kwargs):
+            calls.append(argv)
+            if argv[:3] == ['docker', 'image', 'inspect']: return image_a+'\n'
+            return ''
+        d.run = run
+        d.preflight('up')
+        self.assertFalse(any('webchat-attachment-parser:1' in c for c in calls))
+        probe = next(c for c in calls if c[:2] == ['docker', 'run'])
+        self.assertIn(image_a, probe)
+        self.assertIn('--pull=never', probe)
 
     def test_repeated_setup_up_down_preserves_data_and_shared_ollama(self):
         app, d = self.lifecycle()

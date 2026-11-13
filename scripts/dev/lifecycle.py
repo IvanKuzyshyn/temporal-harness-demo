@@ -204,6 +204,13 @@ def stage_frontend(target):
     shutil.copytree(ROOT / 'web', target, ignore=shutil.ignore_patterns('node_modules', '.next', '.webchat-builds', 'test-results', 'playwright-report', '*.tsbuildinfo'))
 
 
+def parser_image(build):
+    image = build.get('parserImage')
+    if not isinstance(image, str) or not re.fullmatch(r'sha256:[a-f0-9]{64}', image):
+        raise RuntimeError('parser image receipt missing/invalid: run mise run setup; no mutable fallback')
+    return image
+
+
 class Driver:
     services = SERVICES
     def __init__(self, home):
@@ -276,12 +283,13 @@ class Driver:
             if mode == 'setup' or self.active(name): continue
             self.free_port(self.env[key])
         if mode == 'up':
-            # Probe helper execution, not merely a local mutable tag's presence.
-            self.run(['docker','image','inspect','webchat-attachment-parser:1'], capture=True)
-            built = json.loads((self.home / 'build.json').read_text())
-            image = self.run(['docker','image','inspect','--format','{{.Id}}','webchat-attachment-parser:1'], capture=True).strip()
-            if image != built['parserImage']: raise RuntimeError('parser image changed: run setup/requalify, never silently reuse a different helper')
-            self.run(['docker','run','--rm','--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--user','65534:65534','--memory','512m','--pids-limit','32','--entrypoint','node','webchat-attachment-parser:1','--version'], capture=True)
+            image = parser_image(json.loads((self.home / 'build.json').read_text()))
+            try:
+                actual = self.run(['docker','image','inspect','--format','{{.Id}}',image], capture=True).strip()
+                if actual != image: raise RuntimeError('parser image identity mismatch')
+                self.run(['docker','run','--rm','--pull=never','--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges','--user','65534:65534','--memory','512m','--pids-limit','32','--entrypoint','node',image,'--version'], capture=True)
+            except (OSError, subprocess.SubprocessError, RuntimeError) as e:
+                raise RuntimeError('setup parser image unavailable: run mise run setup/requalify; no fallback') from e
         root = Path(self.env['WEBCHAT_ATTACHMENT_ROOT']); root.mkdir(parents=True, exist_ok=True, mode=0o700)
         # Fail early if original publication's hard-link/atomic-rename contract is unavailable.
         probe = root / ('.lifecycle-probe-'+secrets.token_hex(16)); link = probe.with_suffix('.link')
@@ -347,6 +355,8 @@ class Driver:
         if name == 'ollama': argv = ['ollama','serve']
         else:
             build = json.loads((self.home / 'build.json').read_text())
+            if name in ('api', 'worker'):
+                env['WEBCHAT_PARSER_IMAGE_ID'] = parser_image(build)
             argv = [str(Path(build['bin']) / ('web-'+name))]
             if name == 'web': argv = ['node', str(Path(build['web'])/'node_modules/next/dist/bin/next'), 'start', build['web'], '--hostname','127.0.0.1','--port',self.env['WEBCHAT_WEB_PORT']]
         receipt = self.home / (name+'.json')
@@ -379,9 +389,16 @@ class Driver:
 
     def build(self):
         self.run(['go','mod','download'], timeout=300)
-        self.run(['docker','build','-t','webchat-attachment-parser:1','infra/attachment-parser'], timeout=600)
         build_id = secrets.token_hex(16)
         bindir = self.home/'builds'/build_id; bindir.mkdir(parents=True)
+        # This random per-home/per-build tag belongs exclusively to this build.
+        # Docker containerd can emit an unroutable config digest in --iidfile;
+        # acquire the local content ID through OUR tag, never a shared alias.
+        # Retain the tag as a reference; setup/down never removes helper images.
+        tag = 'webchat-parser-build:'+self.cfg['owner']+'-'+build_id
+        iidfile = bindir/'parser-image.id'
+        self.run(['docker','build','--iidfile',str(iidfile),'-t',tag,'infra/attachment-parser'], timeout=600)
+        image = parser_image({'parserImage':self.run(['docker','image','inspect','--format','{{.Id}}',tag], capture=True).strip()})
         for app in ('api','worker'):
             self.run(['go','build','-o',str(bindir/('web-'+app)),'./cmd/web-'+app], timeout=300)
         web = bindir / 'web'
@@ -392,8 +409,7 @@ class Driver:
         self.run(['pnpm','--dir',str(web),'install','--frozen-lockfile'], timeout=300)
         self.run(['pnpm','--dir',str(web),'exec','next','build','--webpack'], timeout=600)
         if not (web/'.next/BUILD_ID').is_file(): raise RuntimeError('fresh Next output missing BUILD_ID')
-        image = self.run(['docker','image','inspect','--format','{{.Id}}','webchat-attachment-parser:1'], capture=True).strip()
-        atomic(self.home/'build.json', {'bin':str(bindir), 'web':str(web), 'parserImage':image})
+        atomic(self.home/'build.json', {'bin':str(bindir), 'web':str(web), 'parserImage':image, 'parserBuildTag':tag})
 
     def migrate(self):
         build = json.loads((self.home/'build.json').read_text())

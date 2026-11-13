@@ -66,6 +66,7 @@ func run() error {
 	repo := storage.New(pool)
 	var files *attachments.Store
 	if root := os.Getenv("WEBCHAT_ATTACHMENT_ROOT"); root != "" {
+		// Same trusted immutable helper binding as the API, never per model call.
 		files, err = attachments.NewStore(root, repo, nil)
 		if err != nil {
 			return fmt.Errorf("attachment store: %w", err)

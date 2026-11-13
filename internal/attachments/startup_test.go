@@ -24,7 +24,7 @@ func TestConcurrentStartupWaitsForLayoutPublication(t *testing.T) {
 	defer f.Close()
 	done := make(chan error, 1)
 	go func() {
-		other, e := NewStore(r.root, r, nil)
+		other, e := NewStore(r.root, r, s.parser)
 		if other != nil {
 			other.Close()
 		}

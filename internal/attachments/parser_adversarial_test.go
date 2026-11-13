@@ -94,11 +94,11 @@ func TestParserCancellationRemovesOwnedContainer(t *testing.T) {
 // Exercise the actual image with exactly the production restrictions and retain
 // stderr: the standard-font warning must be resolved, not just verbosity-muted.
 func TestPDFStandardFontWarningAbsent(t *testing.T) {
-	realParser(t)
+	p := realParser(t)
 	req, _ := json.Marshal(map[string]any{"media": "application/pdf", "data": base64.StdEncoding.EncodeToString(pdfFixture("Hello standard fonts")), "extract": true})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "--network", "none", "--memory", "512m", "--memory-swap", "512m", "--pids-limit", "32", "--cpus", "1", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "-i", ParserImage)
+	cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "--network", "none", "--memory", "512m", "--memory-swap", "512m", "--pids-limit", "32", "--cpus", "1", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pull=never", "-i", p.imageID)
 	cmd.Stdin = bytes.NewReader(req)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

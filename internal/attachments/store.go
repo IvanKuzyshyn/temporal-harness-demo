@@ -53,6 +53,15 @@ func NewStore(path string, r Repository, p Parser) (*Store, error) {
 	if !filepath.IsAbs(path) || r == nil {
 		return nil, ErrInvalid
 	}
+	if p == nil {
+		// API and worker bind the trusted startup environment once, never per
+		// request. Explicit Parser injection is for internal/test adapters only.
+		var err error
+		p, err = NewContainerParser(os.Getenv("WEBCHAT_PARSER_IMAGE_ID"))
+		if err != nil {
+			return nil, err
+		}
+	}
 	if e := os.MkdirAll(path, 0700); e != nil {
 		return nil, e
 	}
@@ -61,9 +70,6 @@ func NewStore(path string, r Repository, p Parser) (*Store, error) {
 		return nil, e
 	}
 	s := &Store{root: root, repo: r, parser: p}
-	if p == nil {
-		s.parser = ContainerParser{}
-	}
 	// API and worker may start concurrently. Serialize layout publication too;
 	// an O_EXCL marker is not readable until its contents are written/fsynced.
 	startup, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
