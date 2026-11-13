@@ -37,7 +37,7 @@ The UI extends the [streaming client](web-chat-streaming.md) and uses the
 
 Picker/drop performs count/type/byte checks, then sends one multipart file per
 request. Only a ready response belonging to the original conversation supplies an
-ID. Up to four distinct selections are submitted, at most1,048,576 original bytes
+ID. At most one selected attachment is submitted, at most1,048,576 original bytes
 each. Server signature/parser errors are actionable, not bypassed by extensions.
 A conversation-owned sequential batch completes all captured files after SPA
 navigation, saving only into its original chat's draft. Remounting observes the

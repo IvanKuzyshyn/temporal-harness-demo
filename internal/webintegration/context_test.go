@@ -104,7 +104,7 @@ func TestContextSummaryFailureReducedCoverage(t *testing.T) {
 	m := &contextModel{}
 	m.fail.Store(true)
 	f.start(t, f.repo, m)
-	c := f.conversation(t, "gemma4:e4b")
+	c := f.conversation(t, "qwen3.5:9b")
 	for i := 0; i < 8; i++ {
 		cmd := f.command(t, c, "Remember blue kite.")
 		_, e := f.gateway.Submit(f.ctx, cmd)

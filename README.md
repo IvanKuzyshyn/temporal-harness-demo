@@ -14,7 +14,7 @@ mise run up
 mise run down
 ```
 
-`setup` installs pinned Go/Node/pnpm/Python/Ollama/Temporal CLI dependencies, installs the frozen frontend lockfile, builds the isolated attachment parser and fresh production applications, and ensures **both** exact models are downloaded (multi-GB downloads). It leaves no newly owned service running. Run `down` before rebuilding an already-running application. Existing configuration is never overwritten.
+`setup` installs pinned Go/Node/pnpm/Python/Ollama/Temporal CLI dependencies, installs the frozen frontend lockfile, builds the isolated attachment parser and fresh production applications, and ensures the enabled exact **qwen3.5:9b** model is downloaded (multi-GB if missing). It leaves no newly owned service running. Run `down` before rebuilding an already-running application. Existing configuration is never overwritten.
 
 `up` backgrounds and checks the complete stack, explicit SQL migrations, all worker queues, helper availability, exact model/runtime identity, and served frontend assets. Defaults: browser **http://127.0.0.1:13000**, Temporal UI **http://127.0.0.1:18080**. Use the printed browser origin exactly. Logs are in `.webchat/logs/`; runtime configuration/credentials and ownership receipts are private files under `.webchat/`.
 
@@ -24,11 +24,11 @@ mise run down
 
 The narrow image profile currently requires Ollama **0.40.15**, the recorded exact model digests, and the **MLX/safetensors** runner used in qualification. A stock different runner, even with the same model tag, is **not qualified**: setup/up fail with requalification guidance instead of quietly replacing models. This means the complete currently-qualified image stack is machine/runtime-specific; pinned tools alone do not promise equivalent results on every OS. See [image profile](docs/web-chat-image-profile.md).
 
-Default model **qwen3.5:9b**, alternative **gemma4:e4b**, fixed per conversation. The known larger-image Qwen failures and distinct narrow-profile Qwen parent contradictory refusal/stray `</think>` remain **explicitly deferred, not fixed**. Lifecycle success is not semantic certification. No fallback or weakened context, safety, approval, or resource bounds is authorized. [Qualification and retained evidence](docs/web-chat-qualification.md).
+Only **qwen3.5:9b** is currently enabled, fixed per conversation. The extensible catalog retains model-driven routing; disabled Gemma requests are rejected, not substituted. Installed Gemma files and historical records are not deleted. The known larger-image Qwen failures and distinct narrow-profile Qwen parent contradictory refusal/stray `</think>` remain **explicitly deferred, not fixed**. Lifecycle success is not semantic certification. No fallback or weakened context, safety, approval, or resource bounds is authorized. [Qualification and retained evidence](docs/web-chat-qualification.md).
 
 ## Use the app
 
-Create a conversation, send follow-ups, reopen saved history, or replace/stop the active turn. Attach TXT/Markdown/PDF/DOCX/PNG/JPEG/SVG (up to four, 1,048,576 bytes each). Upload is not consent: **Approve once**, **Approve all** for this versioned toolset/conversation, or **Deny**. Approval can be revoked. Only `web_fetch` and `file_upload` are available; document analysis uses bounded child workflows and parallel chunks. Markdown does not execute raw HTML. No OCR/search/shell service is exposed.
+Create a conversation, send follow-ups, reopen saved history, or replace/stop the active turn. Attach TXT/Markdown/PDF/DOCX/PNG/JPEG/SVG (one per message, up to 1,048,576 bytes). Upload is not consent: **Approve once**, **Approve all** for this versioned toolset/conversation, or **Deny**. Approval can be revoked. Only `web_fetch` and `file_upload` are available; document analysis uses bounded child workflows and parallel chunks. Markdown does not execute raw HTML. No OCR/search/shell service is exposed.
 
 ## Operations and development
 

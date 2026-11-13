@@ -138,7 +138,7 @@ func TestUnavailableHeadDoesNotMonopolizeBatch(t *testing.T) {
 	c, e := r.CreateConversation(ctx, "qwen3.5:9b")
 	require.NoError(t, e)
 	a := enqueue(t, r, c.ID, chat.CommandMessage, "")
-	c2, e := r.CreateConversation(ctx, "gemma4:e4b")
+	c2, e := r.CreateConversation(ctx, "qwen3.5:9b")
 	require.NoError(t, e)
 	b := enqueue(t, r, c2.ID, chat.CommandMessage, "")
 	_, e = p.Exec(ctx, "UPDATE commands SET next_attempt_at=clock_timestamp()+interval '1 hour' WHERE id<>$1 AND id<>$2", a.CommandID, b.CommandID)

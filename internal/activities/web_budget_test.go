@@ -100,7 +100,7 @@ func TestChatStepEvictsWholeOptionalExchangesForWebOverhead(t *testing.T) {
 }
 func TestChatStepRetainsNewestFittingWholeExchangeAndProvenance(t *testing.T) {
 	ref := chat.TurnRef{TurnID: chat.TurnID(uuid.NewString())}
-	repo := &budgetWebRepository{turn: chat.Turn{Model: "gemma4:e4b", Text: "correction", ReplacementTarget: chat.TurnID(uuid.NewString()), OriginalText: "original prompt", OriginalAttachmentIDs: []chat.AttachmentID{chat.AttachmentID(uuid.NewString())}}, history: []chat.Exchange{{User: "newest question", Assistant: "newest answer"}, {User: strings.Repeat("u", 9000), Assistant: strings.Repeat("a", 2000)}}}
+	repo := &budgetWebRepository{turn: chat.Turn{Model: "qwen3.5:9b", Text: "correction", ReplacementTarget: chat.TurnID(uuid.NewString()), OriginalText: "original prompt", OriginalAttachmentIDs: []chat.AttachmentID{chat.AttachmentID(uuid.NewString())}}, history: []chat.Exchange{{User: "newest question", Assistant: "newest answer"}, {User: strings.Repeat("u", 9000), Assistant: strings.Repeat("a", 2000)}}}
 	model := &budgetWebModel{}
 	a := ChatActivities{Repository: repo, Model: model}
 	_, err := a.ChatStep(context.Background(), ref)

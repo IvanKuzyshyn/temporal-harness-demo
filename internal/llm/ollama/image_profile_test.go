@@ -27,12 +27,9 @@ func profileRequest(model string) llm.Request {
 	return llm.Request{Model: model, ContextWindow: 16384, MaxOutputTokens: 2000, MaxResponseBytes: 16000, Messages: []llm.Message{{Role: "system", Content: profileSystem}, {Role: "user", Content: "Translate the image into English.", Images: []llm.ImageReference{ref}}}, Image: &llm.ResolvedImage{Profile: llm.NarrowImageProfile, Reference: ref, PNG: pngData.Bytes()}}
 }
 func TestNarrowImageAdapterPositiveAndAdmission(t *testing.T) {
-	for _, model := range []string{"qwen3.5:9b", "gemma4:e4b"} {
+	for _, model := range []string{"qwen3.5:9b"} {
 		t.Run(model, func(t *testing.T) {
 			digest := "d63f830f28d515fefea546f213fca7a75e9dd5176ef51a6deabc952d1c99a911"
-			if model == "gemma4:e4b" {
-				digest = "eb2177adf7646d15faead94fdad6d3e170dc8015653418a3b7d5d52a6380be5b"
-			}
 			var calls atomic.Int32
 			version := "0.40.15"
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

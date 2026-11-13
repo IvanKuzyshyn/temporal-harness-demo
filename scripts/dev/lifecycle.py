@@ -27,8 +27,7 @@ SERVICES = ['ollama', 'postgres', 'temporal-schema', 'temporal', 'temporal-names
 DOCKER_SERVICES = SERVICES[1:6]
 # Close upstream SSE before Next's production server waits for open requests.
 STOP_ORDER = ['api', 'web', 'worker', 'temporal-ui', 'temporal-namespace', 'temporal', 'temporal-schema', 'postgres', 'ollama']
-MODELS = {'qwen3.5:9b': 'd63f830f28d515fefea546f213fca7a75e9dd5176ef51a6deabc952d1c99a911',
-          'gemma4:e4b': 'eb2177adf7646d15faead94fdad6d3e170dc8015653418a3b7d5d52a6380be5b'}
+MODELS = {'qwen3.5:9b': 'd63f830f28d515fefea546f213fca7a75e9dd5176ef51a6deabc952d1c99a911'}
 
 
 def atomic(path, value):
@@ -319,7 +318,7 @@ class Driver:
 
     def models(self, pull=False):
         if pull:
-            print('Ensuring both exact models (large multi-GB downloads); existing tags/configuration are not replaced.', flush=True)
+            print('Ensuring enabled exact models (Qwen; multi-GB download if missing); existing tags/configuration are not replaced.', flush=True)
         data = json.loads(http(self.env['WEBCHAT_OLLAMA_URL']+'/api/tags'))
         present = {m['name']: m for m in data['models']}
         for name, digest in MODELS.items():

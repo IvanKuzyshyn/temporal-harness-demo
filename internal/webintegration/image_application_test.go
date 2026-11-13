@@ -85,7 +85,7 @@ func TestImageApplicationAPIAndRestart(t *testing.T) {
 		defer evidence.Close()
 	}
 	fixtures := imageFixtures(t)
-	for _, model := range []string{"qwen3.5:9b", "gemma4:e4b"} {
+	for _, model := range chat.EnabledModels() {
 		for _, ext := range []string{"png", "jpg", "svg"} {
 			t.Run(model+"/"+ext, func(t *testing.T) {
 				f := setup(t)

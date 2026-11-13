@@ -10,7 +10,7 @@ import (
 )
 
 func TestDocumentRequestBudgetBeforeInference(t *testing.T) {
-	for _, model := range []string{"qwen3.5:9b", "gemma4:e4b"} {
+	for _, model := range chat.EnabledModels() {
 		req, e := documentRequest(model, strings.Repeat("i", 4096), strings.Repeat("x", 4000))
 		require.NoError(t, e)
 		require.Equal(t, model, req.Model)

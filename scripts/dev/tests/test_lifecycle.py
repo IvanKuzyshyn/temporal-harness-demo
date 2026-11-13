@@ -39,6 +39,28 @@ class LifecycleTests(unittest.TestCase):
         app = self.m.Lifecycle(self.home, driver)
         return app, driver
 
+    def test_only_enabled_qwen_is_required_in_fresh_and_existing_config(self):
+        qwen = {'name': 'qwen3.5:9b', 'digest': 'd63f830f28d515fefea546f213fca7a75e9dd5176ef51a6deabc952d1c99a911', 'details': {'format': 'safetensors', 'runner': 'mlx'}}
+        for existing in (False, True):
+            d = self.m.Driver(self.home)
+            if existing:
+                cfg = json.loads((self.home/'config.json').read_text())
+                cfg['models'] = ['qwen3.5:9b', 'gemma4:e4b']
+                self.m.atomic(self.home/'config.json', cfg)
+                d = self.m.Driver(self.home)
+            def http(url):
+                return json.dumps({'models': [qwen]} if url.endswith('/api/tags') else {'version': '0.40.15'}).encode()
+            def no_download(*args, **kwargs):
+                self.fail('existing enabled model must not cause a download')
+            d.run = no_download
+            with patch.object(self.m, 'http', http):
+                d.models(pull=False)
+                d.models(pull=True)
+                qwen['digest'] = 'wrong'
+                with self.assertRaisesRegex(RuntimeError, 'digest'):
+                    d.models()
+                qwen['digest'] = 'd63f830f28d515fefea546f213fca7a75e9dd5176ef51a6deabc952d1c99a911'
+
     def test_build_receipt_uses_owned_tag_not_shared_alias_or_unroutable_iid(self):
         d = self.m.Driver(self.home)
         image_a, image_b = 'sha256:'+'a'*64, 'sha256:'+'b'*64

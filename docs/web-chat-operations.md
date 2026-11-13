@@ -7,7 +7,7 @@
 Install mise and Docker/Compose yourself, trust this checkout (`mise trust`), and start the Docker daemon. `mise run setup` installs the pinned tools from `mise.toml`, including Python3.12.16 for the standard-library lifecycle driver. No Python packages are required. macOS/Linux process identity backends are supported. Complete model/image qualification currently requires the recorded Ollama0.40.15 MLX/safetensors runtime and exact model digests; other runners need explicit requalification, not an automatic fallback.
 
 ```sh
-mise run setup  # pinned dependencies, frozen pnpm, parser + fresh app build, both exact models
+mise run setup  # pinned dependencies, frozen pnpm, parser + fresh app build, enabled exact Qwen model
 mise run up     # background services; migrations, models, helper and health gates
 mise run down   # stop owned services only, preserve all data
 ```
@@ -31,7 +31,7 @@ mise run up
 mise run down
 ```
 
-Default ports: Postgres15432, Temporal17233, Temporal UI18080, private API18081, browser13000, Ollama11434. Collisions fail; never kill by port. Do not use a second home pointed at the first home's database, attachments or volumes. Existing Ollama must have the exact compatible runtime/models; an incompatible listening endpoint is never killed/reconfigured. Model downloads remain in Ollama's own configured model directory (normally `~/.ollama/models`) and are never removed by lifecycle commands.
+Default ports: Postgres15432, Temporal17233, Temporal UI18080, private API18081, browser13000, Ollama11434. Collisions fail; never kill by port. Do not use a second home pointed at the first home's database, attachments or volumes. Existing Ollama must have the exact compatible runtime and enabled Qwen model (Gemma is not required even for previously created lifecycle homes); an incompatible listening endpoint is never killed/reconfigured. Model downloads remain in Ollama's own configured model directory (normally `~/.ollama/models`) and are never removed by lifecycle commands.
 
 ## Persistent resources and ownership
 

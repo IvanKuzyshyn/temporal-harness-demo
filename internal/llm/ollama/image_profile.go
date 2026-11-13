@@ -22,8 +22,6 @@ func imageIdentity(model string) (digest, renderer string, imageTokens int) {
 	switch model {
 	case "qwen3.5:9b":
 		return "d63f830f28d515fefea546f213fca7a75e9dd5176ef51a6deabc952d1c99a911", "qwen3.5", 102
-	case "gemma4:e4b":
-		return "eb2177adf7646d15faead94fdad6d3e170dc8015653418a3b7d5d52a6380be5b", "gemma4-small", 87
 	}
 	return "", "", 0
 }

@@ -42,7 +42,7 @@ func upload(t *testing.T, h http.Handler, c, name, content string) *httptest.Res
 	h.ServeHTTP(out, r)
 	return out
 }
-func TestUploadFourPerMessage(t *testing.T) {
+func TestUploadOnePerMessage(t *testing.T) {
 	h, c := attachmentHandler(t)
 	ids := []string{}
 	for i := 0; i < 5; i++ {
@@ -58,15 +58,18 @@ func TestUploadFourPerMessage(t *testing.T) {
 		require.NotContains(t, w.Body.String(), "secret original")
 		require.NotContains(t, w.Body.String(), "storageKey")
 	}
-	for _, n := range []int{4, 5} {
+	for _, n := range []int{1, 2} {
 		b, _ := json.Marshal(map[string]any{"requestId": uuid.NewString(), "attachmentIds": ids[:n]})
 		w := request(h, "POST", "/conversations/"+c+"/messages", string(b), nil)
-		if n == 4 {
+		if n == 1 {
 			require.Equal(t, 202, w.Code, w.Body.String())
 		} else {
 			require.Equal(t, 400, w.Code, w.Body.String())
 		}
 	}
+	b, _ := json.Marshal(map[string]any{"requestId": uuid.NewString(), "attachmentIds": ids[:2], "expectedActiveTurnId": uuid.NewString()})
+	w := request(h, "POST", "/conversations/"+c+"/replace", string(b), nil)
+	require.Equal(t, 400, w.Code, w.Body.String())
 }
 func TestAttachmentDownloadAndAPIValidation(t *testing.T) {
 	h, c := attachmentHandler(t)

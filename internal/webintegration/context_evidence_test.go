@@ -51,7 +51,7 @@ func TestContextCanonicalEvidenceSurvivesForgetfulSummaryAndStoreRestart(t *test
 	}
 	runner := start()
 	defer func() { runner.Close() }()
-	c := f.conversation(t, "gemma4:e4b")
+	c := f.conversation(t, "qwen3.5:9b")
 	approved, e := store.Put(f.ctx, c.ID, strings.NewReader("Document containing an amber observation."), attachments.UploadMetadata{Name: "source.txt", MediaType: "text/plain"})
 	require.NoError(t, e)
 	denied, e := store.Put(f.ctx, c.ID, strings.NewReader("UNAPPROVED SECRET MUST NOT ENTER MEMORY"), attachments.UploadMetadata{Name: "no-access.txt", MediaType: "text/plain"})

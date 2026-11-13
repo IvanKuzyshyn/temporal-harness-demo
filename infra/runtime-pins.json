@@ -19,8 +19,7 @@
     "temporalUI": "temporalio/ui:2.58.1@sha256:ac3c13eddb4547d830991bb5eee93a5d97140134522b7297fdb2be1fe25ef925"
   },
   "models": {
-    "qwen3.5:9b": { "digest": "d63f830f28d515fefea546f213fca7a75e9dd5176ef51a6deabc952d1c99a911", "default": true },
-    "gemma4:e4b": { "digest": "eb2177adf7646d15faead94fdad6d3e170dc8015653418a3b7d5d52a6380be5b", "default": false }
+    "qwen3.5:9b": { "digest": "d63f830f28d515fefea546f213fca7a75e9dd5176ef51a6deabc952d1c99a911", "default": true }
   },
   "parsers": {
     "pdfjs-dist": { "version": "6.5.438", "license": "Apache-2.0", "purpose": "embedded PDF text only" },

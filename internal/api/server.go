@@ -204,7 +204,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			models := []any{}
-			for _, id := range []string{"qwen3.5:9b", "gemma4:e4b"} {
+			for _, id := range chat.EnabledModels() {
 				models = append(models, map[string]any{"id": id, "default": id == "qwen3.5:9b", "availability": "unknown", "capabilities": map[string]any{"text": "unverified", "tools": "unverified", "images": "unverified", "imageAdmissionQualified": false}})
 			}
 			respond(w, 200, map[string]any{"models": models})

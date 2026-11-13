@@ -14,7 +14,7 @@ import (
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/chat"
 )
 
-// Exactly one original per upload; the admitted message independently caps four
+// Exactly one original per upload; the admitted message independently caps one
 // owned ready IDs. This reader verifies the multipart tail before Store commits.
 type singleFileReader struct {
 	part      *multipart.Part

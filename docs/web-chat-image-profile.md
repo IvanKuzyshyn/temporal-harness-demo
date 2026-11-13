@@ -2,6 +2,10 @@
 
 **Supported profile:** `ollama-0.40.15-mlx-640x160-v1`. This is a source-bounded single-image application path, **not arbitrary-image qualification**. Global `imageAdmissionQualified:false`, the original larger-Qwen failures, and the user's deferral of that investigation remain unchanged. No fallback or OCR is used.
 
+## Current enabled catalog (November 13)
+
+Only `qwen3.5:9b` is enabled for new chat, bounded text and image admission. Gemma is rejected without substitution or download. Qwen's exact digest, 102-image-token bound and all safety gates remain unchanged. The Gemma derivation and both-model observations below are retained historical evidence, not current availability or new certification.
+
 ## Admission contract
 
 1. Upload is not authorization. `PrepareDocumentAnalysis` resolves only authorized metadata and durably binds the profile in the action's manifest. `AnalyzeAttachmentImage` registers each physical body in the existing invocation ledger, verifies immutable scope/model/instruction/manifest, and validates the mandatory request **before original resolution**. It adopts an already persisted result without rereading bytes. Otherwise `Store.ResolveImage` independently authorizes the exact owned attachment/checksum again before content access.
