@@ -25,12 +25,34 @@ function Picker({ initial = [] }: { initial?: SelectedAttachment[] }) {
 }
 const fetcher = vi.fn();
 beforeEach(() => {
+  localStorage.clear();
   vi.stubGlobal("fetch", fetcher);
   fetcher.mockReset();
 });
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+it("full reload without a live batch owner exposes remaining file names for recovery, never pretends they are ready", () => {
+  localStorage.setItem(
+    "chat.upload-batch.a",
+    JSON.stringify({
+      active: true,
+      remaining: ["two.txt", "three.txt"],
+      errors: [],
+    }),
+  );
+  render(<Picker initial={[{ id: "ready-one", name: "one.txt" }]} />);
+  expect(screen.getByRole("alert").textContent).toMatch(
+    /interrupted.*two.txt, three.txt.*Reselect/,
+  );
+  expect(
+    screen
+      .getByRole("region", { name: "Attachments" })
+      .getAttribute("aria-busy"),
+  ).toBe("false");
+  expect(screen.queryByRole("button", { name: "Remove two.txt" })).toBeNull();
+  expect(fetcher).not.toHaveBeenCalled();
 });
 it("validates exact byte and count limits for picker and drop before upload", async () => {
   render(<Picker />);

@@ -39,7 +39,12 @@ Picker/drop performs count/type/byte checks, then sends one multipart file per
 request. Only a ready response belonging to the original conversation supplies an
 ID. Up to four distinct selections are submitted, at most1,048,576 original bytes
 each. Server signature/parser errors are actionable, not bypassed by extensions.
-A completed upload after navigation saves only into its original chat's draft.
+A conversation-owned sequential batch completes all captured files after SPA
+navigation, saving only into its original chat's draft. Remounting observes the
+same active lock/progress; a late error is retained and does not discard later
+files. Completed ready selections and errors survive reload. A full page reload
+cannot recover in-memory File bytes: unfinished names show explicit interrupted /
+reselect guidance (an in-flight request may already have saved an original).
 Removing a selection clears local selection only; originals/history are not deleted.
 
 Saved messages expose their canonical attachment IDs with **Attach again**.
@@ -61,6 +66,13 @@ pinned Ollama0.40.15/MLX/model digests, with no optional image history/tools. Th
 UI exposes these constraints and never rewrites a rejected instruction. General
 `imageAdmissionQualified:false`, known larger-Qwen limitations, no OCR/fallback,
 and lossy context warnings remain. Image error outcomes are not translations.
+Deliberate cancellation gets neutral saved-attachment guidance, not format/runtime
+troubleshooting; actual failures keep actionable guidance and native result data.
+
+**R2 remains OPEN:** the retained narrow-profile Qwen parent contradicts the
+correct child result. Neither prior larger-image deferment nor successful tool
+execution/SQL completion/Gemma output closes it. See the
+[bounded diagnostic](web-chat-r2-diagnostic.md).
 
 ## Verification
 
@@ -77,7 +89,11 @@ PLAYWRIGHT_BROWSERS_PATH=/absolute/owned/browser-cache mise exec -- pnpm --dir w
 `tests/chat.spec.ts` routes deterministic HTTP/SSE fixtures through the actual
 React app; it is not provider evidence. `tests/chat-live.spec.ts` opts into an
 actual executable API/worker/Next stack with isolated Postgres/Temporal and the
-existing Ollama provider. No model fixture is used in the live tests. It verifies
+existing Ollama provider. Both exact models have separate full-final acceptance
+assertions; these provider-invoking cases were **not run** in the fix1 diagnostic
+checkpoint. Each workflow requires multiple physical provider invocations and is
+not permitted by a one-invocation diagnostic budget. No model fixture is used in
+these live qualification cases. They verify
 real approval/reload/revoke/deny, image follow-up, replacement priority and stale
 Stop/Replace races. Race requests are held at the browser boundary then continued
 to the real API, not fulfilled with fabricated receipts.
@@ -91,15 +107,24 @@ caffeinate -is env WEBCHAT_BROWSER_RUNTIME_DIR="$R" \
   GOFLAGS='-run=^TestStreamBrowserRuntime$' bash scripts/test-web-integration.sh stream
 ```
 
-Read `$R/ready.json`, then run (requires both exact models and the existing pinned
-`webchat-attachment-parser:1` image; see attachment setup documentation):
+Read `$R/ready.json`, then run the **model-free fix1 cases only** (the runtime
+requires the existing pinned `webchat-attachment-parser:1` image; see attachment
+setup documentation). Upload responses are actual API responses; tests hold their
+delivery while navigating/remounting. The Stop case cancels at attachment
+preflight approval, before any provider invocation:
 
 ```sh
 WEBCHAT_TEST_BROWSER_URL=http://127.0.0.1:PORT \
 WEBCHAT_BROWSER_EVIDENCE=/absolute/owned/evidence \
 PLAYWRIGHT_BROWSERS_PATH=/absolute/owned/browser-cache \
-  mise exec -- pnpm --dir web exec playwright test
+  mise exec -- pnpm --dir web exec playwright test tests/attachment-navigation-live.spec.ts
 ```
+
+Running `tests/chat-live.spec.ts` or the full suite **with the live URL set** also
+runs provider-invoking workflows. Do that only under a separately authorized
+qualification plan, never as this bounded diagnostic checkpoint or as a retry
+until the retained semantic failure disappears. Fix1 used zero fresh physical
+provider invocations.
 
 The interactive runtime has a12-minute deadline. `touch "$R/done"` signals only
 its owner to stop its children and uniquely named test services. Never stop shared

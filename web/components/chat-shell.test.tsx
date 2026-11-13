@@ -565,6 +565,115 @@ it("late upload stays selected in its original chat after navigation without con
   await act(async () => Source.snapshot());
   expect(screen.getByText("later.txt")).toBeTruthy();
 });
+it.each([false, true])(
+  "multi-file navigation retains the whole batch and late errors (failure=%s), including remount while active",
+  async (failSecond) => {
+    const pending: ((r: Response) => void)[] = [];
+    const names: string[] = [];
+    upload = (form) =>
+      new Promise((resolve) => {
+        names.push((form.get("file") as File).name);
+        pending.push(resolve);
+      });
+    const ready = (name: string) =>
+      Response.json({
+        attachment: {
+          id: "ready-" + name,
+          conversationId: "a",
+          name,
+          mediaType: "text/plain",
+          size: 3,
+          checksum: "hash",
+          status: "ready",
+        },
+      });
+    const view = await mount();
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "batch draft" },
+    });
+    fireEvent.change(screen.getByLabelText("Attach files"), {
+      target: {
+        files: ["one.txt", "two.txt", "three.txt", "four.txt"].map(
+          (n) => new File(["abc"], n),
+        ),
+      },
+    });
+    expect(names).toEqual(["one.txt"]); // one request at a time
+    view.rerender(<ChatShell conversationId="b" />);
+    await act(async () => pending[0](ready("one.txt")));
+    await waitFor(() => expect(names).toEqual(["one.txt", "two.txt"]));
+    expect(screen.queryByText("one.txt")).toBeNull();
+    expect(
+      screen
+        .getByRole("region", { name: "Attachments" })
+        .getAttribute("aria-busy"),
+    ).toBe("false");
+    // Complete/fail the second file while unmounted, then reopen during file three.
+    await act(async () =>
+      pending[1](
+        failSecond
+          ? Response.json(
+              { error: { code: "invalid_signature_or_unreadable_file" } },
+              { status: 422 },
+            )
+          : ready("two.txt"),
+      ),
+    );
+    await waitFor(() => expect(names).toHaveLength(3));
+    expect(screen.queryByRole("alert")).toBeNull();
+    view.rerender(<ChatShell conversationId="a" />);
+    await act(async () => Source.snapshot());
+    expect(
+      screen
+        .getByRole("region", { name: "Attachments" })
+        .getAttribute("aria-busy"),
+    ).toBe("true");
+    expect(
+      (screen.getByLabelText("Attach files") as HTMLInputElement).disabled,
+    ).toBe(true);
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Send message",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    fireEvent.drop(screen.getByRole("region", { name: "Attachments" }), {
+      dataTransfer: { files: [new File(["extra"], "extra.txt")] },
+    });
+    expect(names).toHaveLength(3); // remount cannot start an overlapping batch
+    if (failSecond)
+      expect(screen.getByRole("alert").textContent).toMatch(
+        /two.txt.*Renaming/s,
+      );
+    await act(async () => pending[2](ready("three.txt")));
+    await waitFor(() => expect(names).toHaveLength(4));
+    await act(async () => pending[3](ready("four.txt")));
+    const storedNames = JSON.parse(
+      localStorage.getItem("chat.attachments.a")!,
+    ).map((a: { name: string }) => a.name);
+    expect(storedNames).toEqual(
+      failSecond
+        ? ["one.txt", "three.txt", "four.txt"]
+        : ["one.txt", "two.txt", "three.txt", "four.txt"],
+    );
+    expect(
+      screen
+        .getByRole("region", { name: "Attachments" })
+        .getAttribute("aria-busy"),
+    ).toBe("false");
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe(
+      "batch draft",
+    );
+    view.unmount();
+    await mount();
+    if (failSecond)
+      expect(screen.getByRole("alert").textContent).toMatch(
+        /two.txt.*Renaming/s,
+      );
+    else expect(screen.queryByRole("alert")).toBeNull();
+  },
+);
 it.each(["expired", "revision", "toolset"])(
   "approval %s cannot authorize a stale scope",
   async (kind) => {
@@ -583,8 +692,7 @@ it.each(["expired", "revision", "toolset"])(
       "Deny",
     ]) {
       expect(
-        (screen.getByRole("button", { name }) as HTMLButtonElement)
-          .disabled,
+        (screen.getByRole("button", { name }) as HTMLButtonElement).disabled,
       ).toBe(true);
     }
     expect(sent).toHaveLength(0);

@@ -1,27 +1,16 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import type { Attachment, SelectedAttachment } from "../lib/contracts";
-import { APIError, save, saved } from "../lib/api";
+import type { SelectedAttachment } from "../lib/contracts";
+import { saved } from "../lib/api";
+import {
+  attachmentTypes,
+  idleBatch,
+  uploadBatch,
+  uploadErrors,
+  uploadFiles,
+} from "../lib/attachment-batches";
 
 const accept = ".txt,.md,.markdown,.pdf,.docx,.png,.jpg,.jpeg,.svg";
-const types = new Set([
-  "text/plain",
-  "text/markdown",
-  "application/pdf",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "image/png",
-  "image/jpeg",
-  "image/svg+xml",
-]);
-const uploadErrors: Record<string, string> = {
-  file_exceeds_1048576_bytes:
-    "Each file must be at most 1,048,576 bytes (1 MiB).",
-  invalid_signature_or_unreadable_file:
-    "File content is unsupported or unreadable. Use valid UTF-8 TXT/Markdown, text PDF, DOCX, PNG/JPEG, or a supported static SVG. Renaming a file does not convert it.",
-  attachment_store_unavailable:
-    "Attachment storage is unavailable. Start the configured attachment store and parser, then try again.",
-  one_file_required: "Upload exactly one file per request.",
-};
 export function AttachmentPicker({
   id,
   selected,
@@ -36,21 +25,36 @@ export function AttachmentPicker({
   onBusy: (busy: boolean) => void;
 }) {
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [batch, setBatch] = useState(idleBatch);
+  const busy = batch.active;
   const [drag, setDrag] = useState(false);
-  const alive = useRef(true),
-    locked = useRef(false);
-  const current = useRef(selected);
-  current.current = selected;
+  const current = useRef({ selected, onChange, onBusy });
+  current.current = { selected, onChange, onBusy };
   useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
+    const refresh = () => {
+      const state = uploadBatch(id);
+      setBatch(state);
+      current.current.onBusy(state.active);
     };
-  }, []);
+    const progress = (event: Event) => {
+      if ((event as CustomEvent<string>).detail === id) refresh();
+    };
+    const selection = (event: Event) => {
+      if ((event as CustomEvent<string>).detail !== id) return;
+      const ready = saved<SelectedAttachment[]>("chat.attachments." + id);
+      if (ready) current.current.onChange(ready);
+    };
+    refresh();
+    window.addEventListener("chat-upload-batch", progress);
+    window.addEventListener("chat-attachments", selection);
+    return () => {
+      window.removeEventListener("chat-upload-batch", progress);
+      window.removeEventListener("chat-attachments", selection);
+    };
+  }, [id]);
   async function add(files: File[]) {
-    if (disabled || locked.current || !files.length) return;
-    if (files.length + current.current.length > 4) {
+    if (disabled || uploadBatch(id).active || !files.length) return;
+    if (files.length + current.current.selected.length > 4) {
       setError(
         "At most four attachments per message. Remove a selection before adding more.",
       );
@@ -59,7 +63,7 @@ export function AttachmentPicker({
     const invalid = files.find(
       (f) =>
         f.size > 1048576 ||
-        (!types.has(f.type) &&
+        (!attachmentTypes.has(f.type) &&
           !/\.(txt|md|markdown|pdf|docx|png|jpe?g|svg)$/i.test(f.name)),
     );
     if (invalid) {
@@ -70,75 +74,12 @@ export function AttachmentPicker({
       );
       return;
     }
-    locked.current = true;
-    setBusy(true);
-    onBusy(true);
     setError("");
-    try {
-      for (const file of files) {
-        const form = new FormData();
-        form.set("file", file);
-        const res = await fetch(`/api/conversations/${id}/attachments`, {
-          method: "POST",
-          body: form,
-          cache: "no-store",
-        });
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new APIError(res.status, data.error?.code ?? "upload_failed");
-        }
-        const { attachment: a } = (await res.json()) as {
-          attachment: Attachment;
-        };
-        if (
-          !a ||
-          a.conversationId !== id ||
-          a.status !== "ready" ||
-          !a.id ||
-          !types.has(a.mediaType) ||
-          a.size > 1048576
-        )
-          throw new Error(
-            "Upload did not return a ready attachment for this conversation.",
-          );
-        // Persist only under the original conversation, even after navigation.
-        // Merge the current saved selection, not a stale mounted array.
-        const key = "chat.attachments." + id;
-        const prior = saved<SelectedAttachment[]>(key) ?? current.current;
-        const next = [
-          ...prior.filter((v) => v.id !== a.id),
-          { id: a.id, name: a.name, mediaType: a.mediaType },
-        ];
-        if (next.length > 4)
-          throw new Error(
-            "Upload is saved, but the draft already has four attachments. Remove a selection before uploading more.",
-          );
-        if (!save(key, next))
-          throw new Error(
-            "Upload is saved, but browser storage could not retain its selection. Keep this page open and retry after restoring storage.",
-          );
-        window.dispatchEvent(
-          new CustomEvent("chat-attachments", { detail: id }),
-        );
-        if (!alive.current) return;
-        current.current = next;
-        onChange(next);
-      }
-    } catch (e) {
-      if (alive.current)
-        setError(
-          e instanceof APIError
-            ? (uploadErrors[e.code] ??
-                `Upload failed: ${e.message}. Try again; no model permission was granted.`)
-            : (e as Error).message,
-        );
-    } finally {
-      locked.current = false;
-      if (alive.current) {
-        setBusy(false);
-        onBusy(false);
-      }
-    }
+    // Only pre-dispatch storage failure can reject; running batches own all
+    // subsequent progress/errors independently of this mounted presentation.
+    void uploadFiles(id, files, current.current.selected).catch((e) =>
+      setError((e as Error).message),
+    );
   }
   return (
     <section
@@ -193,12 +134,13 @@ export function AttachmentPicker({
       )}
       {busy && (
         <p role="status">
-          Uploading and validating files. Wait before sending.
+          Uploading and validating files ({batch.remaining.length} remaining).
+          Wait before sending.
         </p>
       )}
-      {error && (
+      {(error || batch.errors.length > 0) && (
         <p role="alert" className="warning">
-          {error}
+          {[error, ...batch.errors].filter(Boolean).join(" ")}
         </p>
       )}
       {selected.length > 0 && (

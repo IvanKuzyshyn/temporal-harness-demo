@@ -10,6 +10,7 @@ export function ToolDetails({ tool: t }: { tool: Tool }) {
         : undefined,
   );
   const error = typeof result?.error === "string" ? result.error : "";
+  const cancelled = t.status === "cancelled" || error === "cancelled";
   return (
     <section className="tool-result">
       <p>
@@ -19,7 +20,14 @@ export function ToolDetails({ tool: t }: { tool: Tool }) {
           : ""}
         {error ? ` · Source error: ${error}` : ""}
       </p>
+      {t.name === "file_upload" && cancelled && (
+        <p>
+          Analysis cancelled. No new result was produced; the saved attachment
+          remains available.
+        </p>
+      )}
       {t.name === "file_upload" &&
+        !cancelled &&
         (t.status === "failed" ||
           (error && error !== "denied" && error !== "expired")) && (
           <p className="warning">
