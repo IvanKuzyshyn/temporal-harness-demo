@@ -99,7 +99,8 @@ func TestRetainedNarrowQwenParentPathDiagnostic(t *testing.T) {
 	defer server.Close()
 	model, err := ollama.New(server.URL)
 	require.NoError(t, err)
-	a := ChatActivities{Repository: repo, Model: model}
+	observed := &parentRequestRecorder{Model: model}
+	a := ChatActivities{Repository: repo, Model: observed}
 	ref.Step = 1
 	_, err = a.ChatStep(context.Background(), ref)
 	require.NoError(t, err)
@@ -157,7 +158,7 @@ func TestRetainedNarrowQwenParentPathDiagnostic(t *testing.T) {
 	}
 	if dir := os.Getenv("WEBCHAT_R2_EVIDENCE"); dir != "" {
 		require.NoError(t, os.MkdirAll(dir, 0700))
-		data, e := json.MarshalIndent(map[string]any{"kind": "source reconstruction and synthetic HTTP/parser fixtures, NOT original provider capture", "wire": json.RawMessage(wireBytes), "canonicalToolJSON": string(encodedTool), "rendered": rendered, "syntheticNDJSONChunks": chunks, "parserCharacterization": parserResults, "saved": repo.saved}, "", "  ")
+		data, e := json.MarshalIndent(map[string]any{"kind": "source reconstruction and synthetic HTTP/parser fixtures, NOT original provider capture", "wire": json.RawMessage(wireBytes), "request": observed.Request, "canonicalToolJSON": string(encodedTool), "rendered": rendered, "syntheticNDJSONChunks": chunks, "parserCharacterization": parserResults, "saved": repo.saved}, "", "  ")
 		require.NoError(t, e)
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "parent-reconstruction.json"), data, 0600))
 	}

@@ -68,3 +68,40 @@ mise exec -- go test -race -p 1 ./internal/activities -run '^TestRetainedNarrowQ
 ```
 
 For model-free real upload/navigation/Stop verification, use the explicit test selection in [web-chat-interactions.md](web-chat-interactions.md). Do not run the full live suite under this checkpoint's budget.
+
+## Capture1 — separately authorized parent-boundary observations
+
+The controller subsequently authorized **one physical parent inference per exact model**, not an image workflow. A predeclaration was appended to canonical `task-12-r2-diagnostic.md` at **2026-11-13T10:54:51Z**, before either call. The original zero-call checkpoint above remains historical; this new capture used **Qwen1 + Gemma1**, then stopped. No returned tools were executed; no image-child, attachment read, workflow, retry or alternative prompt/parameter was used. Historical **R2 remains OPEN**.
+
+### Frozen inputs and current metadata
+
+Full outgoing bodies, metadata and results are under canonical `task-12-r2-capture1-evidence/`. The actual activity/context builder exports an `llm.Request` through a test-only recorder. Preparation runs the normal adapter against local metadata/response fixtures, freezing its exact serialized body. Qwen JSON equals the previous reconstruction's wire. Gemma is equivalent post-tool input differing only by model, explicitly **comparative**, not a claimed original Gemma request. Neither is the missing original live wire.
+
+- Qwen intended/outgoing SHA256: `a3a1cb169b90a3eb3b6074195c751c51ec0921081319c5b72a5e74b48d9da91d`.
+- Gemma intended/outgoing SHA256: `41cf18d8219c5039739e46e6064f2a97a9d36724c5e3909fe133f6567163cc8f`.
+- Full original instruction, four messages, complete canonical tool result and tool identities/schemas retained. MLX, streaming, num_ctx16384, num_predict2000, truncate=false, shift=false, think omitted, adapter response cap65536. Conservative input bounds Qwen3356/Gemma2588 fit the unchanged budget. No image bytes are included.
+- Read-only version/tags/show metadata confirmed Ollama0.40.15 and both exact pinned safetensors/MLX digests. Both show **thinking.default=true** with [false,true] supported. Qwen renderer/parser=qwen3.5; Gemma renderer=gemma4-small/parser=gemma4. Full sampling defaults are preserved in show snapshots and the predeclaration; none were changed. Each adapter call rechecked version/tags, matching the frozen metadata bytes.
+
+### Observed results, not qualification
+
+**Qwen:** one HTTP200, 10:56:05.518681Z–10:56:17.582994Z (12,064ms). Complete raw NDJSON584 bytes/3 records; separate thinking0 bytes, content11 bytes=`hello world`, no tool calls, done=true/reason=stop, provider prompt count750/eval count4. Raw SHA256 `700bfd7b105244055a901bcdc4589c313b4ca1cb6284d0634b8e1d543ebbf377`. Adapter content exactly equals concatenated raw provider Content. Existing unchanged full-final semantic assertion: **PASS for this observation only**.
+
+**Gemma:** one HTTP200, 10:57:06.840908Z–10:57:13.448351Z (6,607ms). Complete raw NDJSON8798 bytes/61 records; 58 thinking chunks/269 thinking bytes, content11 bytes=`hello world`, no tool calls, done=true/reason=stop, provider prompt count514/eval count64. Raw SHA256 `53c5f18f37eab5e090f5d863fa496eb6e18e45f55c438ee72578a1cf34b20ac4`. Adapter excludes the separate thinking and exactly preserves provider Content. Same unchanged semantic assertion: **PASS for this comparative observation only**.
+
+Each model directory contains `intended-request.json`, `predeclared.sha256`, durable `invocation.json`, `outgoing-request.json`, `observed-{version,tags}.json`, `provider.ndjson`, `http-result.json`, `decoded.json` (including individual thinking/content/tool-call/done/metrics fields), `thinking.txt`, `content.txt`, `adapter-result.json`, and `semantic-assertion.json`. `capture-audit.json` verifies exact body hashes, metadata equality, terminal done, no tools, complete HTTP bodies and byte-identical adapter content. No captured failure/result was discarded. Historical failed evidence remains immutable.
+
+### Supported conclusion and next decision
+
+No current request-default/configuration or application parsing discrepancy was observed. The current metadata supports the reconstruction's default-thinking assumption. Qwen emitting no separate thinking **does not prove thinking was disabled or misconfigured**: metadata/defaults and emitted reasoning text are different observations, and raw generated tokens remain unavailable. Gemma's separate reasoning was correctly excluded from the final.
+
+Both current finals are already conforming at the raw provider Content boundary. These samples therefore do not locate the historical nonconformity, establish a parser defect, prove a context/prompt defect, or distinguish old provider generation from old provider parsing. Differing retained/current outcomes are consistent with variability, **not a causal proof**, because the historical raw wire/token stream is missing. Nothing supports adopting think:false, reframing prompts or stripping output as a fix on this evidence alone.
+
+Smallest next general option: controller-authorized passive exact boundary capture on a future qualification attempt, preserving any naturally observed failure rather than repeating this sample until a desired result appears. Any new inference budget or deeper upstream raw-token instrumentation needs a separate decision. If a failing NDJSON already contains the contradiction, investigate generation/provider parsing; only if application output differs from Content does an application adapter correction become evidence-backed. No behavior correction is implemented here.
+
+### Test-only instrumentation and resource audit
+
+`web_parent_capture_test.go` is opt-in and skipped in ordinary tests. It compares outgoing bytes against the predeclared body/hash, consumes an exclusive/fsynced per-model ledger **before** network I/O, refuses reruns against that ledger, disables idle connection reuse/body replay and redirects, and permits only the pinned loopback metadata/chat endpoints. It never has a workflow/tool executor. Raw bodies are buffered **only in the test wrapper** before unchanged adapter parsing (120s deadline, 8MiB artifact safety bound); this does not claim normal streaming latency behavior or alter model options. Errors/empty responses consume the budget and are preserved, not retried.
+
+Deterministic guard tests cover changed-body rejection and one-shot fencing after success or network failure; source reconstruction and guard tests pass under `-race`. Serialized Go suite, three retained semantic-acceptance regressions, and frontend typecheck pass. The live capture test is explicitly skipped in subsequent deterministic checks. The semantic assertion command preserved Node's MODULE_TYPELESS_PACKAGE_JSON warning; no warning/error suppression or package-type behavior change was made.
+
+No new long-running runtime, browser, database or container was started for these observations. Test HTTP transports close on return; both calls completed and the test processes exited. Shared Ollama was not stopped/reconfigured/traced; `.data` and original attachments were untouched. Owned evidence/ledgers remain. R1/M1 source stays at the previously committed implementation; Task12 unpublished, Task13 unlaunched, controller review pending.
