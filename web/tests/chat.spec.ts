@@ -8,7 +8,7 @@ const turn = "33333333-3333-4333-8333-333333333333";
 const conversation = {
   id,
   title: "Durable interaction fixture",
-  model: "gemma4:e4b" as const,
+  model: "qwen3.5:9b" as const,
   workflowId: "web-chat/" + id,
   lifecycle: "open" as const,
   policyRevision: 0,
@@ -59,6 +59,7 @@ function snapshot(): Snapshot {
 async function fixture(page: Page) {
   let s = snapshot();
   const posts: { path: string; body: Record<string, unknown> }[] = [];
+  let uploads = 0;
   const png = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j0WQAAAAASUVORK5CYII=",
     "base64",
@@ -71,7 +72,8 @@ async function fixture(page: Page) {
         contentType: "text/event-stream",
         body: `id: 1\ndata: ${JSON.stringify({ id: "1", conversationId: id, turnId: null, stepId: null, attempt: null, type: "snapshot", data: s })}\n\n`,
       });
-    if (path.endsWith("/attachments") && req.method() === "POST")
+    if (path.endsWith("/attachments") && req.method() === "POST") {
+      uploads++;
       return route.fulfill({
         status: 201,
         json: {
@@ -86,6 +88,7 @@ async function fixture(page: Page) {
           },
         },
       });
+    }
     if (path.endsWith("/attachments/" + file))
       return route.fulfill({
         contentType: "image/png",
@@ -127,6 +130,9 @@ async function fixture(page: Page) {
   ).toBeVisible();
   return {
     posts,
+    get uploads() {
+      return uploads;
+    },
     get state() {
       return s;
     },
@@ -167,7 +173,9 @@ test("approvalOnceAndAll", async ({ page }) => {
   f.state.metadata.pendingApproval = null;
   f.state.metadata.policy.approvalAll = true;
   await f.refresh(f.state);
-  await expect(page.getByText("Conversation approval enabled")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Revoke approval" }),
+  ).toBeVisible();
 });
 test("approvalRevokeAfterReload", async ({ page }) => {
   const f = await fixture(page);
@@ -176,11 +184,15 @@ test("approvalRevokeAfterReload", async ({ page }) => {
   await page.getByRole("button", { name: "Revoke approval" }).click();
   await expect.poll(() => f.posts.length).toBe(1);
   expect(f.posts[0].path).toMatch(/approval-policy\/revoke$/);
-  await expect(page.getByText("Conversation approval enabled")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Revoke approval" }),
+  ).toBeVisible();
   f.state.commands[0] = { ...f.state.commands[0], resultState: "accepted" };
   f.state.metadata.policy.approvalAll = false;
   await f.refresh(f.state);
-  await expect(page.getByText("Conversation approval enabled")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Revoke approval" }),
+  ).toHaveCount(0);
 });
 test("replaceDoesNotCancelNewerTurn", async ({ page }) => {
   const f = await fixture(page);
@@ -199,7 +211,9 @@ test("replaceDoesNotCancelNewerTurn", async ({ page }) => {
     result: { code: "stale_target" },
   };
   await f.refresh(f.state);
-  await expect(page.getByText("Command rejected: stale_target")).toBeVisible();
+  await expect(
+    page.getByText("An action could not be completed. Refresh and try again."),
+  ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Stop current turn" }),
   ).toBeEnabled();
@@ -259,13 +273,14 @@ test("queuedMessageVisible", async ({ page }) => {
   await expect.poll(() => f.posts.length).toBe(1);
   f.state.turns = [{ id: "follow-up", status: "queued", reason: "" }];
   await f.refresh(f.state);
-  await expect(page.getByText("1 queued message")).toBeVisible();
+  await expect(page.getByText("Follow-up queued")).toBeVisible();
   expect(f.posts[0].path).toMatch(/messages$/);
 });
 test("switchChatRetainsDraft", async ({ page }) => {
   await fixture(page);
   await page.getByRole("textbox").fill("Unsent draft");
   await page.getByRole("link", { name: "New chat", exact: true }).click();
+  await page.getByRole("button", { name: "Toggle sidebar" }).click();
   await page.getByRole("link", { name: /Durable interaction fixture/ }).click();
   await expect(page.getByRole("textbox")).toHaveValue("Unsent draft");
 });
@@ -283,7 +298,10 @@ test("pendingApprovalAlwaysVisible and keyboard/narrow layout", async ({
     result: { code: "stale_target" },
   }));
   await f.refresh(f.state);
-  await expect(page.getByText("Command rejected: stale_target")).toHaveCount(4);
+  await expect(
+    page.getByText("An action could not be completed. Refresh and try again."),
+  ).toHaveCount(1);
+  await expect(page.locator("details")).toHaveCount(0);
   await expect(
     page.getByRole("region", { name: "Approval needed" }),
   ).toBeVisible();
@@ -300,7 +318,7 @@ test("pendingApprovalAlwaysVisible and keyboard/narrow layout", async ({
     expect(
       await page.getByRole("button", { name, exact: true }).evaluate((el) => {
         const button = el.getBoundingClientRect(),
-          panel = el.closest(".interaction-panel")!.getBoundingClientRect();
+          panel = el.closest(".approval-card")!.getBoundingClientRect();
         return button.top >= panel.top && button.bottom <= panel.bottom;
       }),
     ).toBe(true);
@@ -318,4 +336,112 @@ test("pendingApprovalAlwaysVisible and keyboard/narrow layout", async ({
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBe(true);
+});
+
+test("mobile sidebar Escape restores focus to the visible opener", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await fixture(page);
+  await page.getByRole("button", { name: "Toggle sidebar" }).click();
+  await expect(
+    page.getByRole("button", { name: "Close sidebar", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(
+    page.getByRole("button", { name: "Toggle sidebar" }),
+  ).toBeFocused();
+});
+
+test("single attachment: multi-drop, second selection and reload cannot discard or upload extras", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  expect(
+    await page.getByLabel("Attach files").getAttribute("multiple"),
+  ).toBeNull();
+  await page.evaluate(() => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(["a"], "a.txt", { type: "text/plain" }));
+    transfer.items.add(new File(["b"], "b.txt", { type: "text/plain" }));
+    document
+      .querySelector(".attachment-picker")!
+      .dispatchEvent(
+        new DragEvent("drop", { bubbles: true, dataTransfer: transfer }),
+      );
+  });
+  await expect(
+    page.getByRole("region", { name: "Attachments" }).getByRole("alert"),
+  ).toContainText("one attachment per message");
+  expect(f.uploads).toBe(0);
+  await page
+    .getByLabel("Attach files")
+    .setInputFiles({
+      name: "text.png",
+      mimeType: "image/png",
+      buffer: Buffer.from("fixture"),
+    });
+  await expect(
+    page.getByRole("button", { name: "Remove text.png" }),
+  ).toBeVisible();
+  await page
+    .getByLabel("Attach files")
+    .setInputFiles({
+      name: "second.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("fixture"),
+    });
+  await expect(
+    page.getByRole("region", { name: "Attachments" }).getByRole("alert"),
+  ).toContainText("one attachment per message");
+  expect(f.uploads).toBe(1);
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Remove text.png" }),
+  ).toBeVisible();
+  await page.getByRole("textbox").fill("Keep this attachment");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect.poll(() => f.posts.length).toBe(1);
+  expect(f.posts[0].body.attachmentIds).toEqual([file]);
+});
+
+test("legacy multi-file pending draft requires explicit edit and removal before replacement", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  await page.evaluate(
+    ({ id, file }) => {
+      localStorage.setItem(
+        "chat.attachments." + id,
+        JSON.stringify([
+          { id: file, name: "one.txt" },
+          { id: "second", name: "two.txt" },
+        ]),
+      );
+      localStorage.setItem(
+        "chat.draft." + id,
+        JSON.stringify("Retained draft"),
+      );
+      localStorage.setItem(
+        "chat.pending." + id,
+        JSON.stringify({
+          requestId: "old",
+          text: "Retained draft",
+          attachmentIds: [file, "second"],
+        }),
+      );
+    },
+    { id, file },
+  );
+  await page.reload();
+  await expect(page.getByText(/one attachment per message/)).toBeVisible();
+  await page.getByRole("button", { name: "Retry saved submission" }).click();
+  expect(f.posts).toHaveLength(0);
+  await page.getByRole("button", { name: "Edit saved submission" }).click();
+  await page.getByRole("button", { name: "Remove two.txt" }).click();
+  await expect(page.getByRole("textbox")).toHaveValue("Retained draft");
+  await page.getByRole("button", { name: "Replace current turn" }).click();
+  await expect.poll(() => f.posts.length).toBe(1);
+  expect(f.posts[0].body.attachmentIds).toEqual([file]);
+  expect(f.posts[0].body.expectedActiveTurnId).toBe(turn);
 });

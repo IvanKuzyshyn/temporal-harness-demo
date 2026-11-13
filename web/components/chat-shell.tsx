@@ -28,7 +28,12 @@ import { initialState, mergePage, reduceEvent } from "../lib/event-reducer";
 import { MessageList, WorkStatus } from "./message-list";
 
 import { ApprovalCard, ControlStatus } from "./approval-card";
-import { AttachmentPicker, ImageLimits } from "./attachment-picker";
+import { AttachmentPicker } from "./attachment-picker";
+import {
+  MAX_ATTACHMENTS,
+  singleAttachmentError,
+  uploadBatch,
+} from "../lib/attachment-batches";
 import { useControls } from "../lib/use-controls";
 
 type Intent = {
@@ -63,7 +68,7 @@ function Icon({ kind }: { kind: "menu" | "plus" | "send" | "chat" }) {
   );
 }
 export function ChatShell({ conversationId }: { conversationId?: string }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const [mobile, setMobile] = useState(false);
   useEffect(() => {
     const q = window.matchMedia("(max-width:760px)");
@@ -122,7 +127,9 @@ export function ChatShell({ conversationId }: { conversationId?: string }) {
     // Wait until React removes main's inert state before restoring focus.
     requestAnimationFrame(() =>
       document
-        .querySelector<HTMLButtonElement>('[aria-label="Toggle sidebar"]')
+        .querySelector<HTMLButtonElement>(
+          '.topbar [aria-label="Toggle sidebar"]',
+        )
         ?.focus(),
     );
   }
@@ -149,7 +156,15 @@ export function ChatShell({ conversationId }: { conversationId?: string }) {
       >
         <div className="brand">
           <Icon kind="chat" />
-          <span>Local chat</span>
+          <span className="brand-name">Chat</span>
+          <button
+            className="icon-button desktop-toggle"
+            aria-label="Toggle sidebar"
+            aria-expanded={!collapsed}
+            onClick={() => setCollapsed((v) => !v)}
+          >
+            <Icon kind="menu" />
+          </button>
           <button
             className="icon-button mobile-close"
             aria-label="Close sidebar"
@@ -160,15 +175,16 @@ export function ChatShell({ conversationId }: { conversationId?: string }) {
         </div>
         <Link
           className="new-chat"
+          aria-label="New chat"
           prefetch={false}
           href="/"
           onClick={() => setSidebar(false)}
         >
           <Icon kind="plus" />
-          New chat
+          <span>New chat</span>
         </Link>
         <div className="sidebar-caption">
-          <span>CONVERSATIONS</span>
+          <span>HISTORY</span>
           <button
             onClick={() => refresh()}
             disabled={busy}
@@ -188,7 +204,6 @@ export function ChatShell({ conversationId }: { conversationId?: string }) {
               onClick={() => setSidebar(false)}
             >
               <span>{c.title || "New conversation"}</span>
-              <small>{c.model}</small>
             </Link>
           ))}
           {!list.length && !busy && !error && (
@@ -213,8 +228,8 @@ export function ChatShell({ conversationId }: { conversationId?: string }) {
           </p>
         )}
         <footer className="sidebar-footer">
-          <span className="local-dot" />
-          On this machine<p>Durable history. Local models.</p>
+          <Icon kind="chat" />
+          <span>Local chat</span>
         </footer>
       </aside>
       <main id="conversation" inert={mobile && sidebar}>
@@ -231,8 +246,15 @@ export function ChatShell({ conversationId }: { conversationId?: string }) {
           >
             <Icon kind="menu" />
           </button>
-          <span className="topbar-label">A little space to think</span>
-          <span className="local-label">LOCAL WORKSPACE</span>
+          <Link
+            className="icon-button header-new"
+            prefetch={false}
+            href="/"
+            aria-label="New chat"
+          >
+            <Icon kind="plus" />
+          </Link>
+          <span className="topbar-label">Local chat</span>
         </header>
         {conversationId ? (
           <ChatSession
@@ -249,85 +271,201 @@ export function ChatShell({ conversationId }: { conversationId?: string }) {
 }
 function NewConversation() {
   const router = useRouter();
-  const [model, setModel] = useState<Model>("qwen3.5:9b"),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState(""),
-    [pending, setPending] = useState<{
-      requestId: string;
-      model: Model;
-    } | null>(null);
+  type Creation = {
+    requestId: string;
+    model: Model;
+    text?: string;
+    messageRequestId?: string;
+  };
+  const [draft, setDraft] = useState("");
+  const [pending, setPending] = useState<Creation | null>(null);
+  const [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  const busyRef = useRef(false),
+    alive = useRef(true);
   useEffect(() => {
-    const p = saved<{ requestId: string; model: Model }>("chat.create");
-    if (p) {
-      setPending(p);
-      setModel(p.model);
-    }
+    alive.current = true;
+    setDraft(saved<string>("chat.new-draft") ?? "");
+    setPending(saved<Creation>("chat.create"));
+    return () => {
+      alive.current = false;
+    };
   }, []);
-  async function create() {
-    const intent = pending ?? { requestId: crypto.randomUUID(), model };
-    if (!save("chat.create", intent)) {
+  async function create(withMessage = true) {
+    if (busyRef.current || (!pending && withMessage && !draft.trim())) return;
+    const intent = pending ?? {
+      requestId: crypto.randomUUID(),
+      model: "qwen3.5:9b",
+      ...(withMessage
+        ? { text: draft, messageRequestId: crypto.randomUUID() }
+        : {}),
+    };
+    if (intent.model !== "qwen3.5:9b") {
       setError(
-        "Local request storage unavailable. Enable browser storage before sending.",
+        "This saved request uses a disabled model. Start a new Qwen conversation.",
       );
       return;
     }
+    if (!save("chat.create", intent)) {
+      setError("Browser storage unavailable; request was not sent.");
+      return;
+    }
+    busyRef.current = true;
     setPending(intent);
     setBusy(true);
     setError("");
+    let createdId: string | undefined;
     try {
-      const result = await api<{ conversation: Conversation }>(
+      const { conversation } = await api<{ conversation: Conversation }>(
         "/conversations",
-        intent,
+        { requestId: intent.requestId, model: intent.model },
       );
+      createdId = conversation.id;
+      if (intent.messageRequestId) {
+        await api<Receipt>(`/conversations/${conversation.id}/messages`, {
+          requestId: intent.messageRequestId,
+          text: intent.text,
+          attachmentIds: [],
+        });
+      } else if (!save("chat.draft." + conversation.id, draft)) {
+        throw new Error(
+          "Browser storage unavailable; draft could not be saved.",
+        );
+      }
+      // Navigation cannot clear another page's newer creation/draft.
+      if (
+        !alive.current ||
+        saved<Creation>("chat.create")?.requestId !== intent.requestId
+      )
+        return;
       forget("chat.create");
-      router.push("/chat/" + result.conversation.id);
+      forget("chat.new-draft");
+      router.push("/chat/" + conversation.id);
     } catch (e) {
-      setError((e as Error).message);
+      if (
+        !alive.current ||
+        saved<Creation>("chat.create")?.requestId !== intent.requestId
+      )
+        return;
+      if (createdId && e instanceof APIError && e.messageCorrection) {
+        // Known pre-admission size rejection: retain an editable draft rather
+        // than trapping the first prompt in an immutable retry forever.
+        if (
+          !save("chat.draft." + createdId, intent.text ?? "") ||
+          !save("chat.rejection." + createdId, {
+            status: e.status,
+            code: e.code,
+          })
+        ) {
+          setError("Browser storage unavailable; draft could not be saved.");
+          return;
+        }
+        forget("chat.create");
+        forget("chat.new-draft");
+        router.push("/chat/" + createdId);
+      } else setError((e as Error).message + " Retry the saved submission.");
     } finally {
-      setBusy(false);
+      busyRef.current = false;
+      if (alive.current) setBusy(false);
     }
   }
   return (
     <section className="welcome">
-      <div className="welcome-mark">
-        <Icon kind="chat" />
+      <div className="welcome-heading">
+        <h1>What can I help with?</h1>
+        <p>Ask a question, write code, or explore ideas.</p>
       </div>
-      <p className="eyebrow">YOUR PRIVATE WORKSPACE</p>
-      <h1>What’s on your mind?</h1>
-      <p className="welcome-copy">
-        Start a conversation. Pick up where you left off.
-        <br />
-        Your history stays here, even when work takes time.
-      </p>
-      <div className="model-choice">
-        <label htmlFor="model">Local model</label>
-        <select
-          id="model"
-          value={model}
-          disabled={!!pending || busy}
-          onChange={(e) => setModel(e.target.value as Model)}
+      <div className="welcome-bottom reading-column">
+        <div className="suggestions">
+          {[
+            "Explain a concept in simple terms",
+            "Help me write some code",
+            "Help me plan my next project",
+            "Improve a piece of writing",
+          ].map((text) => (
+            <button
+              key={text}
+              disabled={!!pending || busy}
+              onClick={() => {
+                setDraft(text);
+                save("chat.new-draft", text);
+                document.getElementById("new-prompt")?.focus();
+              }}
+            >
+              {text}
+            </button>
+          ))}
+        </div>
+        {error && (
+          <p className="warning" role="alert">
+            {error}
+          </p>
+        )}
+        {pending && pending.model !== "qwen3.5:9b" && (
+          <button
+            className="text-button"
+            onClick={() => {
+              forget("chat.create");
+              setPending(null);
+              setError("");
+            }}
+          >
+            Discard disabled-model request
+          </button>
+        )}
+        <form
+          className="composer"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void create();
+          }}
         >
-          <option value="qwen3.5:9b">qwen3.5:9b</option>
-          <option value="gemma4:e4b">gemma4:e4b</option>
-        </select>
-        <p>Fixed for this conversation. No silent fallback.</p>
+          <label className="sr-only" htmlFor="new-prompt">
+            Message
+          </label>
+          <textarea
+            id="new-prompt"
+            placeholder="Ask anything…"
+            value={pending?.text ?? draft}
+            disabled={!!pending || busy}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              save("chat.new-draft", e.target.value);
+            }}
+            onKeyDown={(e) => {
+              if (
+                e.key === "Enter" &&
+                !e.shiftKey &&
+                !e.nativeEvent.isComposing
+              ) {
+                e.preventDefault();
+                void create();
+              }
+            }}
+          />
+          <div className="composer-bottom">
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Start conversation"
+              title="Start a conversation to attach a file"
+              disabled={busy || !!pending}
+              onClick={() => void create(false)}
+            >
+              <Icon kind="plus" />
+            </button>
+            <span className="model-label">qwen3.5:9b</span>
+            <button
+              className="send-button"
+              type="submit"
+              aria-label={pending ? "Retry saved submission" : "Send message"}
+              disabled={busy || (!pending && !draft.trim())}
+            >
+              {pending ? "Retry" : <Icon kind="send" />}
+            </button>
+          </div>
+        </form>
       </div>
-      <button className="primary" disabled={busy} onClick={create}>
-        {busy
-          ? "Creating…"
-          : pending
-            ? "Retry saved creation"
-            : "Start conversation"}
-        <Icon kind="plus" />
-      </button>
-      {error && (
-        <p className="warning" role="alert">
-          {error} · Retry uses the same request ID.
-        </p>
-      )}
-      <p className="welcome-footnote">
-        Models can make mistakes. Tool access always asks first.
-      </p>
     </section>
   );
 }
@@ -398,6 +536,11 @@ function ChatSession({
     attachmentsRef.current = selected;
     setAttachments(selected);
     const restored = saved<Intent>(pendingKey);
+    if (
+      selected.length > MAX_ATTACHMENTS ||
+      (restored?.attachmentIds.length ?? 0) > MAX_ATTACHMENTS
+    )
+      setError(singleAttachmentError);
     pendingRef.current = restored;
     setPending(restored);
     const rejected = saved<{ status: number; code: string }>(rejectionKey);
@@ -568,10 +711,18 @@ function ChatSession({
     if (
       sending ||
       uploading ||
+      uploadBatch(id).active ||
       !state.loaded ||
       (!pending && !draft.trim() && !attachments.length)
     )
       return;
+    if (
+      attachmentsRef.current.length > MAX_ATTACHMENTS ||
+      (pendingRef.current?.attachmentIds.length ?? 0) > MAX_ATTACHMENTS
+    ) {
+      setError(singleAttachmentError);
+      return;
+    }
     const target = state.metadata?.activeTurn;
     if (replace && (!target || target.status === "cancelling")) return;
     const intent = pendingRef.current ?? {
@@ -636,21 +787,20 @@ function ChatSession({
       <div className="conversation-heading">
         <div>
           <h1>{state.metadata?.conversation.title || "New conversation"}</h1>
-          <p>
-            {state.metadata?.conversation.model ?? "Loading model…"}{" "}
-            <span>· fixed model</span>
-          </p>
+          <p>{state.metadata?.conversation.model ?? "Loading…"}</p>
         </div>
-        <button
-          className={"connection " + connection}
-          onClick={() => {
-            setConnection("reconnecting");
-            setReconnect((n) => n + 1);
-          }}
-          aria-label="Reconnect live updates"
-        >
-          {connection === "live" ? "● Connected" : "↻ Reconnecting"}
-        </button>
+        {connection === "reconnecting" && (
+          <button
+            className={"connection " + connection}
+            onClick={() => {
+              setConnection("reconnecting");
+              setReconnect((n) => n + 1);
+            }}
+            aria-label="Reconnect live updates"
+          >
+            Reconnecting…
+          </button>
+        )}
       </div>
       <div
         className="transcript"
@@ -684,22 +834,28 @@ function ChatSession({
           )}
           {state.loaded && !state.messages.length && (
             <div className="empty-conversation">
-              <h2>A fresh conversation.</h2>
-              <p>Ask a question, explore an idea, or work through a problem.</p>
+              <h2>What can I help with?</h2>
+              <p>Ask a question, write code, or explore ideas.</p>
             </div>
           )}
           <MessageList
             state={state}
             attachmentBusy={!!pending || uploading}
             onAttach={(attachmentId) => {
-              if (attachments.some((a) => a.id === attachmentId)) return;
-              if (attachments.length >= 4) {
-                setError(
-                  "At most four attachments per message. Remove one first.",
-                );
+              if (uploadBatch(id).active) {
+                setError("Wait for the current upload.");
                 return;
               }
-              selectAttachments([...attachments, { id: attachmentId }]);
+              if (attachmentsRef.current.some((a) => a.id === attachmentId))
+                return;
+              if (attachmentsRef.current.length >= MAX_ATTACHMENTS) {
+                setError(singleAttachmentError);
+                return;
+              }
+              selectAttachments([
+                ...attachmentsRef.current,
+                { id: attachmentId },
+              ]);
             }}
           />
         </div>
@@ -710,11 +866,6 @@ function ChatSession({
             <WorkStatus state={state}>
               {state.metadata?.policy.approvalAll && (
                 <div className="policy-control">
-                  <p>
-                    Revision {state.metadata.policy.revision} ·{" "}
-                    {state.metadata.policy.toolsetVersion}. Revocation affects
-                    future authorization, not already-running work.
-                  </p>
                   <button
                     type="button"
                     className="text-button"
@@ -758,6 +909,15 @@ function ChatSession({
               {error}
             </p>
           )}
+          {pending && pending.attachmentIds.length > MAX_ATTACHMENTS && (
+            <button
+              type="button"
+              className="text-button"
+              onClick={() => settlePending(pending, false)}
+            >
+              Edit saved submission
+            </button>
+          )}
           {pending && (
             <p className="pending-note">
               Submission saved locally ·{" "}
@@ -779,9 +939,7 @@ function ChatSession({
             <textarea
               id="prompt"
               placeholder={
-                active
-                  ? "Add a follow-up to the queue…"
-                  : "Message your local model…"
+                active ? "Add a follow-up to the queue…" : "Ask anything…"
               }
               value={draft}
               disabled={!!pending}
@@ -811,10 +969,8 @@ function ChatSession({
               onBusy={setUploading}
             />
             <div className="composer-bottom">
-              <span>
-                {active
-                  ? "Follow-ups queue behind active work"
-                  : "Enter to send · Shift + Enter for a new line"}
+              <span className="model-label">
+                {state.metadata?.conversation.model ?? "Qwen"}
               </span>
               <button
                 className="send-button"
@@ -862,17 +1018,8 @@ function ChatSession({
               >
                 Replace current turn
               </button>
-              <span>
-                Replacement joins cancelled work, then runs before queued
-                follow-ups.
-              </span>
             </div>
           )}
-          <ImageLimits />
-          <p className="composer-note">
-            Closing this page won’t stop accepted work. Replies are final only
-            when saved.
-          </p>
         </div>
       </div>
     </>

@@ -12,7 +12,8 @@ import {
 import { ChatShell } from "./chat-shell";
 import type { Snapshot, Receipt, Message } from "../lib/contracts";
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: () => {} }) }));
+const { push } = vi.hoisted(() => ({ push: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 // Router delivery is external here; exercise the real shell/session/API/storage.
 vi.mock("next/link", () => ({
   default: ({
@@ -26,7 +27,7 @@ vi.mock("next/link", () => ({
 const conversation = {
   id: "a",
   title: "Saved conversation",
-  model: "gemma4:e4b" as const,
+  model: "qwen3.5:9b" as const,
   workflowId: "web-chat/a",
   lifecycle: "open" as const,
   policyRevision: 0,
@@ -102,6 +103,7 @@ let history: () => Promise<Response>;
 let commandGet: (() => Promise<Response>) | undefined;
 beforeEach(() => {
   localStorage.clear();
+  push.mockReset();
   Source.all = [];
   sent = [];
   paths = [];
@@ -148,6 +150,76 @@ async function submit(text: string) {
   await waitFor(() => expect(sent.length).toBeGreaterThan(0));
 }
 
+it("first prompt creates Qwen chat and retries uncertain submission with the same identities", async () => {
+  let attempts = 0;
+  post = async (i) => {
+    if (paths.at(-1) === "/api/conversations")
+      return Response.json({ conversation });
+    if (++attempts === 1) throw new Error("offline");
+    return Response.json(receipt(i));
+  };
+  render(<ChatShell />);
+  await submit("Hello from a new chat");
+  await screen.findByRole("alert");
+  const first = sent.map((i) => ({ ...i }));
+  expect(push).not.toHaveBeenCalled();
+  fireEvent.submit(screen.getByRole("textbox").closest("form")!);
+  await waitFor(() => expect(push).toHaveBeenCalledWith("/chat/a"));
+  expect(sent[2]).toEqual(first[0]);
+  expect(sent[3]).toEqual(first[1]);
+});
+it("first prompt size rejection opens the created chat with an editable retained draft", async () => {
+  post = async (i) =>
+    paths.at(-1) === "/api/conversations"
+      ? Response.json({ conversation })
+      : Response.json({ error: { code: "prompt_too_large" } }, { status: 413 });
+  render(<ChatShell />);
+  await submit("oversized draft fixture");
+  await waitFor(() => expect(push).toHaveBeenCalledWith("/chat/a"));
+  expect(JSON.parse(localStorage.getItem("chat.draft.a")!)).toBe(
+    "oversized draft fixture",
+  );
+  expect(JSON.parse(localStorage.getItem("chat.rejection.a")!)).toEqual({
+    status: 413,
+    code: "prompt_too_large",
+  });
+  expect(localStorage.getItem("chat.create")).toBeNull();
+});
+it.each([false, true])(
+  "restored multi-file %s intent cannot submit or replace, and keeps files recoverable",
+  async (pending) => {
+    const selected = [
+      { id: "one", name: "one.txt" },
+      { id: "two", name: "two.txt" },
+    ];
+    localStorage.setItem("chat.attachments.a", JSON.stringify(selected));
+    localStorage.setItem(draftKey, JSON.stringify("old draft"));
+    if (pending)
+      localStorage.setItem(
+        pendingKey,
+        JSON.stringify({
+          requestId: "old-request",
+          text: "old draft",
+          attachmentIds: ["one", "two"],
+        }),
+      );
+    await mount({ metadata: busyMetadata });
+    expect(screen.getByText("one.txt")).toBeTruthy();
+    expect(screen.getByText("two.txt")).toBeTruthy();
+    expect(
+      screen
+        .getAllByRole("alert")
+        .map((e) => e.textContent)
+        .join(" "),
+    ).toMatch(/one attachment/);
+    fireEvent.submit(screen.getByRole("textbox").closest("form")!);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Replace current turn" }),
+    );
+    expect(sent).toHaveLength(0);
+    expect(localStorage.getItem("chat.attachments.a")).toContain("two");
+  },
+);
 it("history exhaustion retains a boundary landmark instead of removing the scroll footprint", async () => {
   const messages: Message[] = Array.from({ length: 25 }, (_, i) => ({
     entryId: `m${i + 1}`,
@@ -359,7 +431,9 @@ it.each([
       );
     }
     // Wait for receipt consumption AND its render, not just request dispatch.
-    expect(await screen.findByText(/Decision.*awaiting execution/i)).toBeTruthy();
+    expect(
+      await screen.findByText(/Decision.*awaiting execution/i),
+    ).toBeTruthy();
     expect(
       screen
         .getByRole("region", { name: "Approval needed" })
@@ -383,7 +457,9 @@ it.each([
       ),
     );
     expect(screen.getAllByText(/invalid_approval/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/Decision.*rejected: invalid_approval/)).toBeTruthy();
+    expect(
+      screen.getByText(/Decision.*rejected: invalid_approval/),
+    ).toBeTruthy();
     expect(screen.queryByText(/Decision.*awaiting execution/i)).toBeNull();
     expect(screen.queryByText(/Decision applied/)).toBeNull();
     expect(sent).toHaveLength(1);
@@ -401,14 +477,14 @@ it("approvalRevokeAfterReload restores policy from server, not session memory", 
   post = async (i) =>
     Response.json({ ...receipt(i), resultState: "pending", result: null });
   const view = await mount({ metadata });
-  expect(screen.getByText(/Conversation approval enabled/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Revoke approval" })).toBeTruthy();
   view.unmount();
   await mount({ metadata });
   fireEvent.click(screen.getByRole("button", { name: "Revoke approval" }));
   await waitFor(() => expect(sent.length).toBe(1));
   expect(paths[0]).toBe("/api/conversations/a/approval-policy/revoke");
   expect(sent[0]).toEqual({ requestId: expect.any(String) });
-  expect(screen.getByText(/Conversation approval enabled/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Revoke approval" })).toBeTruthy();
   await act(async () =>
     Source.snapshot([{ ...receipt(sent[0]), resultState: "accepted" }], {
       metadata: {
@@ -417,7 +493,7 @@ it("approvalRevokeAfterReload restores policy from server, not session memory", 
       },
     }),
   );
-  expect(screen.queryByText(/Conversation approval enabled/)).toBeNull();
+  expect(screen.queryByRole("button", { name: "Revoke approval" })).toBeNull();
 });
 it("replaceDoesNotCancelNewerTurn preserves frozen replacement and stop target across reload", async () => {
   post = async () => {
@@ -541,7 +617,7 @@ it("queuedMessageVisible sends normal follow-up without redirecting it to replac
       turns: [{ id: "queued-turn", status: "queued", reason: "" }],
     }),
   );
-  expect(screen.getByText("1 queued message")).toBeTruthy();
+  expect(screen.getByText("Follow-up queued")).toBeTruthy();
 });
 it("switchChatRetainsDraft retains ready upload identities with the original chat", async () => {
   upload = async () =>
@@ -607,7 +683,7 @@ it("late upload stays selected in its original chat after navigation without con
   expect(screen.getByText("later.txt")).toBeTruthy();
 });
 it.each([false, true])(
-  "multi-file navigation retains the whole batch and late errors (failure=%s), including remount while active",
+  "single-file navigation retains upload and late errors (failure=%s), including remount while active",
   async (failSecond) => {
     const pending: ((r: Response) => void)[] = [];
     const names: string[] = [];
@@ -634,33 +710,18 @@ it.each([false, true])(
     });
     fireEvent.change(screen.getByLabelText("Attach files"), {
       target: {
-        files: ["one.txt", "two.txt", "three.txt", "four.txt"].map(
-          (n) => new File(["abc"], n),
-        ),
+        files: ["one.txt"].map((n) => new File(["abc"], n)),
       },
     });
     expect(names).toEqual(["one.txt"]); // one request at a time
     view.rerender(<ChatShell conversationId="b" />);
-    await act(async () => pending[0](ready("one.txt")));
-    await waitFor(() => expect(names).toEqual(["one.txt", "two.txt"]));
+    expect(names).toEqual(["one.txt"]);
     expect(screen.queryByText("one.txt")).toBeNull();
     expect(
       screen
         .getByRole("region", { name: "Attachments" })
         .getAttribute("aria-busy"),
     ).toBe("false");
-    // Complete/fail the second file while unmounted, then reopen during file three.
-    await act(async () =>
-      pending[1](
-        failSecond
-          ? Response.json(
-              { error: { code: "invalid_signature_or_unreadable_file" } },
-              { status: 422 },
-            )
-          : ready("two.txt"),
-      ),
-    );
-    await waitFor(() => expect(names).toHaveLength(3));
     expect(screen.queryByRole("alert")).toBeNull();
     view.rerender(<ChatShell conversationId="a" />);
     await act(async () => Source.snapshot());
@@ -682,22 +743,25 @@ it.each([false, true])(
     fireEvent.drop(screen.getByRole("region", { name: "Attachments" }), {
       dataTransfer: { files: [new File(["extra"], "extra.txt")] },
     });
-    expect(names).toHaveLength(3); // remount cannot start an overlapping batch
-    if (failSecond)
-      expect(screen.getByRole("alert").textContent).toMatch(
-        /two.txt.*Renaming/s,
-      );
-    await act(async () => pending[2](ready("three.txt")));
-    await waitFor(() => expect(names).toHaveLength(4));
-    await act(async () => pending[3](ready("four.txt")));
-    const storedNames = JSON.parse(
-      localStorage.getItem("chat.attachments.a")!,
-    ).map((a: { name: string }) => a.name);
-    expect(storedNames).toEqual(
-      failSecond
-        ? ["one.txt", "three.txt", "four.txt"]
-        : ["one.txt", "two.txt", "three.txt", "four.txt"],
+    expect(names).toHaveLength(1); // remount cannot start an overlapping upload
+    expect(screen.getByRole("alert").textContent).toMatch(/upload/i);
+    view.rerender(<ChatShell conversationId="b" />);
+    await act(async () =>
+      pending[0](
+        failSecond
+          ? Response.json(
+              { error: { code: "invalid_signature_or_unreadable_file" } },
+              { status: 422 },
+            )
+          : ready("one.txt"),
+      ),
     );
+    view.rerender(<ChatShell conversationId="a" />);
+    await act(async () => Source.snapshot());
+    const storedNames = JSON.parse(
+      localStorage.getItem("chat.attachments.a") ?? "[]",
+    ).map((a: { name: string }) => a.name);
+    expect(storedNames).toEqual(failSecond ? [] : ["one.txt"]);
     expect(
       screen
         .getByRole("region", { name: "Attachments" })
@@ -710,7 +774,7 @@ it.each([false, true])(
     await mount();
     if (failSecond)
       expect(screen.getByRole("alert").textContent).toMatch(
-        /two.txt.*Renaming/s,
+        /one.txt.*Renaming/s,
       );
     else expect(screen.queryByRole("alert")).toBeNull();
   },
@@ -778,15 +842,15 @@ it("storage failure after control acceptance never claims the control was not se
   expect(screen.getByRole("alert").textContent).not.toMatch(
     /control was not sent/i,
   );
-  expect(screen.getByText(/Stop.*admitted by execution/)).toBeTruthy();
+  expect(screen.queryByText(/Stop.*admitted by execution/)).toBeNull();
   storage.mockRestore();
 });
-it("pendingApprovalAlwaysVisible outside collapsed details with exact scope and expiry", async () => {
+it("pendingApprovalAlwaysVisible with plain-language action and no diagnostic identity", async () => {
   await mount({ metadata: busyMetadata });
   const card = screen.getByRole("region", { name: "Approval needed" });
   expect(card.closest("details")).toBeNull();
-  expect(card.textContent).toContain("web_fetch@1,file_upload@1");
-  expect(card.textContent).toContain("2099-01-01");
-  expect(card.textContent).toContain("a".repeat(64));
+  expect(card.textContent).toContain("Translate visible text into English.");
+  expect(card.textContent).not.toContain("web_fetch@1,file_upload@1");
+  expect(card.textContent).not.toContain("a".repeat(64));
   expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
 });

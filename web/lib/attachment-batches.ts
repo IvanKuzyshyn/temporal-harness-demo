@@ -1,6 +1,10 @@
 import { APIError, save, saved } from "./api";
 import type { Attachment, SelectedAttachment } from "./contracts";
 
+export const MAX_ATTACHMENTS = 1;
+export const singleAttachmentError =
+  "Choose one attachment per message. Remove the current selection before adding another.";
+
 export const attachmentTypes = new Set([
   "text/plain",
   "text/markdown",
@@ -72,7 +76,14 @@ export async function uploadFiles(
   files: File[],
   initial: SelectedAttachment[],
 ) {
-  if (uploadBatch(id).active) return;
+  if (uploadBatch(id).active)
+    throw new Error(
+      "An upload is already in progress. Wait before choosing another file.",
+    );
+  const selected =
+    saved<SelectedAttachment[]>("chat.attachments." + id) ?? initial;
+  if (files.length !== 1 || selected.length + files.length > MAX_ATTACHMENTS)
+    throw new Error(singleAttachmentError);
   let state: UploadBatch = {
     active: true,
     remaining: files.map((f) => f.name),
@@ -118,9 +129,9 @@ export async function uploadFiles(
         ...prior.filter((v) => v.id !== a.id),
         { id: a.id, name: a.name, mediaType: a.mediaType },
       ];
-      if (next.length > 4)
+      if (next.length > MAX_ATTACHMENTS)
         throw new Error(
-          `Upload ${a.id} is saved, but the draft already has four attachments. Remove a selection before retrying.`,
+          `Upload ${a.id} is saved, but the draft already has one attachment. Remove a selection before retrying.`,
         );
       if (!save(attachmentKey, next))
         throw new Error(

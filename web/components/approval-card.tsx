@@ -35,11 +35,19 @@ export function ApprovalCard({
     >
       <div className="approval-heading">
         <strong>Approval needed</strong>
-        <span>{approval.toolName}</span>
       </div>
-      <pre className="approval-arguments" aria-label="Exact action arguments">
-        {JSON.stringify(approval.arguments, null, 2)}
-      </pre>
+      <p className="approval-action">
+        {approval.toolName === "web_fetch"
+          ? "Read this web page?"
+          : "Read the selected attachment?"}
+      </p>
+      <p className="approval-description">
+        {String(
+          (approval.arguments as Record<string, unknown>)[
+            approval.toolName === "web_fetch" ? "url" : "instruction"
+          ] ?? "",
+        )}
+      </p>
       {(expired || stale) && (
         <p className="warning" role="status">
           {expired ? "Approval expired." : "Approval scope is stale."} Waiting
@@ -74,21 +82,9 @@ export function ApprovalCard({
         </button>
       </div>
       <p className="scope-line">
-        Policy revision {approval.policyRevision} · {approval.toolsetVersion}
+        Approve all allows web pages and attachments in this conversation until
+        revoked.
       </p>
-      <p className="scope-line">Expires {approval.deadline}</p>
-      <p>Uploading a file does not authorize model access.</p>
-      <p className="scope-line">
-        Once covers this action and its retries. All covers this version of
-        web_fetch and file_upload, including child work, until revoked.
-      </p>
-      <details>
-        <summary>Action identity</summary>
-        <p>Approval {approval.id}</p>
-        <p>Tool call {approval.toolCallId}</p>
-        <p>Action hash {approval.actionHash}</p>
-        <p>Content reference {approval.contentRef}</p>
-      </details>
     </section>
   );
 }
@@ -103,45 +99,41 @@ export function ControlStatus({
 }) {
   return (
     <div className="control-status" aria-live="polite">
-      {controls.map((c) => (
-        <div key={c.requestId}>
-          <p
-            className={
-              c.receipt?.resultState === "rejected" || c.error
-                ? "warning"
-                : "muted"
-            }
-          >
-            {c.label} ·{" "}
-            {c.receipt?.resultState === "rejected"
-              ? `rejected: ${c.receipt.result?.code ?? "rejected"}`
-              : c.receipt?.resultState === "accepted"
-                ? "admitted by execution; see saved work state"
-                : c.receipt
-                  ? "saved · awaiting execution"
-                  : sending.includes(c.requestId)
-                    ? "sending…"
-                    : "delivery uncertain; original identity retained"}
-            {c.body.expectedActiveTurnId && (
-              <span className="control-target">
-                {" "}
-                · target {c.body.expectedActiveTurnId}
-              </span>
-            )}
-            {c.error && ` · ${c.error}`}
-          </p>
-          {!c.receipt && (
-            <button
-              type="button"
-              className="text-button"
-              disabled={sending.includes(c.requestId)}
-              onClick={() => retry(c)}
+      {controls
+        .filter((c) => c.receipt?.resultState !== "accepted")
+        .map((c) => (
+          <div key={c.requestId}>
+            <p
+              className={
+                c.receipt?.resultState === "rejected" || c.error
+                  ? "warning"
+                  : "muted"
+              }
             >
-              Retry {c.label}
-            </button>
-          )}
-        </div>
-      ))}
+              {c.label} ·{" "}
+              {c.receipt?.resultState === "rejected"
+                ? `rejected: ${c.receipt.result?.code ?? "rejected"}`
+                : c.receipt?.resultState === "accepted"
+                  ? "admitted by execution; see saved work state"
+                  : c.receipt
+                    ? "saved · awaiting execution"
+                    : sending.includes(c.requestId)
+                      ? "sending…"
+                      : "delivery uncertain; original identity retained"}
+              {c.error && ` · ${c.error}`}
+            </p>
+            {!c.receipt && (
+              <button
+                type="button"
+                className="text-button"
+                disabled={sending.includes(c.requestId)}
+                onClick={() => retry(c)}
+              >
+                Retry {c.label}
+              </button>
+            )}
+          </div>
+        ))}
     </div>
   );
 }
