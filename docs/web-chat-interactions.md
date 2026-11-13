@@ -69,10 +69,26 @@ and lossy context warnings remain. Image error outcomes are not translations.
 Deliberate cancellation gets neutral saved-attachment guidance, not format/runtime
 troubleshooting; actual failures keep actionable guidance and native result data.
 
-**R2 remains OPEN:** the retained narrow-profile Qwen parent contradicts the
-correct child result. Neither prior larger-image deferment nor successful tool
-execution/SQL completion/Gemma output closes it. See the
+**R2 is OPEN / DEFERRED under explicit user waiver:** “Let's defer Qwen issue and
+continue work.” This new decision covers the narrow-profile Qwen parent's
+contradictory refusal/`</think>` in addition to the separate earlier larger-image
+issue. Task12 acceptance is conditional on that documented exception and remaining
+applicable gates; the former R2 progression block is superseded, not repaired.
+Correct child/SQL completion and the later exactly Qwen1/Gemma1 conforming parent
+observations do not qualify the failed historical final. Cause remains unknown;
+the original raw provider stream is unavailable. See the
+[current qualification decision](web-chat-qualification.md) and
 [bounded diagnostic](web-chat-r2-diagnostic.md).
+
+Future tests retain strict both-model, exact-turn, whole-final assertions and
+actual pass/fail/nonzero outcomes. Report any applicable waived parent-semantic
+failure separately; do not skip, delete or broaden assertions, substitute models,
+or call a failed result green. The waiver does not excuse transport, authorization,
+resource/context bounds, cancellation/cleanup, durability failures or all Qwen
+errors. All safety/admission limits above and `imageAdmissionQualified:false`
+remain unchanged. This docs-only continuation adds no inference, behavior change
+or requalification. R1/M1 were independently addressed; scoped code and visual
+round2 passed. No new visual evaluation is needed for this documentation change.
 
 ## Verification
 

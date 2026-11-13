@@ -1,8 +1,37 @@
-# Task12 R2 bounded diagnostic checkpoint — OPEN
+# Task12 R2 diagnostic — OPEN / DEFERRED under explicit user waiver
 
-## Scope and physical-call budget
+## Current decision — conditional progression, not a correction
 
-R2 is an **unresolved narrow-profile end-to-end semantic blocker**, not a UI visual defect and not covered by the prior larger-Qwen-image deferment. No successful tool/SQL/Gemma/later-Qwen sample closes the retained failure.
+**User authorization: “Let's defer Qwen issue and continue work.”** The user now
+explicitly defers narrow-profile Qwen parent-response reliability, including the
+contradictory refusal/`</think>`, in addition to the earlier larger-image issue.
+The former R2 progression block is superseded by this documented acceptance
+exception. Task12 may be conditionally accepted and progression may resume subject
+to the remaining applicable gates and scoped documentation review. The defect
+remains unresolved; no fix, semantic qualification or unconditional approval is
+claimed. [Qualification decision and waiver boundaries](web-chat-qualification.md).
+
+The original failed final/evidence, unknown cause and missing original raw stream
+remain unchanged. Exactly Qwen1/Gemma1 conforming reconstructed parent observations
+below prove no correction. Strict meaningful assertions remain unchanged: future
+tests must retain their actual pass/fail and nonzero failure outcomes, with any
+applicable waiver reported separately, never by skipping/deleting/broadening
+assertions or substituting a model. The waiver cannot excuse transport,
+authorization, resource/context-admission, cancellation/cleanup, durability failures
+or all Qwen errors. All identities, no fallback, safety/context/resource caps and
+`imageAdmissionQualified:false` remain. No inference, requalification or behavior
+change is authorized/performed in this docs-only continuation; the prior capture
+budget remains exhausted.
+
+R1/M1 were independently found ADDRESSED, scoped code quality and visual round2
+PASS, with no new blocking defect. That review's R2 spec block predated this
+explicit waiver. The diagnostic chronology below preserves the earlier findings;
+statements that progression awaited a decision describe those earlier checkpoints,
+not the current gate. Publication and downstream work remain controller-owned.
+
+## Historical scope and physical-call budget
+
+At the diagnostic checkpoint R2 was an **unresolved narrow-profile end-to-end semantic blocker**, not a UI visual defect and not covered by the then-existing larger-Qwen-image deferment. No successful tool/SQL/Gemma/later-Qwen sample closes the retained failure; only the new explicit waiver changes progression.
 
 Before diagnostic execution, `task-12-r2-diagnostic.md` in the controller's canonical report directory declared **zero new physical provider invocations**. Actual count for this checkpoint: **zero per model**. No full image workflow or qualification matrix was run. The new deterministic HTTP server is a fixture, not Ollama. Real browser/API tests only upload/navigate or Stop at attachment preflight approval; no action is approved. A workflow is not one physical invocation: approved child analysis and parent continuation are separate calls.
 
@@ -54,7 +83,7 @@ Concrete general next options, none implemented or automatically authorized:
 - **General authorized-tool-result framing:** if exact request/stream shows the provider disregards correct tool evidence, consider a general system/tool-contract clarification that distinguishes available analysis text from unavailable original pixels while retaining untrusted-data boundaries. This changes prompt semantics, requires cross-tool/attachment safety and bounded-context qualification, and cannot hardcode this fixture or rewrite the user's instruction.
 - If a provider parser defect is established, pursue an upstream/general correction with pinned-version/profile requalification; simply hiding a delimiter would leave the semantic contradiction unresolved.
 
-The controller must choose the next investigation/correction and acceptance gate. Task12 remains unpublished and Task13 unlaunched. No self-approval, semantic PASS or waiver is claimed.
+At this checkpoint, the controller still needed an investigation/correction or explicit acceptance decision; Task12 was unpublished and Task13 unlaunched. No narrow-profile R2 waiver existed then. The current user waiver above supersedes that progression hold without changing any diagnostic finding or claiming semantic PASS.
 
 ## Reproduce without provider calls
 
@@ -90,7 +119,7 @@ Full outgoing bodies, metadata and results are under canonical `task-12-r2-captu
 
 Each model directory contains `intended-request.json`, `predeclared.sha256`, durable `invocation.json`, `outgoing-request.json`, `observed-{version,tags}.json`, `provider.ndjson`, `http-result.json`, `decoded.json` (including individual thinking/content/tool-call/done/metrics fields), `thinking.txt`, `content.txt`, `adapter-result.json`, and `semantic-assertion.json`. `capture-audit.json` verifies exact body hashes, metadata equality, terminal done, no tools, complete HTTP bodies and byte-identical adapter content. No captured failure/result was discarded. Historical failed evidence remains immutable.
 
-### Supported conclusion and next decision
+### Supported conclusion and historical next-step options
 
 No current request-default/configuration or application parsing discrepancy was observed. The current metadata supports the reconstruction's default-thinking assumption. Qwen emitting no separate thinking **does not prove thinking was disabled or misconfigured**: metadata/defaults and emitted reasoning text are different observations, and raw generated tokens remain unavailable. Gemma's separate reasoning was correctly excluded from the final.
 
@@ -104,4 +133,4 @@ Smallest next general option: controller-authorized passive exact boundary captu
 
 Deterministic guard tests cover changed-body rejection and one-shot fencing after success or network failure; source reconstruction and guard tests pass under `-race`. Serialized Go suite, three retained semantic-acceptance regressions, and frontend typecheck pass. The live capture test is explicitly skipped in subsequent deterministic checks. The semantic assertion command preserved Node's MODULE_TYPELESS_PACKAGE_JSON warning; no warning/error suppression or package-type behavior change was made.
 
-No new long-running runtime, browser, database or container was started for these observations. Test HTTP transports close on return; both calls completed and the test processes exited. Shared Ollama was not stopped/reconfigured/traced; `.data` and original attachments were untouched. Owned evidence/ledgers remain. R1/M1 source stays at the previously committed implementation; Task12 unpublished, Task13 unlaunched, controller review pending.
+No new long-running runtime, browser, database or container was started for these observations. Test HTTP transports close on return; both calls completed and the test processes exited. Shared Ollama was not stopped/reconfigured/traced; `.data` and original attachments were untouched. Owned evidence/ledgers remain. R1/M1 source stayed at the previously committed implementation; at capture handoff Task12 was unpublished and Task13 unlaunched pending controller review. The later explicit user waiver above now permits conditional progression; it is not a new capture or production correction.
