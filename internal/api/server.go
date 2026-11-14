@@ -172,15 +172,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			dbOK := s.repo != nil && s.repo.Ping(ctx) == nil
 			connected := s.connected()
+			polling := s.config.WorkersPolling != nil && s.config.WorkersPolling()
+			reconciling := s.config.ReconciliationReady != nil && s.config.ReconciliationReady()
 			code := 200
-			if path[0] == "readyz" && (!dbOK || !connected) {
+			if path[0] == "readyz" && (!dbOK || !connected || !polling || !reconciling) {
 				code = 503
 			}
 			status := "unavailable"
 			if connected {
 				status = "connected"
 			}
-			respond(w, code, map[string]any{"alive": true, "storageReady": dbOK, "acceptingCommands": dbOK, "dispatcher": status})
+			respond(w, code, map[string]any{"alive": true, "storageReady": dbOK, "acceptingCommands": dbOK, "dispatcher": status, "workersPolling": polling, "reconciliationReady": reconciling})
 			return
 		case "models":
 			if r.Method != "GET" {

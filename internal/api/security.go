@@ -19,8 +19,10 @@ type Config struct {
 	BrowserOrigin string
 	// Task4 supplies a live transport readiness check. Nil explicitly means no
 	// execution gateway; it does NOT disable durable command acceptance.
-	GatewayConnected func() bool
-	RequestTimeout   time.Duration
+	GatewayConnected    func() bool
+	WorkersPolling      func() bool
+	ReconciliationReady func() bool
+	RequestTimeout      time.Duration
 }
 
 func (c Config) validate() error {

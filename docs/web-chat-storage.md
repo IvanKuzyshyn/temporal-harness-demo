@@ -1,4 +1,4 @@
-# Web-chat application storage (Task 2)
+# Web-chat application storage (Tasks 2–4)
 
 This package persists application content and **intent**, not execution authority.
 Only Temporal can adjudicate active-turn freshness, replacement races, tool
@@ -8,8 +8,31 @@ successful `AcceptCommand` or a projection row as authorization.
 Task 3 adds idempotent creation, stable sidebar snapshots, projection reads and
 fenced command claims in migration `000002`. See [the private API contract](web-api.md)
 for those exported interfaces, dispatch ordering/backoff, and runtime configuration.
-Production dispatch should use `ClaimCommands`/`SettleClaim`, not the older
+Production dispatch uses `ClaimCommands`/`SettleClaim`, not the older
 unleased `ListPendingCommands` read helper.
+
+Task4 adds migration `000003`, direct `GetTurn`/bounded `RecentChatExchanges`,
+`CheckChatCommand`/`RecordChatAdmission`, `StartChatTurn`,
+`BeginChatModelAttempt`, `GetChatModelResult`/`SaveChatModelResult`, and atomic
+`PersistTurnResult`. See [web-chat-temporal.md](web-chat-temporal.md) for exact
+receipt ordering, bounded carry and completion authority. Domain types are in
+`internal/chat/execution.go`; the source interfaces remain authoritative.
+
+Admission recovery uses bounded `CommandIdentity`/`AdmissionCheckpoint` values,
+not command payloads. `ResumeChatAdmission(ctx, checkpoint)` rechecks all stored
+identities and the original digest, then either reads the receipt (`check`) or
+persists the workflow's already replayable decision (`receipt`). It never decides
+whether to enqueue. The original full-command activity path still recomputes the
+payload digest before using the shared identity helpers.
+
+`ResolveClosedChatCommand(ctx, command, enqueued)` is terminal reconciliation,
+called only after confirming closure and querying that exact run's replayed
+active turn/inbox. A missing receipt alone proves nothing. Under the conversation
+lock, existing receipts win; enqueue evidence or durable execution state implies
+accepted admission, otherwise the command is rejected `conversation_closed`.
+The resolved receipt is persisted before returning, fencing late conflicting
+admission writers. Accepted here is not a completion claim or a session restart.
+The method changes neither turn projections nor Task3 dispatcher claim fencing.
 
 ## Entry points
 
@@ -94,6 +117,15 @@ status/text/derived-image metadata for the later authorized processing task.
 
 ### Worker projection records
 
+- `BeginChatModelAttempt(ctx, chat.ModelAttempt) (cached bool, err error)` is the
+  text-chat registration path. It atomically checks the canonical candidate,
+  registers the new running attempt and fences older attempts under the same
+  conversation lock used for candidate publication. A cached winner skips new
+  registration/inference; its owning attempt remains available for settlement.
+  `SaveChatModelResult` rejects stale attempt publication with
+  `ErrStaleChatAttempt`; immutable changed-payload conflicts remain `ErrConflict`.
+  `PersistTurnResult` verifies that exactly one winning running attempt was
+  completed/linked, rolling back all final output on a mismatched projection.
 - `RecordModelAttempt(ctx, chat.ModelAttempt) error` registers a running attempt
   or an already-settled snapshot; `(turn, logical step, attempt)` is unique.
 - `CompleteModelAttempt(ctx, conversationID, id, status string, usage []byte,
@@ -123,10 +155,11 @@ content conflicts. JSONB projection results are compared using database JSONB
 equality, including equivalent numeric notation. Live/attempt events are not
 completed logical responses. Events have a 64KiB per-row cap; event retention,
 semantic payload filtering (no image bytes), SSE buffering, and expiry/snapshot
-policy belong to the transport task. This is not yet an atomic final
-message/turn-status/event activity; Task 4 must provide that transaction before
-certifying workflow completion. Conversation sidebar paging and workflow-state
-projection queries likewise belong to later consumers, not placeholder APIs.
+policy belong to the transport task. Task4's `PersistTurnResult` now atomically
+writes final message/turn-status/event and fences changed terminal outcomes;
+standalone `AppendMessage`/`AppendEvent` calls do not certify completion.
+Task3 provides sidebar paging and projection reads; these remain projections,
+not authorization or live workflow confirmation.
 
 ## Ordering and constraints
 

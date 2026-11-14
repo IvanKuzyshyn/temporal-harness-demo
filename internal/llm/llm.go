@@ -24,11 +24,13 @@ type ToolDefinition struct {
 	Parameters  json.RawMessage `json:"parameters"`
 }
 type Request struct {
-	Model    string
-	Messages []Message
-	Tools    []ToolDefinition
-	Scenario string
-	Turn     int
+	// Zero preserves legacy provider defaults. Web chat always sets explicit bounds.
+	ContextWindow, MaxOutputTokens, MaxResponseBytes int
+	Model                                            string
+	Messages                                         []Message
+	Tools                                            []ToolDefinition
+	Scenario                                         string
+	Turn                                             int
 }
 type Delta struct {
 	Text   string
