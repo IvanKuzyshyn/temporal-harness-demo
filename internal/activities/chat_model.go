@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/chat"
+	modelcontext "github.com/IvanKuzyshyn/temporal-harness-demo/internal/context"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm/ollama"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/storage"
@@ -19,30 +20,15 @@ import (
 	"go.temporal.io/sdk/temporal"
 )
 
-const chatSystemPrompt = "You are a helpful general chatbot. No tools or attachment access are available. History coverage is limited to recent completed text exchanges that fit; older exchanges are omitted, not summarized. Do not claim full conversation memory. Ask for missing context when needed."
+const chatSystemPrompt = "You are a helpful general chatbot. No tools or attachment access are available. History coverage is limited to bounded completed exchanges and any explicitly supplied lossy summary. Do not claim full conversation memory. Ask for missing context when needed."
 
 // Build mandatory current input without selecting history or budgeting against
 // a different path's prompt. Web requests also reserve schemas and tool groups.
 func mandatoryChatRequest(turn chat.Turn, prompt string) (llm.Request, error) {
-	req := llm.Request{Model: turn.Model, ContextWindow: 16384, MaxOutputTokens: 2000, MaxResponseBytes: 65536}
-	if !chat.ValidModel(turn.Model) || !utf8.ValidString(turn.Text) {
-		return req, &ollama.InvalidRequestError{Err: errors.New("invalid text model input")}
-	}
-	var provenance []llm.Message
-	if turn.ReplacementTarget != "" {
-		ids, _ := json.Marshal(turn.OriginalAttachmentIDs)
-		provenance = []llm.Message{
-			{Role: "user", Content: fmt.Sprintf("Original target prompt (turn %s; attachment IDs only %s):\n%s", turn.ReplacementTarget, ids, turn.OriginalText)},
-			{Role: "system", Content: "The preceding user prompt is retained provenance of the cancelled target. The following user message corrects it. No cancelled assistant draft is completed context. Attachment bytes/content are not authorized and have not been read."},
-		}
-	}
-	req.Messages = append(req.Messages, llm.Message{Role: "system", Content: prompt})
-	req.Messages = append(req.Messages, provenance...)
-	req.Messages = append(req.Messages, llm.Message{Role: "user", Content: turn.Text})
-	return req, nil
+	return modelcontext.Mandatory(turn, prompt)
 }
 
-// Count UTF-8 BYTES as tokens (conservative byte-tokenizer upper bound), plus
+// Shared source-bound rendered admission includes Unicode normalization, plus
 // 128 tokens per message for framing. All instructions are included. 12000 input
 // + 2000 output + 2384 reserve <= 16384. Never pass oversized text to truncation.
 func chatRequest(turn chat.Turn, recent []chat.Exchange) (llm.Request, error) {
@@ -50,32 +36,8 @@ func chatRequest(turn chat.Turn, recent []chat.Exchange) (llm.Request, error) {
 	if err != nil {
 		return req, err
 	}
-	used := 0
-	for _, m := range req.Messages {
-		used += len(m.Content) + 128
-	}
-	if used > 12000 {
-		return req, &ollama.InvalidRequestError{Err: errors.New("text input budget exceeded")}
-	}
-	var selected []chat.Exchange
-	for _, e := range recent {
-		cost := len(e.User) + len(e.Assistant) + 256
-		if used+cost > 12000 {
-			break
-		}
-		used += cost
-		selected = append(selected, e)
-		if len(selected) == 6 {
-			break
-		}
-	}
-	mandatory := req.Messages
-	req.Messages = []llm.Message{mandatory[0]}
-	for i := len(selected) - 1; i >= 0; i-- {
-		req.Messages = append(req.Messages, llm.Message{Role: "user", Content: selected[i].User}, llm.Message{Role: "assistant", Content: selected[i].Assistant})
-	}
-	req.Messages = append(req.Messages, mandatory[1:]...)
-	return req, nil
+	out, err := modelcontext.Assemble(req, modelcontext.Exchanges(recent), modelcontext.DefaultBudget())
+	return out.Request, err
 }
 
 // ChatModel stores the provider's complete response before reporting success;
@@ -178,19 +140,6 @@ func (a *ChatActivities) runChatModel(ctx context.Context, ref chat.TurnRef, att
 		}
 		return a.Repository.SaveChatModelResult(ctx, chat.ChatModelResult{TurnRef: ref, Calls: calls, AttemptID: attemptID, LimitedHistory: true})
 	}
-	history, err := a.Repository.RecentChatExchanges(ctx, ref)
-	if err != nil {
-		return err
-	}
-	var req llm.Request
-	if a.WebTools != nil {
-		req, err = a.webRequest(ctx, ref, turn, history)
-	} else {
-		req, err = chatRequest(turn, history)
-	}
-	if err != nil {
-		return err
-	}
 	attemptID := chat.LogicalID(ref.TurnID, fmt.Sprintf("model/%d/attempt/%d", ref.Step, attempt))
 	cached, err := a.Repository.BeginChatModelAttempt(ctx, chat.ModelAttempt{ID: attemptID, ConversationID: ref.ConversationID, TurnID: ref.TurnID, LogicalStep: ref.Step, Attempt: attempt, Status: "running"})
 	if err != nil {
@@ -199,6 +148,33 @@ func (a *ChatActivities) runChatModel(ctx context.Context, ref chat.TurnRef, att
 	if cached {
 		return nil
 	} // A winner may have committed after the fast cache read.
+	var req llm.Request
+	if a.WebTools != nil {
+		req, err = a.webRequest(ctx, ref, turn, nil)
+	} else {
+		req, err = mandatoryChatRequest(turn, chatSystemPrompt)
+	}
+	if err != nil {
+		return err
+	}
+	var assembled modelcontext.ModelContext
+	if repository, ok := a.Repository.(modelcontext.Repository); ok {
+		builder := modelcontext.Builder{Repository: repository, Model: a.Model, Mandatory: req, AttemptID: attemptID, Step: ref.Step}
+		assembled, err = builder.Build(ctx, ref.ConversationID, ref.TurnID, modelcontext.DefaultBudget())
+	} else {
+		// Legacy injected repositories have only recent text. Production SQL
+		// always implements the durable builder repository.
+		var history []chat.Exchange
+		history, err = a.Repository.RecentChatExchanges(ctx, ref)
+		if err == nil {
+			assembled, err = modelcontext.Assemble(req, modelcontext.Exchanges(history), modelcontext.DefaultBudget())
+			assembled.Coverage.SourceLimited = true
+		}
+	}
+	if err != nil {
+		return err
+	}
+	req = assembled.Request
 	if a.Model == nil {
 		return errors.New("chat model not configured")
 	}
@@ -238,7 +214,8 @@ func (a *ChatActivities) runChatModel(ctx context.Context, ref chat.TurnRef, att
 		}
 		return err
 	}
-	err = a.Repository.SaveChatModelResult(ctx, chat.ChatModelResult{TurnRef: ref, Calls: calls, Text: response.Message.Content, Tokens: response.Tokens, AttemptID: attemptID, LimitedHistory: true})
+	assembled.Coverage.OutputTruncated = response.OutputExhausted(req.MaxOutputTokens)
+	err = a.Repository.SaveChatModelResult(ctx, chat.ChatModelResult{TurnRef: ref, Calls: calls, Text: response.Message.Content, Tokens: response.Tokens, AttemptID: attemptID, LimitedHistory: true, Context: &chat.ContextMetadata{Coverage: assembled.Coverage, Accounting: assembled.Accounting}})
 	if errors.Is(err, storage.ErrConflict) || errors.Is(err, storage.ErrStaleChatAttempt) {
 		// Never overwrite a canonical response. A different attempt's committed
 		// winner is reusable; changed output from THIS owner is still a defect.

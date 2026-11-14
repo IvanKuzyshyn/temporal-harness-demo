@@ -136,6 +136,7 @@ type StoredCommand struct {
 	Receipt CommandReceipt
 }
 type MessageRecord struct {
+	Context                     *ContextMetadata `json:",omitempty"` // read-only final-result metadata
 	EntryID                     string
 	ConversationID              ConversationID
 	TurnID                      TurnID

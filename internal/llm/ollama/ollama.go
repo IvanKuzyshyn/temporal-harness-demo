@@ -85,8 +85,7 @@ func (m *Model) Chat(ctx context.Context, req llm.Request, emit func(llm.Delta) 
 	for _, msg := range req.Messages {
 		imageRequest = imageRequest || len(msg.Images) > 0
 	}
-	stream := true
-	wire := &api.ChatRequest{Model: req.Model, Stream: &stream}
+	var wire *api.ChatRequest
 	if imageRequest {
 		var err error
 		wire, err = m.admittedImage(ctx, req)
@@ -94,33 +93,25 @@ func (m *Model) Chat(ctx context.Context, req llm.Request, emit func(llm.Delta) 
 			return llm.Response{}, err
 		}
 	} else {
-		if req.ContextWindow > 0 || req.MaxOutputTokens > 0 {
-			wire.Options = map[string]any{}
-			if req.ContextWindow > 0 {
-				wire.Options["num_ctx"] = req.ContextWindow
-			}
-			if req.MaxOutputTokens > 0 {
-				wire.Options["num_predict"] = req.MaxOutputTokens
-			}
+		var err error
+		wire, err = textWire(req)
+		if err != nil {
+			return llm.Response{}, err
 		}
-		for _, msg := range req.Messages {
-			out := api.Message{Role: msg.Role, Content: msg.Content, ToolCallID: msg.ToolCallID, ToolName: msg.ToolName}
-			for _, call := range msg.ToolCalls {
-				var args api.ToolCallFunctionArguments
-				if err := json.Unmarshal(call.Args, &args); err != nil {
-					return llm.Response{}, &InvalidRequestError{err}
-				}
-				out.ToolCalls = append(out.ToolCalls, api.ToolCall{ID: call.ID, Function: api.ToolCallFunction{Name: call.Name, Arguments: args}})
-			}
-			wire.Messages = append(wire.Messages, out)
+	}
+	if req.Bounded && !imageRequest {
+		cost, err := TextInputBound(req)
+		if err != nil {
+			return llm.Response{}, err
 		}
-		for _, tool := range req.Tools {
-			var params api.ToolFunctionParameters
-			if err := json.Unmarshal(tool.Parameters, &params); err != nil {
-				return llm.Response{}, &InvalidRequestError{err}
-			}
-			wire.Tools = append(wire.Tools, api.Tool{Type: "function", Function: api.ToolFunction{Name: tool.Name, Description: tool.Description, Parameters: params}})
+		if req.ContextWindow > 16384 || req.ContextWindow <= 0 || req.MaxOutputTokens <= 0 || req.MaxOutputTokens > 2000 || cost > 12000 || cost+req.MaxOutputTokens+2384 > req.ContextWindow {
+			return llm.Response{}, &InvalidRequestError{fmt.Errorf("text input budget exceeded")}
 		}
+		if err = m.checkProfileIdentity(ctx, req.Model); err != nil {
+			return llm.Response{}, err
+		}
+		truncate, shift := false, false
+		wire.Truncate, wire.Shift, wire.Runner = &truncate, &shift, "mlx"
 	}
 	res := llm.Response{Message: llm.Message{Role: "assistant"}}
 	var callbackErr error
@@ -130,6 +121,9 @@ func (m *Model) Chat(ctx context.Context, req llm.Request, emit func(llm.Delta) 
 			return err
 		}
 		done = chunk.Done
+		if chunk.Done {
+			res.DoneReason = chunk.DoneReason
+		}
 		if req.MaxResponseBytes > 0 && len(req.Tools) == 0 && len(chunk.Message.ToolCalls) > 0 {
 			callbackErr = &InvalidRequestError{fmt.Errorf("unrequested tool output")}
 			return callbackErr

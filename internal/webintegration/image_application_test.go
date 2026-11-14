@@ -175,6 +175,13 @@ func TestImageApplicationAPIAndRestart(t *testing.T) {
 					post("/conversations/"+string(c.ID)+"/messages", map[string]any{"requestId": uuid.NewString(), "text": instruction, "attachmentIds": []chat.AttachmentID{saved.Attachment.ID}}, &receipt)
 					dispatchOne()
 					approval := f.pending(t, c)
+					// Workflow query state precedes its SQL projection. The API accepts
+					// decisions only after this exact approval is durable (as the UI sees it).
+					require.Eventually(t, func() bool {
+						var durable bool
+						err := f.pool.QueryRow(f.ctx, `SELECT EXISTS(SELECT 1 FROM approvals WHERE conversation_id=$1 AND id=$2 AND action_hash=$3 AND outcome IS NULL AND decision IS NULL)`, c.ID, approval.ID, approval.Scope.ActionHash).Scan(&durable)
+						return err == nil && durable
+					}, 5*time.Second, 10*time.Millisecond)
 					require.Equal(t, before, m.calls.Load(), "new image action cannot invoke model before approval")
 					require.NotEqual(t, previousHash, approval.Scope.ActionHash)
 					previousHash = approval.Scope.ActionHash

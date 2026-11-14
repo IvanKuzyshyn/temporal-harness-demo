@@ -106,7 +106,7 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request, id chat.Convers
 	}
 	items := []any{}
 	for _, m := range page.Messages {
-		items = append(items, map[string]any{"entryId": m.EntryID, "conversationId": m.ConversationID, "turnId": m.TurnID, "role": m.Role, "text": m.Text, "attachmentIds": m.AttachmentIDs, "logicalStep": m.LogicalStep, "resultKind": m.ResultKind, "completionState": m.CompletionState, "sequence": m.Sequence, "createdAt": m.CreatedAt})
+		items = append(items, map[string]any{"entryId": m.EntryID, "conversationId": m.ConversationID, "turnId": m.TurnID, "role": m.Role, "text": m.Text, "attachmentIds": m.AttachmentIDs, "logicalStep": m.LogicalStep, "resultKind": m.ResultKind, "completionState": m.CompletionState, "context": m.Context, "sequence": m.Sequence, "createdAt": m.CreatedAt})
 	}
 	respond(w, 200, map[string]any{"messages": items, "before": page.Before})
 }

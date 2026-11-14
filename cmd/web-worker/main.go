@@ -55,7 +55,7 @@ func run() error {
 	}
 	defer pool.Close()
 	var ready bool
-	if err = pool.QueryRow(startup, "SELECT version=7 AND NOT dirty FROM schema_migrations").Scan(&ready); err != nil || !ready {
+	if err = pool.QueryRow(startup, "SELECT version=8 AND NOT dirty FROM schema_migrations").Scan(&ready); err != nil || !ready {
 		return errors.New("schema unavailable; run web-api -migrate")
 	}
 	address := os.Getenv("WEBCHAT_TEMPORAL_ADDRESS")
