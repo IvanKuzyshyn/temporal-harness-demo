@@ -15,7 +15,16 @@ Task4 adds migration `000003`, direct `GetTurn`/bounded `RecentChatExchanges`,
 `CheckChatCommand`/`RecordChatAdmission`, `StartChatTurn`,
 `BeginChatModelAttempt`, `GetChatModelResult`/`SaveChatModelResult`, and atomic
 `PersistTurnResult`. See [web-chat-temporal.md](web-chat-temporal.md) for exact
-receipt ordering, bounded carry and completion authority. Domain types are in
+receipt ordering, bounded carry and completion authority. Task5 fix1 requires schema4 (the earlier Task5 slice used schema3):
+`MarkChatCancelling` projects the workflow-owned target; accepted control receipts
+also project cancelling without resurrecting a terminal turn. Cancelled
+`PersistTurnResult` atomically closes running attempts, writes `turn.cancelled`,
+and retains any cached provider candidate as an immutable **incomplete** cancelled
+assistant message, never a final answer. Rejected replacement intents become
+failed with `stale_target`/`control_conflict`/`invalid_command`. `GetTurn` now returns
+the target's original prompt and ordered attachment IDs as provenance, never
+attachment bytes/extracted text. These content fields stay in activities, not
+workflow carry. Domain types are in
 `internal/chat/execution.go`; the source interfaces remain authoritative.
 
 Admission recovery uses bounded `CommandIdentity`/`AdmissionCheckpoint` values,
@@ -25,11 +34,13 @@ persists the workflow's already replayable decision (`receipt`). It never decide
 whether to enqueue. The original full-command activity path still recomputes the
 payload digest before using the shared identity helpers.
 
-`ResolveClosedChatCommand(ctx, command, enqueued)` is terminal reconciliation,
+`ResolveClosedChatCommand(ctx, command, enqueued, observedDecision...)` is terminal reconciliation,
 called only after confirming closure and querying that exact run's replayed
 active turn/inbox. A missing receipt alone proves nothing. Under the conversation
 lock, existing receipts win; enqueue evidence or durable execution state implies
 accepted admission, otherwise the command is rejected `conversation_closed`.
+Task5's optional observed decision comes from the pinned run's replayed control
+claim or in-flight/checkpoint receipt and preserves exact control outcomes/IDs.
 The resolved receipt is persisted before returning, fencing late conflicting
 admission writers. Accepted here is not a completion claim or a session restart.
 The method changes neither turn projections nor Task3 dispatcher claim fencing.
@@ -116,6 +127,35 @@ Original file/image bytes never enter Postgres. Schema includes extraction
 status/text/derived-image metadata for the later authorized processing task.
 
 ### Worker projection records
+
+Schema4 adds `turns.model_invocations_closed` and `chat_model_invocations`
+(id, conversation/turn, Temporal attempt, registered_at, cleanup_confirmed_at).
+Each activity body gets its own UUID, even a duplicate delivery of one attempt.
+`RegisterChatModelInvocation(ctx,ref,id,attempt)` must commit before provider work;
+it rejects closed admission and never reauthorizes an existing invocation ID.
+`AcknowledgeChatModelCleanup(ctx,ref,id)` is owner-bound/idempotent and runs only
+after all body work and goroutines join. `SealChatModelInvocations(ctx,ref)` closes
+admission permanently and returns the count of missing acknowledgments. These
+transactions share the conversation lock. A racing registration is therefore
+visible or rejected, and sealed zero is stable. Neither `model_steps` failure nor
+a saved canonical candidate is acknowledgment. `PersistTurnResult` independently
+rejects settlement with `ErrChatCleanupUnconfirmed` while a row remains unacknowledged
+if the requested outcome is `cancelled` **or** the target is already `cancelling`.
+Thus a caller cannot bypass a controlled target's barrier by requesting completed/
+failed. Ordinary completed/failed outcomes may settle despite missing cleanup
+acknowledgments, retaining Task4's hard-worker-loss recovery and canonical fencing.
+All successful settlements seal admission atomically. Rows with missing
+acknowledgments are not acknowledged or deleted by settlement; ordinary logical
+completion is not cleanup proof. There is no schema change for this distinction.
+
+Apply migration4 with old API/workers stopped; do not hot-mix old workers that
+lack registration with the new protocol. Upgrade backfills existing nonterminal
+model attempts as **unacknowledged**, even
+if their publisher projection says failed/interrupted. It does not fabricate
+cleanup evidence. Pre-upgrade active work may require operator investigation;
+there is no old workflow-history compatibility/reset promise. Down migration
+removes only the new ledger/column; downgrade must not run alongside active workers.
+
 
 - `BeginChatModelAttempt(ctx, chat.ModelAttempt) (cached bool, err error)` is the
   text-chat registration path. It atomically checks the canonical candidate,

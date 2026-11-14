@@ -12,9 +12,12 @@ import (
 // replayed inbox/active-turn observation. Receipt absence is NOT non-admission.
 // Serialize the resolution with late admission writers so the returned result
 // cannot subsequently disagree with execution_receipt. This never settles a turn.
-func (r *Repository) ResolveClosedChatCommand(ctx context.Context, c chat.SessionCommand, enqueued bool) (out chat.AdmissionResult, err error) {
+func (r *Repository) ResolveClosedChatCommand(ctx context.Context, c chat.SessionCommand, enqueued bool, observed ...chat.AdmissionResult) (out chat.AdmissionResult, err error) {
 	if _, err = r.CheckChatCommand(ctx, c); err != nil {
 		return out, err
+	}
+	if len(observed) > 1 || (len(observed) == 1 && !validChatAdmission(c.Identity(), observed[0])) {
+		return out, chat.ErrInvalid
 	}
 	err = r.withConversation(ctx, c.ConversationID, func(tx pgx.Tx) error {
 		var raw []byte
@@ -26,8 +29,15 @@ func (r *Repository) ResolveClosedChatCommand(ctx context.Context, c chat.Sessio
 			return json.Unmarshal(raw, &out)
 		}
 		out = chat.AdmissionResult{State: "rejected", Code: "conversation_closed"}
-		if enqueued || status == "running" || status == "completed" || (status == "failed" && reason != "invalid_command") {
+		if enqueued || status == "running" || status == "completed" || status == "cancelled" || (status == "failed" && reason != "invalid_command" && reason != "stale_target" && reason != "control_conflict") {
 			out = chat.AdmissionResult{State: "accepted"}
+			if c.Kind == chat.CommandReplace {
+				out.TargetTurnID = c.Payload.ExpectedActiveTurnID
+				out.ReplacementTurnID = c.TurnID
+			}
+		}
+		if len(observed) == 1 {
+			out = observed[0]
 		}
 		raw, err := json.Marshal(out)
 		if err != nil {

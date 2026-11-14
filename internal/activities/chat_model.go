@@ -2,6 +2,7 @@ package activities
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -12,6 +13,7 @@ import (
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm/ollama"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/storage"
+	"github.com/google/uuid"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 )
@@ -26,7 +28,18 @@ func chatRequest(turn chat.Turn, recent []chat.Exchange) (llm.Request, error) {
 	if !chat.ValidModel(turn.Model) || !utf8.ValidString(turn.Text) {
 		return req, &ollama.InvalidRequestError{Err: errors.New("invalid text model input")}
 	}
+	var provenance []llm.Message
+	if turn.ReplacementTarget != "" {
+		ids, _ := json.Marshal(turn.OriginalAttachmentIDs)
+		provenance = []llm.Message{
+			{Role: "user", Content: fmt.Sprintf("Original target prompt (turn %s; attachment IDs only %s):\n%s", turn.ReplacementTarget, ids, turn.OriginalText)},
+			{Role: "system", Content: "The preceding user prompt is retained provenance of the cancelled target. The following user message corrects it. No cancelled assistant draft is completed context. Attachment bytes/content are not authorized and have not been read."},
+		}
+	}
 	used := len(chatSystemPrompt) + len(turn.Text) + 256
+	for _, m := range provenance {
+		used += len(m.Content) + 128
+	}
 	if used > 12000 {
 		return req, &ollama.InvalidRequestError{Err: errors.New("text input budget exceeded")}
 	}
@@ -46,6 +59,7 @@ func chatRequest(turn chat.Turn, recent []chat.Exchange) (llm.Request, error) {
 	for i := len(selected) - 1; i >= 0; i-- {
 		req.Messages = append(req.Messages, llm.Message{Role: "user", Content: selected[i].User}, llm.Message{Role: "assistant", Content: selected[i].Assistant})
 	}
+	req.Messages = append(req.Messages, provenance...)
 	req.Messages = append(req.Messages, llm.Message{Role: "user", Content: turn.Text})
 	return req, nil
 }
@@ -55,6 +69,27 @@ func chatRequest(turn chat.Turn, recent []chat.Exchange) (llm.Request, error) {
 // or token stream is returned to Temporal. Final publication is a separate atomic
 // settlement activity, so a DB outage can never masquerade as completion.
 func (a *ChatActivities) ChatModel(ctx context.Context, ref chat.TurnRef) (retErr error) {
+	attempt := 1
+	if activity.IsActivity(ctx) {
+		attempt = int(activity.GetInfo(ctx).Attempt)
+	}
+	invocationID := uuid.NewString()
+	if err := a.Repository.RegisterChatModelInvocation(ctx, ref, invocationID, attempt); err != nil {
+		return chatStorageError(err) // No provider work without confirmed registration.
+	}
+	retErr = a.runChatModel(ctx, ref, attempt)
+	// Only normal body return proves its provider/persistence and heartbeat/
+	// shutdown goroutines joined. Do NOT defer this acknowledgment: panic or
+	// Goexit must leave durable doubt, even though they also run Go defers.
+	ack, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	if err := a.Repository.AcknowledgeChatModelCleanup(ack, ref, invocationID); err != nil && retErr == nil {
+		retErr = chatStorageError(err)
+	}
+	return retErr
+}
+
+func (a *ChatActivities) runChatModel(ctx context.Context, ref chat.TurnRef, attempt int) (retErr error) {
 	activityCtx := ctx
 	ctx, cancel := context.WithCancel(ctx)
 	var stopping atomic.Bool
@@ -113,10 +148,6 @@ func (a *ChatActivities) ChatModel(ctx context.Context, ref chat.TurnRef) (retEr
 	req, err := chatRequest(turn, history)
 	if err != nil {
 		return err
-	}
-	attempt := 1
-	if activity.IsActivity(ctx) {
-		attempt = int(activity.GetInfo(ctx).Attempt)
 	}
 	attemptID := chat.LogicalID(ref.TurnID, fmt.Sprintf("model/0/attempt/%d", attempt))
 	cached, err := a.Repository.BeginChatModelAttempt(ctx, chat.ModelAttempt{ID: attemptID, ConversationID: ref.ConversationID, TurnID: ref.TurnID, Attempt: attempt, Status: "running"})

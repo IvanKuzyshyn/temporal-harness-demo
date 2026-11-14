@@ -1,4 +1,4 @@
-# Database-backed Temporal text chat (Task 4)
+# Database-backed Temporal text chat (Tasks 4–5)
 
 This is a new runtime, not an adaptation of the terminal/project agent's prompt.
 Legacy entry points, workflows, tools, files and queues remain unchanged until
@@ -7,7 +7,7 @@ routing, attachment access or tool execution on this path.
 
 ## Run
 
-Apply application migrations with `web-api -migrate` (now version **3**), then run
+Apply application migrations with `web-api -migrate` (now version **4**), then run
 `cmd/web-worker` and `cmd/web-api` with the private API/DB configuration described
 in [web-api.md](web-api.md). Build with `mise exec -- go build -p 1 ./...`.
 Additional configuration:
@@ -26,10 +26,12 @@ on `web-chat-agents`, and `ChatModel` on `web-chat-llm`. Inference concurrency i
 one per worker. `web-chat-documents` is reserved, **not polling or advertised as
 ready** until a real child is implemented. Child/tool registration is not done
 here. Updates are named `message`, `stop`, `replace`, `decide`, `revoke`; query
-`state` returns `WebSessionState` without database/network access. Controls and
-attachment messages currently return typed `invalid_command` rejection, not fake
-success. Workflow `invalid_command` rejection marks message/replacement intent
-turns failed; terminal receipt reconciliation does not rewrite turn projections.
+`state` returns `WebSessionState` without database/network access. Stop and text
+replacement execute as described below. Approvals/revocation and messages or
+replacements with new attachments still return `invalid_command`, not fake
+success or attachment authorization. Rejected message/replacement intent turns
+are marked failed with their rejection code; terminal receipt reconciliation does
+not rewrite turn projections.
 
 ## Admission protocol: no lost enqueue window
 
@@ -42,10 +44,13 @@ and terminal reconciliation. After a submission error, confirmed terminal status
 and an existing receipt replay that receipt, including from an older run.
 **Receipt absence is not proof of non-admission.** For an absent marker, query the
 exact closed run's replayed active turn/inbox, then call
-`ResolveClosedChatCommand(ctx, command, enqueued)`. Its conversation-locked
+`ResolveClosedChatCommand(ctx, command, enqueued, observedDecision...)`. Its conversation-locked
 transaction combines that enqueue evidence with durable execution state, rechecks
 any late receipt, and saves the truthful resolution before dispatch settlement.
-An enqueued/executed command stays `accepted` (not necessarily completed); only a
+The pinned-run query also preserves the exact decision of a control claim,
+in-flight receipt or receipt-phase checkpoint. This prevents an unreceipted stop
+or rejected control from changing outcome after termination. An enqueued/executed
+command stays `accepted` (not necessarily completed); only a
 command with neither enqueue nor execution evidence gets
 `rejected/conversation_closed`. Late admission writers must agree with this
 immutable receipt or conflict. No watermark-only inference is used.
@@ -76,7 +81,8 @@ workflow never appends that user message again. For each serialized handler:
    `AdmissionCheckpoint` **before** completing the Update as `pending` and force
    Continue-As-New. This checkpoint holds validated command identity/digest,
    eligibility, phase (`check`/`receipt`) and decision, never prompt text. At most
-   100 already accepted handlers can hand off; new Updates are backpressured.
+   101 already accepted handlers can hand off (100 normal-budget admissions plus
+   one reserved active-target control); new Updates are backpressured.
 5. The next run resumes checkpoints through `ResumeChatAdmission`. A successful
    check precedes workflow adjudication/enqueue; only a replayable receipt-phase
    checkpoint can write the receipt. Each batch/phase consumes the run budget,
@@ -99,14 +105,15 @@ their existing locking/fencing semantics; execution receipt storage is separate.
 
 Continue-As-New occurs between joined turns or exhausted persistence batches,
 waits for all update handlers, and carries pending turn IDs, the last accepted
-normal sequence and scalar counters, plus at most 100 reference-only admission checkpoints. An active
+normal sequence and scalar counters, plus at most 101 reference-only admission checkpoints. An active
 recovery checkpoint adds only its
-turn ID, `start`/`settle` phase, bounded backoff and intended settlement metadata
+turn ID, `start`/`join`/`settle` phase, bounded backoff and intended settlement metadata
 (status/reason, no answer text). A settled model call is not repeated on recovery.
 There are no live children in this slice. Inbox limit is 64; a run rolls after
 100 handled commands/recovery batches (or server suggestion). A pure validator
 backpressures new Updates once that run budget is reached while inference is still
-active; the dispatcher retries the SAME Update ID after rollover. A validator
+active; one extra exact-target control remains admissible so a full budget cannot
+prevent stop. The dispatcher retries the SAME Update ID after rollover. A validator
 rejection is not cached. An already accepted handler may complete pending only
 with the explicit checkpoint/forced-rollover protocol above.
 Handlers count against the budget before yielding to their serialization mutex.
@@ -117,11 +124,97 @@ receipts have no TTL; therefore an arbitrarily delayed retry, including after
 more than 64 later commands and a new run, cannot enqueue again. The watermark
 is an ordering fence, **not** the source of old-command acceptance.
 
+## Stop and atomic replacement
+
+`ReplacementInput` is `{RequestID, ExpectedActiveTurnID, Text, AttachmentIDs}`.
+The existing API transaction has already inserted the correcting prompt/turn;
+there is never a second user append. Stop carries the expected target too.
+
+After persisted identity validation, a serialized workflow handler claims the
+**exact active target without yielding**. A different claim for that target gets
+`control_conflict`; an absent/different active target gets `stale_target`. Same
+request retries replay the original permanent receipt. Accepted control receipts
+include `targetTurnId` and, for replacement, `replacementTurnId`. Acceptance is
+intent/admission, not completed cancellation. Normal sequence order is untouched.
+
+The turn-local cancellation context interrupts model/start activities and start
+recovery backoff. Every logical activity future is joined before CAN, but a
+logical future (including success/cancellation) does **not** join older timed-out
+remote attempts. For an accepted stop/replacement, a separate durable all-invocation
+barrier gates target cancellation settlement and all newer turns. Disconnected
+workflow context is used only to await futures, not to run unbounded persistence
+after workflow cancellation. Cancellation projection writes use normal workflow
+context and bounded storage batches. The admission
+transaction projects `cancelling`; `MarkChatCancelling` is idempotent, and
+`PersistTurnResult(cancelled)` atomically settles the target, running attempts,
+optional cached draft and `turn.cancelled` event. Receipt handlers finish or
+handoff before the control claim is cleared. No replacement starts until this
+settlement succeeds. The replacement occupies a separate single priority slot,
+not the bounded normal inbox; queued normal follow-ups retain FIFO order.
+
+Every `ChatModel` body registers a fresh invocation UUID **before** cache/provider
+work. Registration commits under the same conversation lock as the permanent
+per-turn admission seal. It is either counted by the seal or rejected; even a
+late or duplicate delivery cannot start invisibly. The body acknowledges its
+registration only after provider/persistence return and heartbeat/shutdown
+goroutines join. This uses a two-second uncancelled activity-side cleanup context;
+missing/failed acknowledgment remains unknown, not success. Panic/Goexit also
+leave the invocation unacknowledged; acknowledgment is not a Go defer. Attempt status,
+publisher fencing, worker concurrency, and elapsed time are never cleanup proof.
+
+`SealChatModelInvocations` closes admission and counts all missing acknowledgments.
+For an accepted stop/replacement, only sealed zero allows target settlement and
+newer inference. A positive count parks `cancelling_interrupted`, exposes
+`UnconfirmedModelInvocations`, and leaves SQL nonterminal. Replacement/FIFO do not
+start, even after a late acknowledgment. Operator investigation is required; no
+automatic reset/reuse is attempted. A lost acknowledgment may conservatively park
+controlled work whose body actually returned. Worker/server restart cannot erase
+the ledger. The current runtime has no document children; Task9 must add their
+cleanup evidence to the same turn-local barrier.
+
+**Ordinary completion/failure without an accepted control is different.** It seals
+new registrations but does not require missing acknowledgments to arrive. A hard
+worker death or lost cleanup write therefore cannot permanently prevent a valid
+Temporal retry from publishing the canonical result or processing normal follow-ups.
+The missing rows remain unacknowledged; completion is not evidence of body cleanup.
+Task4's immutable candidate and latest-attempt fences prevent stale bodies from
+changing logical history, including after terminal settlement. Ordinary retries
+may still overlap stale remote bodies, as in Task4; accepted intervention is
+stricter for its exact target. Neither path claims physical provider/GPU reclamation.
+Tests use fake inference with real application-body and server/SQL lifecycle evidence.
+
+Completion linearizes when the returned model result enters finalization (`join`,
+then `settle` after sealing registrations).
+Controls racing with that boundary are rejected `stale_target`, including while
+that settlement is recovering: its SQL may already be committed with a lost
+acknowledgment, so a control cannot safely revoke it. Stop during **start**
+recovery is supported and interrupts its backoff. Cancellation settlement itself
+recovers in bounded batches and may CAN with `cancel_mark`/`cancel_join`/`cancel_settle` phases,
+the claimed command identity, target/replacement IDs and intended cancellation
+reason. No live child/activity, text, attachment content or growing receipt list
+is carried. A failed seal activity can recover/CAN with `join`/`cancel_join`
+metadata; this is explicitly **not** a cleanup acknowledgment. A resumed ordinary
+finalization must seal registrations before settlement; a resumed controlled
+finalization must additionally obtain sealed zero. A positive missing count for
+an accepted control parks the workflow rather than rolling over.
+Query-only `DecidingAdmission` exposes one in-flight receipt decision
+and must be empty on CAN; exhausted writes move to existing bounded checkpoints.
+
+Replacement inference loads the original target prompt and attachment **IDs** as
+explicit provenance, followed by the correcting prompt. Both count toward the
+same 12,000 estimated-input-token bound. It never reads attachment bytes or
+extracted text and cannot authorize them. A cached provider candidate cancelled
+before settlement is stored as `resultKind:cancelled, completionState:incomplete`;
+it is never a final assistant answer or a completed context exchange. This slice
+still does not persist token deltas; unsaved streamed drafts may be absent.
+
 ## Inference and completion authority
 
 `ChatActivities` borrows a `ChatRepository` interface and an `llm.Model`.
 `TurnRef` is only conversation/turn ID. Activities load the direct `GetTurn`
-projection and up to six recent, whole completed text exchanges. They never
+projection and up to six recent, whole completed text exchanges in **completion**
+order. A queued prompt accepted before a priority replacement therefore sees the
+replacement's completed exchange when it eventually runs. They never
 include queued prompts or failed/cancelled assistant drafts. `ChatModel` checks
 `chat_model_results` before calling the provider and persists a complete provider
 response there before returning. The stable logical key is the turn ID (one
@@ -220,10 +313,31 @@ mise exec -- go build -p 1 ./...
 mise exec -- go vet -p 1 ./...
 mise exec -- go test -p 1 ./...
 scripts/test-web-integration.sh chat
+scripts/test-web-integration.sh replacement
 WEBCHAT_TEST_LIVE_MODELS=1 scripts/test-web-integration.sh chat
 ```
 
-`storage` and `api` runner modes are preserved. `chat` includes them and starts a
+`replacement` runs real blocked-provider cancellation barriers, target conflicts,
+retry/CAN/priority/stale-stop checks, terminal control-receipt reconciliation, and
+actual worker + Temporal-server + Postgres restart while cancelling. The parent
+runner owns the restart protocol and retains the same Temporal SQLite history;
+Postgres postmaster timestamps prove its restart. Another real test withholds
+cleanup beyond heartbeat timeout and verifies `cancelling_interrupted` with no
+replacement execution. `TestReplacementAfterTimedOutAttemptDoesNotBypassCleanup`
+holds attempt1 after timeout on one real model worker, cancels attempt2 on another
+(or cancels during retry backoff), and verifies no terminal cancellation/FIFO/
+replacement while the older body is unacknowledged. It also restarts the workflow
+worker while the old provider remains held. The normal replacement test asserts
+the actual CAN run chain and scheduled-turn order.
+`TestOrdinaryHardWorkerDeathRecoversCanonicalResponseAndFollowUp` launches a dedicated
+model worker subprocess, verifies durable invocation registration, sends SIGKILL
+only to that owned process, and verifies its signal exit. A fresh SDK model worker
+then executes Temporal's retry: one canonical answer/event and the queued normal
+follow-up complete while the old missing acknowledgment remains honest. Late stale
+publication, registration and changed settlement are rejected. This is not a
+graceful worker close. Inference is explicitly fake; cancellation, histories, SQL,
+worker-process death, server processes and restart are real. SDK unit tests alone
+are not join proof. `storage` and `api` runner modes are preserved. `chat` includes them and starts a
 pinned real Temporal dev server as an owned child on unique loopback ports, with
 its own SQLite persistence; Postgres is an independent UUID Compose project.
 Mock inference is explicit and does not contact ambient model services. Live

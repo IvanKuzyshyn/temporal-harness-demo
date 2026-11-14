@@ -48,6 +48,8 @@ func startWeb(ctx context.Context, address string, a *activities.ChatActivities,
 			w.RegisterActivity(a.ResumeChatAdmission)
 			w.RegisterActivity(a.RecordChatAdmission)
 			w.RegisterActivity(a.StartChatTurn)
+			w.RegisterActivity(a.MarkChatCancelling)
+			w.RegisterActivity(a.SealChatModelInvocations)
 			w.RegisterActivity(a.PersistTurnResult)
 		} else {
 			w.RegisterActivity(a.ChatModel)

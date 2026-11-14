@@ -16,7 +16,7 @@ import (
 // Terminal reconciliation serializes its receipt with outstanding activity writes.
 type AdmissionRepository interface {
 	CheckChatCommand(context.Context, chat.SessionCommand) (chat.AdmissionResult, error)
-	ResolveClosedChatCommand(context.Context, chat.SessionCommand, bool) (chat.AdmissionResult, error)
+	ResolveClosedChatCommand(context.Context, chat.SessionCommand, bool, ...chat.AdmissionResult) (chat.AdmissionResult, error)
 }
 
 // WebGateway submits by workflow identity, never a pinned run ID. Terminal
@@ -87,7 +87,25 @@ func (g *WebGateway) resolveClosed(ctx context.Context, c dispatch.Command, caus
 				enqueued = true
 			}
 		}
-		return g.receipts.ResolveClosedChatCommand(ctx, c, enqueued)
+		var observed []chat.AdmissionResult
+		checkpoints := append([]chat.AdmissionCheckpoint(nil), state.PendingAdmissions...)
+		if state.DecidingAdmission != nil {
+			checkpoints = append(checkpoints, *state.DecidingAdmission)
+		}
+		for _, cp := range checkpoints {
+			if cp.Command == c.Identity() && cp.Phase == "receipt" {
+				observed = []chat.AdmissionResult{cp.Result}
+				break
+			}
+		}
+		if control := state.Control; control != nil && control.Command == c.Identity() {
+			r := chat.AdmissionResult{State: "accepted", TargetTurnID: c.Payload.ExpectedActiveTurnID}
+			if c.Kind == chat.CommandReplace {
+				r.ReplacementTurnID = c.TurnID
+			}
+			observed = []chat.AdmissionResult{r}
+		}
+		return g.receipts.ResolveClosedChatCommand(ctx, c, enqueued, observed...)
 	default:
 		return empty, cause
 	}

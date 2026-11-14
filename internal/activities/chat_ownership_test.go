@@ -35,6 +35,12 @@ func (r *ownershipRepository) GetTurn(_ context.Context, ref chat.TurnRef) (chat
 func (r *ownershipRepository) RecentChatExchanges(context.Context, chat.TurnRef) ([]chat.Exchange, error) {
 	return nil, nil
 }
+func (r *ownershipRepository) RegisterChatModelInvocation(context.Context, chat.TurnRef, string, int) error {
+	return nil
+}
+func (r *ownershipRepository) AcknowledgeChatModelCleanup(context.Context, chat.TurnRef, string) error {
+	return nil
+}
 func (r *ownershipRepository) BeginChatModelAttempt(context.Context, chat.ModelAttempt) (bool, error) {
 	return r.cached, nil
 }

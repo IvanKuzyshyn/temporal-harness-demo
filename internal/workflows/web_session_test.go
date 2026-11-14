@@ -30,6 +30,7 @@ func setupWeb(t *testing.T) (*testsuite.TestWorkflowEnvironment, chat.Conversati
 	}, activity.RegisterOptions{Name: w.WebCheckCommandActivity})
 	e.RegisterActivityWithOptions(func(context.Context, chat.Admission) error { return nil }, activity.RegisterOptions{Name: w.WebAdmissionActivity})
 	e.RegisterActivityWithOptions(func(context.Context, chat.TurnRef) error { return nil }, activity.RegisterOptions{Name: w.WebStartTurnActivity})
+	e.RegisterActivityWithOptions(func(context.Context, chat.TurnRef) (int64, error) { return 0, nil }, activity.RegisterOptions{Name: w.WebSealModelActivity})
 	return e, c
 }
 func TestQueuedFollowUpsFIFO(t *testing.T) {

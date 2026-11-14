@@ -55,7 +55,7 @@ func (r *receiptReader) CheckChatCommand(context.Context, chat.SessionCommand) (
 	r.calls++
 	return r.result, r.err
 }
-func (r *receiptReader) ResolveClosedChatCommand(_ context.Context, _ chat.SessionCommand, enqueued bool) (chat.AdmissionResult, error) {
+func (r *receiptReader) ResolveClosedChatCommand(_ context.Context, _ chat.SessionCommand, enqueued bool, _ ...chat.AdmissionResult) (chat.AdmissionResult, error) {
 	if enqueued {
 		return chat.AdmissionResult{State: "accepted"}, nil
 	}

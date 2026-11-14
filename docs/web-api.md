@@ -1,4 +1,4 @@
-# Private web-chat API (Tasks 3–4)
+# Private web-chat API (Tasks 3–5)
 
 This is the **Next.js server-to-Go contract**, without an `/api` prefix. The
 browser talks only to Next.js; Next.js adds `/api` to its public route names.
@@ -26,7 +26,7 @@ Export configuration explicitly (the binary does not automatically source `.env`
   passwords; edit credentials deliberately rather than reinitializing volumes.
 
 `bin/web-api -migrate` applies embedded migrations and exits. `bin/web-api` requires
-schema version 3 and serves HTTP. Effective pgx user/database/startup parameters
+schema version 4 and serves HTTP. Effective pgx user/database/startup parameters
 are validated before connecting, including query/environment/service overrides;
 only the validated config is used. Application identity must be `webchat`, never
 Temporal's database/role. Runtime connection hosts and fallback hosts must be
@@ -146,9 +146,22 @@ Postgres. They can receive 202 and later `resultState:"rejected"` with e.g.
 `result:{"state":"rejected","code":"stale_target"}`. Display rejection rather
 than an endless spinner; never treat queued user text as an assistant answer.
 Accepted admission still does not mean the turn is complete. During gateway
-outages commands remain durably pending and readiness says why. In Task4,
-controls and attachment messages are explicitly rejected with `invalid_command`;
-only ordinary text messages execute. They are not silently treated as controls.
+outages commands remain durably pending and readiness says why. Task5 supports
+stop and text replacement. The workflow claims the exact expected active target;
+competing distinct controls return `control_conflict`, stale/settling targets
+return `stale_target`. Accepted control results include `targetTurnId` and, for
+replacement, `replacementTurnId`. Poll the receipt and conversation/history
+projections separately: accepted does not mean cleanup is complete. Replacement
+starts only after joined cleanup and durable target cancellation, ahead of queued
+normal messages. For an accepted control, any missing cleanup acknowledgment across
+**all** model invocations of its target (including older timed-out attempts) leaves
+`cancelling_interrupted` in workflow state and `cancelling` in SQL; no newer turn
+runs. Later retry cancellation/success cannot bypass this durable barrier. Ordinary
+completion/failure without an accepted control retains retry-safe hard-worker-loss
+recovery: missing cleanup acknowledgments do not block canonical settlement or
+normal follow-ups, and are not falsely marked confirmed. See the runtime document for
+completion linearization, recovery and operator limits. Approvals/revocation and
+new attachment-bearing messages/replacements still reject `invalid_command`.
 
 Metadata is a repeatable-read Postgres projection. `observedAt` is an API read
 observation, **not a workflow confirmation**. `authoritative:false` and
@@ -188,7 +201,7 @@ message content, digest equality, freshness) are enforced/described above.
     "Created":{"type":"object","additionalProperties":false,"required":["conversation","payloadDigest"],"properties":{"conversation":{"$ref":"#/$defs/Conversation"},"payloadDigest":{"$ref":"#/$defs/Digest"}}},
     "ConversationPage":{"type":"object","additionalProperties":false,"required":["conversations","cursor"],"properties":{"conversations":{"type":"array","maxItems":200,"items":{"$ref":"#/$defs/Conversation"}},"cursor":{"type":"string"}}},
     "Receipt":{"type":"object","additionalProperties":false,"required":["commandId","turnId","payloadDigest","dispatchState","resultState","result"],"properties":{"commandId":{"$ref":"#/$defs/ID"},"turnId":{"$ref":"#/$defs/NullableID"},"payloadDigest":{"$ref":"#/$defs/Digest"},"dispatchState":{"enum":["pending","dispatched"]},"resultState":{"enum":["pending","accepted","rejected"]},"result":{"type":["object","null"],"description":"Immutable gateway projection; new dispatcher writes GatewayResult. Existing storage projections may have other JSON object fields."}}},
-    "GatewayResult":{"type":"object","additionalProperties":false,"required":["state"],"properties":{"state":{"enum":["pending","accepted","rejected"]},"code":{"enum":["stale_target","invalid_approval","approval_expired","conversation_closed","policy_conflict","invalid_command"]}},"if":{"properties":{"state":{"const":"rejected"}}},"then":{"required":["code"]}},
+    "GatewayResult":{"type":"object","additionalProperties":false,"required":["state"],"properties":{"state":{"enum":["pending","accepted","rejected"]},"code":{"enum":["stale_target","invalid_approval","approval_expired","conversation_closed","policy_conflict","control_conflict","invalid_command"]},"targetTurnId":{"$ref":"#/$defs/ID"},"replacementTurnId":{"$ref":"#/$defs/ID"}},"if":{"properties":{"state":{"const":"rejected"}}},"then":{"required":["code"]}},
     "Message":{"type":"object","additionalProperties":false,"required":["entryId","conversationId","turnId","role","text","attachmentIds","logicalStep","resultKind","completionState","sequence","createdAt"],"properties":{"entryId":{"$ref":"#/$defs/ID"},"conversationId":{"$ref":"#/$defs/ID"},"turnId":{"$ref":"#/$defs/ID"},"role":{"enum":["user","assistant"]},"text":{"type":"string"},"attachmentIds":{"$ref":"#/$defs/Attachments"},"logicalStep":{"type":"integer","minimum":0},"resultKind":{"type":"string","minLength":1},"completionState":{"enum":["completed","incomplete"]},"sequence":{"type":"integer","minimum":1},"createdAt":{"$ref":"#/$defs/Time"}}},
     "MessagePage":{"type":"object","additionalProperties":false,"required":["messages","before"],"properties":{"messages":{"type":"array","maxItems":200,"items":{"$ref":"#/$defs/Message"}},"before":{"type":"string"}}},
     "ActiveTurn":{"type":"object","additionalProperties":false,"required":["id","status","updatedAt"],"properties":{"id":{"$ref":"#/$defs/ID"},"status":{"enum":["running","awaiting_approval","cancelling"]},"updatedAt":{"$ref":"#/$defs/Time"}}},
@@ -227,7 +240,10 @@ A gateway error always means an ambiguous/retryable outcome to this layer;
 return a valid `CommandResult{State:"rejected",Code:...}` for a durable domain
 rejection. Unknown/malformed gateway results are retried, not trusted. Valid
 states are pending, accepted, rejected; rejection requires a public code from the
-schema. Do not return model text, secrets, or raw SDK errors as result data.
+schema. Do not return model text, secrets, or raw SDK errors as result data. Task5 adds
+bounded `targetTurnId`/`replacementTurnId` on accepted control receipts and
+`control_conflict` as an asynchronous rejection code; these IDs refer to the
+original authoritative target and already-created replacement, not a newer turn.
 
 `dispatch.New(repo, gateway, Options)` requires an injected gateway;
 `Run(ctx)` reconciles until cancellation or exhausted repository-failure budget;
