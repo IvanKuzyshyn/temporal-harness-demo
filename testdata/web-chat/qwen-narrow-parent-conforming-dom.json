@@ -1,0 +1,7 @@
+{
+  "text": "You\nSaved message\n\nTranslate the text in the image into English. Reply only with the translation.\n\nSaved attachment · 69569fab-7d90-49cc-8cc1-3708f88633e6Attach again\nNew analysis requires its own authorization. Originals remain saved.\nAssistant\nSaved reply\n\nHELLO WORLD\n\nBounded, lossy context · 0 recent exchanges\n\n0 exchanges outside summary/recent · 0 tool sources omitted · 0 quotation pairs omitted\n\nContext provenance\n\nfile_upload · completed\n\nWork details",
+  "tools": [
+    ""
+  ],
+  "url": "http://127.0.0.1:50019/chat/f80e7e54-eec6-4e2f-8242-acddc2b0c1b0"
+}

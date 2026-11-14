@@ -22,11 +22,21 @@ import type {
   MessagePage,
   Model,
   Receipt,
+  SelectedAttachment,
 } from "../lib/contracts";
 import { initialState, mergePage, reduceEvent } from "../lib/event-reducer";
 import { MessageList, WorkStatus } from "./message-list";
 
-type Intent = { requestId: string; text: string; attachmentIds: string[] };
+import { ApprovalCard, ControlStatus } from "./approval-card";
+import { AttachmentPicker, ImageLimits } from "./attachment-picker";
+import { useControls } from "../lib/use-controls";
+
+type Intent = {
+  requestId: string;
+  text: string;
+  attachmentIds: string[];
+  expectedActiveTurnId?: string;
+};
 function Icon({ kind }: { kind: "menu" | "plus" | "send" | "chat" }) {
   return (
     <svg
@@ -333,6 +343,36 @@ function ChatSession({
     "reconnecting",
   );
   const [draft, setDraft] = useState("");
+  const [attachments, setAttachments] = useState<SelectedAttachment[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const attachmentKey = "chat.attachments." + id;
+  const attachmentsRef = useRef<SelectedAttachment[]>([]);
+  function selectAttachments(items: SelectedAttachment[]) {
+    if (!save(attachmentKey, items)) {
+      setError(
+        "Browser storage unavailable; attachment selection could not be saved.",
+      );
+      return;
+    }
+    attachmentsRef.current = items;
+    setAttachments(items);
+  }
+  const recordReceipt = useCallback(
+    (receipt: Receipt) =>
+      setState((s) =>
+        reduceEvent(s, {
+          id: s.cursor,
+          conversationId: id,
+          turnId: receipt.turnId,
+          stepId: null,
+          attempt: null,
+          type: "command.result",
+          data: receipt,
+        }),
+      ),
+    [id],
+  );
+  const controls = useControls(id, state.commands, recordReceipt);
   const [pending, setPending] = useState<Intent | null>(null);
   const pendingRef = useRef<Intent | null>(null);
   const [error, setError] = useState("");
@@ -354,6 +394,9 @@ function ChatSession({
   useEffect(() => {
     alive.current = true;
     setDraft(saved<string>(draftKey) ?? "");
+    const selected = saved<SelectedAttachment[]>(attachmentKey) ?? [];
+    attachmentsRef.current = selected;
+    setAttachments(selected);
     const restored = saved<Intent>(pendingKey);
     pendingRef.current = restored;
     setPending(restored);
@@ -366,6 +409,16 @@ function ChatSession({
       alive.current = false;
     };
   }, [draftKey, pendingKey, rejectionKey]);
+  useEffect(() => {
+    const changed = (event: Event) => {
+      if ((event as CustomEvent<string>).detail !== id) return;
+      const selected = saved<SelectedAttachment[]>(attachmentKey) ?? [];
+      attachmentsRef.current = selected;
+      setAttachments(selected);
+    };
+    window.addEventListener("chat-attachments", changed);
+    return () => window.removeEventListener("chat-attachments", changed);
+  }, [id, attachmentKey]);
   useEffect(
     () =>
       watchConversation(
@@ -387,7 +440,10 @@ function ChatSession({
         (c) => c.requestId === pending.requestId,
       )
     ) {
-      settlePending(pending, true);
+      const receipt = Object.values(state.commands).find(
+        (c) => c.requestId === pending.requestId,
+      )!;
+      settlePending(pending, receipt.resultState !== "rejected");
     }
   }, [state.commands, pending, pendingKey, draft, draftKey]);
   // Stable key: one-second snapshots must not continually restart this timer.
@@ -500,15 +556,29 @@ function ChatSession({
     if (clearDraft) {
       if (saved<string>(draftKey) === intent.text) save(draftKey, "");
       setDraft((current) => (current === intent.text ? "" : current));
+      selectAttachments(
+        attachmentsRef.current.filter(
+          (a) => !intent.attachmentIds.includes(a.id),
+        ),
+      );
     }
     return true;
   }
-  async function send() {
-    if (sending || (!pending && !draft.trim())) return;
+  async function send(replace = false) {
+    if (
+      sending ||
+      uploading ||
+      !state.loaded ||
+      (!pending && !draft.trim() && !attachments.length)
+    )
+      return;
+    const target = state.metadata?.activeTurn;
+    if (replace && (!target || target.status === "cancelling")) return;
     const intent = pendingRef.current ?? {
       requestId: crypto.randomUUID(),
       text: draft,
-      attachmentIds: [],
+      attachmentIds: attachments.map((a) => a.id),
+      ...(replace ? { expectedActiveTurnId: target!.id } : {}),
     };
     if (!save(pendingKey, intent)) {
       setError("Browser storage unavailable; request was not sent.");
@@ -520,7 +590,7 @@ function ChatSession({
     setError("");
     try {
       const receipt = await api<Receipt>(
-        `/conversations/${id}/messages`,
+        `/conversations/${id}/${intent.expectedActiveTurnId ? "replace" : "messages"}`,
         intent,
       );
       if (!alive.current) return;
@@ -535,7 +605,8 @@ function ChatSession({
           data: receipt,
         }),
       );
-      if (settlePending(intent, true)) atBottom.current = true;
+      if (settlePending(intent, receipt.resultState !== "rejected"))
+        atBottom.current = true;
     } catch (e) {
       if (!alive.current || pendingRef.current?.requestId !== intent.requestId)
         return;
@@ -617,12 +688,71 @@ function ChatSession({
               <p>Ask a question, explore an idea, or work through a problem.</p>
             </div>
           )}
-          <MessageList state={state} />
+          <MessageList
+            state={state}
+            attachmentBusy={!!pending || uploading}
+            onAttach={(attachmentId) => {
+              if (attachments.some((a) => a.id === attachmentId)) return;
+              if (attachments.length >= 4) {
+                setError(
+                  "At most four attachments per message. Remove one first.",
+                );
+                return;
+              }
+              selectAttachments([...attachments, { id: attachmentId }]);
+            }}
+          />
         </div>
       </div>
       <div className="composer-area">
         <div className="reading-column">
-          <WorkStatus state={state} />
+          <div className="interaction-panel">
+            <WorkStatus state={state}>
+              {state.metadata?.policy.approvalAll && (
+                <div className="policy-control">
+                  <p>
+                    Revision {state.metadata.policy.revision} ·{" "}
+                    {state.metadata.policy.toolsetVersion}. Revocation affects
+                    future authorization, not already-running work.
+                  </p>
+                  <button
+                    type="button"
+                    className="text-button"
+                    disabled={controls.pending("Revoke")}
+                    onClick={() =>
+                      controls.submit("Revoke", "approval-policy/revoke", {})
+                    }
+                  >
+                    Revoke approval
+                  </button>
+                </div>
+              )}
+              {state.metadata?.pendingApproval && (
+                <ApprovalCard
+                  approval={state.metadata.pendingApproval}
+                  policy={state.metadata.policy}
+                  busy={controls.pending("Decision")}
+                  onDecision={(decision) => {
+                    const a = state.metadata!.pendingApproval!;
+                    controls.submit("Decision", `approvals/${a.id}/decision`, {
+                      actionHash: a.actionHash,
+                      decision,
+                    });
+                  }}
+                />
+              )}
+            </WorkStatus>
+            <ControlStatus
+              controls={controls.controls}
+              sending={controls.sending}
+              retry={controls.retry}
+            />
+            {controls.storageError && (
+              <p className="warning" role="alert">
+                {controls.storageError}
+              </p>
+            )}
+          </div>
           {error && (
             <p className="warning" role="alert">
               {error}
@@ -673,6 +803,13 @@ function ChatSession({
               }}
               rows={2}
             />
+            <AttachmentPicker
+              id={id}
+              selected={attachments}
+              disabled={!!pending}
+              onChange={selectAttachments}
+              onBusy={setUploading}
+            />
             <div className="composer-bottom">
               <span>
                 {active
@@ -682,7 +819,10 @@ function ChatSession({
               <button
                 className="send-button"
                 disabled={
-                  sending || (!pending && !draft.trim()) || !state.loaded
+                  sending ||
+                  uploading ||
+                  (!pending && !draft.trim() && !attachments.length) ||
+                  !state.loaded
                 }
                 aria-label={pending ? "Retry saved submission" : "Send message"}
                 type="submit"
@@ -691,6 +831,44 @@ function ChatSession({
               </button>
             </div>
           </form>
+          {state.metadata?.activeTurn && (
+            <div className="turn-controls">
+              <button
+                type="button"
+                className="secondary"
+                disabled={
+                  controls.pending("Stop") ||
+                  state.metadata.activeTurn.status === "cancelling"
+                }
+                onClick={() =>
+                  controls.submit("Stop", "stop", {
+                    expectedActiveTurnId: state.metadata!.activeTurn!.id,
+                  })
+                }
+              >
+                Stop current turn
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                disabled={
+                  !!pending ||
+                  sending ||
+                  uploading ||
+                  (!draft.trim() && !attachments.length) ||
+                  state.metadata.activeTurn.status === "cancelling"
+                }
+                onClick={() => void send(true)}
+              >
+                Replace current turn
+              </button>
+              <span>
+                Replacement joins cancelled work, then runs before queued
+                follow-ups.
+              </span>
+            </div>
+          )}
+          <ImageLimits />
           <p className="composer-note">
             Closing this page won’t stop accepted work. Replies are final only
             when saved.

@@ -1,6 +1,7 @@
 import type { ChatState } from "../lib/event-reducer";
 import type { ContextMetadata } from "../lib/contracts";
-import { SafeMarkdown, safeLink } from "./safe-markdown";
+import { SafeMarkdown } from "./safe-markdown";
+import { ToolDetails } from "./tool-details";
 const labels: Record<string, string> = {
   queued: "Queued",
   running: "Generating",
@@ -63,7 +64,13 @@ export function Coverage({ context }: { context: ContextMetadata }) {
     </div>
   );
 }
-export function WorkStatus({ state }: { state: ChatState }) {
+export function WorkStatus({
+  state,
+  children,
+}: {
+  state: ChatState;
+  children?: React.ReactNode;
+}) {
   const m = state.metadata;
   const unresolved = Object.values(state.turns).filter(
     (t) => !["completed", "failed", "cancelled", "queued"].includes(t.status),
@@ -84,6 +91,13 @@ export function WorkStatus({ state }: { state: ChatState }) {
         </span>
         <span>Saved state · may lag execution</span>
       </div>
+      {children ??
+        (m?.pendingApproval && (
+          <p className="approval-notice">
+            Approval needed · {m.pendingApproval.toolName}. Work is paused;
+            content access has not been authorized.
+          </p>
+        ))}
       {m && !m.dispatcherConnected && (
         <p className="warning">
           Execution connection unavailable. Accepted messages remain saved and
@@ -100,20 +114,6 @@ export function WorkStatus({ state }: { state: ChatState }) {
           Command rejected: {c.result?.code ?? "rejected"}
         </p>
       ))}
-      {m?.pendingApproval && (
-        <aside className="approval-notice">
-          <strong>Approval needed · {m.pendingApproval.toolName}</strong>
-          <p>
-            Work is paused. No content access has been authorized by this
-            notice.
-          </p>
-          <pre>{JSON.stringify(m.pendingApproval.arguments, null, 2)}</pre>
-          <p>
-            Deadline: {m.pendingApproval.deadline}. Approval controls arrive in
-            the next task.
-          </p>
-        </aside>
-      )}
       {queued.length > 0 && (
         <details className="queued-work">
           <summary>
@@ -138,7 +138,15 @@ export function WorkStatus({ state }: { state: ChatState }) {
     </section>
   );
 }
-export function MessageList({ state }: { state: ChatState }) {
+export function MessageList({
+  state,
+  onAttach,
+  attachmentBusy,
+}: {
+  state: ChatState;
+  onAttach?: (id: string) => void;
+  attachmentBusy?: boolean;
+}) {
   return (
     <>
       {state.messages.map((m) => {
@@ -165,10 +173,28 @@ export function MessageList({ state }: { state: ChatState }) {
             </div>
             <SafeMarkdown text={m.text} />
             {m.attachmentIds?.length ? (
-              <p className="muted">
-                {m.attachmentIds.length} saved attachment(s) · original access
-                requires approval
-              </p>
+              <ul className="saved-attachments" aria-label="Saved attachments">
+                {m.attachmentIds.map((id) => (
+                  <li key={id}>
+                    <span>Saved attachment · {id}</span>
+                    {onAttach && (
+                      <button
+                        type="button"
+                        className="text-button"
+                        disabled={attachmentBusy}
+                        aria-label={`Attach again ${id}`}
+                        onClick={() => onAttach(id)}
+                      >
+                        Attach again
+                      </button>
+                    )}
+                  </li>
+                ))}
+                <li className="muted">
+                  New analysis requires its own authorization. Originals remain
+                  saved.
+                </li>
+              </ul>
             ) : null}
             {t && t.status !== "completed" && (
               <p
@@ -199,41 +225,9 @@ export function MessageList({ state }: { state: ChatState }) {
           )}
         </article>
       ))}
-      {Object.values(state.tools).map((t) => {
-        const result = t.result;
-        const url = safeLink(
-          typeof result?.finalUrl === "string"
-            ? result.finalUrl
-            : typeof result?.url === "string"
-              ? result.url
-              : undefined,
-        );
-        return (
-          <section className="tool-result" key={t.id}>
-            <p>
-              {t.name} · {t.status}
-              {result?.truncated || result?.extractionStatus === "partial"
-                ? " · Partial coverage"
-                : ""}
-              {result?.error ? " · Source error" : ""}
-            </p>
-            {url && (
-              <a
-                href={url}
-                target="_blank"
-                rel="noopener noreferrer"
-                referrerPolicy="no-referrer"
-              >
-                Open source ↗
-              </a>
-            )}
-            <details>
-              <summary>Work details</summary>
-              <pre>{JSON.stringify(result, null, 2)}</pre>
-            </details>
-          </section>
-        );
-      })}
+      {Object.values(state.tools).map((t) => (
+        <ToolDetails key={t.id} tool={t} />
+      ))}
     </>
   );
 }

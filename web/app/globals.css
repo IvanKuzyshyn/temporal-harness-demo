@@ -791,6 +791,197 @@ details pre {
     max-height: 20vh;
   }
 }
+.secondary,
+.attach-button {
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--paper);
+}
+.secondary:hover,
+.attach-button:hover {
+  background: var(--surface);
+}
+.interaction-panel {
+  max-height: 34dvh;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+.interaction-panel .work-status {
+  max-height: none;
+  overflow: visible;
+}
+.approval-card {
+  border-left: 3px solid #a97434;
+  background: #f7f1e7;
+  padding: 14px;
+  margin: 10px 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.approval-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #75421b;
+  font-size: 14px;
+}
+.approval-arguments {
+  margin: 8px 0;
+  padding: 8px;
+  max-height: 100px;
+  background: #fff9;
+}
+.action-row,
+.turn-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
+}
+.action-row .primary {
+  font-size: 12px;
+  padding: 8px 12px;
+}
+.scope-line,
+.policy-control,
+.turn-controls > span,
+.image-limits,
+.attachment-toolbar > span {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.approval-card details {
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+.control-status:empty {
+  display: none;
+}
+.control-status > div {
+  border-top: 1px solid var(--line);
+  padding: 6px 0;
+}
+.control-target {
+  overflow-wrap: anywhere;
+}
+.attachment-picker {
+  border-top: 1px solid var(--line);
+  margin-top: 8px;
+  padding-top: 8px;
+  font-size: 12px;
+}
+.attachment-picker.drag-over {
+  background: #e9eee5;
+  outline: 2px dashed var(--accent);
+}
+.attachment-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.attach-button {
+  position: relative;
+  display: inline-flex;
+  cursor: pointer;
+  overflow: hidden;
+}
+.attach-button input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.attach-button:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.attach-button:has(input:disabled) {
+  opacity: 0.5;
+}
+.attachment-list,
+.saved-attachments {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+.attachment-list {
+  max-height: 160px;
+  overflow-y: auto;
+}
+.attachment-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+.attachment-list li > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.attachment-list small {
+  flex-basis: 100%;
+  color: var(--muted);
+}
+.attachment-list button {
+  min-height: 32px;
+  min-width: 32px;
+}
+.raster-preview {
+  display: block;
+  max-width: 100%;
+  max-height: 100px;
+  object-fit: contain;
+}
+.saved-attachments {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.image-limits {
+  margin-top: 8px;
+}
+.image-limits p {
+  margin-top: 8px;
+}
+.composer-area {
+  flex-shrink: 0;
+  max-height: 72dvh;
+  overflow-y: auto;
+}
+@media (max-width: 760px) {
+  .action-row button,
+  .turn-controls button,
+  .attach-button,
+  .connection,
+  .send-button {
+    min-height: 44px;
+  }
+  .send-button {
+    min-width: 44px;
+  }
+  .turn-controls > span {
+    flex-basis: 100%;
+  }
+  .approval-card {
+    padding: 10px;
+  }
+  .approval-arguments {
+    max-height: 64px;
+  }
+  .interaction-panel {
+    max-height: 32dvh;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;

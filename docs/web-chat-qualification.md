@@ -1,6 +1,60 @@
 # Web-chat runtime qualification — 2026-11-11
 
-## Status: implementation unblocked by user; image admission remains unqualified
+## Status: progression permitted under explicit user deferrals; not semantic qualification
+
+### Task12 R2 — explicit additional user waiver (current acceptance decision)
+
+**User authorization: “Let's defer Qwen issue and continue work.”** This explicitly
+defers the **narrow-profile Qwen parent-response reliability issue**, including the
+contradictory refusal and stray `</think>`, in addition to the earlier larger-image
+quality issue. Task12 may be conditionally accepted and progression may resume
+under this documented exception, subject to the remaining applicable gates and
+scoped documentation review. The former R2 progression block is superseded; the
+underlying defect remains **OPEN / DEFERRED**, not fixed or semantically qualified.
+This records the user decision, not publication, merge or unconditional approval.
+
+The two deferrals are distinct:
+
+- The earlier user amendment below deferred larger-image Qwen failures (`MUNICH`
+  at1024×1024 and untranslated French at2048×2048). It did **not** cover Task12 R2.
+- This new decision additionally accepts progression despite the observed
+  narrow640×160 parent failure: the approved tool returned `hello world`, but the
+  saved parent answered `Hello World.\n</think>\n\nI can't directly provide the
+  translation without access to the image text…`. The requested translation-only
+  final therefore **failed acceptance**. Correct tool output/SQL completion does
+  not turn that failed final into a pass.
+
+[Retained immutable fixtures and hashes](../testdata/web-chat/README.md) and the
+[completed diagnostic](web-chat-r2-diagnostic.md) preserve the evidence. Cause
+remains unknown; the original raw provider wire/token stream was not retained.
+Source reconstruction did not establish a serialization/context/parser defect.
+Exactly **Qwen1/Gemma1** separately authorized reconstructed parent observations
+later returned conforming `hello world`; neither proves correction or recovers the
+lost original stream. That observation budget is exhausted. This documentation
+continuation makes **zero new inference calls** and authorizes no requalification
+or production behavior change.
+
+**Waiver boundaries:** keep strict both-model, exact-turn, full-final assertions
+unchanged. Future tests must retain actual pass/fail, raw evidence and nonzero
+failure outcomes; do not skip/delete/broaden assertions or relabel a failed result
+as green. Report any applicable parent-semantic exception separately from the test
+result. This is not a waiver for all Qwen errors, transport, authorization, resource,
+context-admission, cancellation/cleanup or durability failures. Exact model tags/
+digests, no substitution/fallback/OCR/output rewriting, existing safety and
+resource/context caps, narrow-image admission guards and
+`imageAdmissionQualified:false` all remain unchanged.
+
+Independent scoped re-review found R1 multi-file navigation and M1 cancellation
+**ADDRESSED**, scoped code quality **PASS**, visual round2 **PASS**, and no new
+blocking code defect. Its R2 spec block preceded this explicit waiver; it is now a
+conditional acceptance exception, not a retrospective semantic PASS. Evidence
+precision: component RED issued one upload; retained browser RED issued **two**
+before abandoning the remainder. Earlier `ERR_NETWORK_IO_SUSPENDED` cause remains
+unproven/not fixed; exact fault-log inventory (M2) remains Task14 work.
+
+The sections below retain their historical qualification chronology; pre-deferral
+blocking language is not the current progression decision. See also the
+[interaction contract](web-chat-interactions.md).
 
 ### Task9 continuation1 — narrow production image profile, 2026-11-12
 
@@ -123,7 +177,7 @@ The corrected runner distinguishes:
   review. This is not a general-purpose semantic classifier or an automatic
   rejection of every legitimate translation outside the small acceptance set.
 
-### Current-code live rerun (one small-image run, unchanged prompts/tags)
+### Historical corrected-runner live rerun (one small-image run, unchanged prompts/tags)
 
 Command: `go run ./scripts/qualify-chat-models.go`, **exit 0**, nine probes.
 New evidence:
@@ -150,7 +204,7 @@ substring checks. GREEN: `go test ./scripts -count=1 -v`, repeated
 `go test -race ./scripts -count=5`, full uncached serialized
 `go test -p 1 -count=1 ./...`, and `go vet -p 1 ./...` all pass.
 
-**Overall acceptance remains BLOCKED:** larger-Qwen semantics and combined
+**Historical pre-deferral acceptance assessment: BLOCKED:** larger-Qwen semantics and combined
 image/text/multi-image admission are still unqualified. The PDF font-data warning
 remains deferred to the bounded parser helper; it is not resolved by this fix.
 
@@ -355,7 +409,7 @@ unrelated Node process and was deliberately left untouched. Checked text says
 “Runtime qualification shell. Chat is not connected yet.” No external fonts,
 network UI dependencies, proxy routes, or misleading functioning-chat controls.
 
-## Test-first evidence and remaining gates
+## Historical Task1 test-first evidence and remaining gates
 
 The fake HTTP provider tests exercise the real qualification client, with
 meaningful RED before implementation: buffered-only text, missing completion,
