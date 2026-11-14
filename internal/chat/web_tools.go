@@ -52,6 +52,10 @@ type WebApprovalRecord struct {
 }
 type WebToolExecution struct{ Scope ApprovalScope }
 type WebToolResult struct {
-	Text  string `json:"text"`
-	Error string `json:"error,omitempty"`
+	Text         string `json:"text"`
+	Error        string `json:"error,omitempty"`
+	RequestedURL string `json:"requestedUrl,omitempty"`
+	FinalURL     string `json:"finalUrl,omitempty"`
+	ContentType  string `json:"contentType,omitempty"`
+	Truncated    bool   `json:"truncated"`
 }

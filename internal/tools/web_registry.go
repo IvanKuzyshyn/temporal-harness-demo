@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net/url"
 	"strings"
 
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/chat"
@@ -78,8 +77,8 @@ func (*WebRegistry) Canonicalize(name string, raw json.RawMessage, checksum stri
 		if len(fields) != 1 || fields["url"] == "" || len(fields["url"]) > 2048 {
 			return out, chat.ErrInvalid
 		}
-		u, e := url.Parse(fields["url"])
-		if e != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || u.Fragment != "" {
+		u, e := parseFetchURL(fields["url"])
+		if e != nil {
 			return out, chat.ErrInvalid
 		}
 		u.Host = strings.ToLower(u.Host)

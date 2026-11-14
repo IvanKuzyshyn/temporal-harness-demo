@@ -75,6 +75,39 @@ func TestWebToolResultImmutableForItsWinningOwner(t *testing.T) {
 	require.NoError(t, r.SaveWebToolResult(ctx, a.Scope, id, chat.WebToolResult{Text: "first"}))
 	require.ErrorIs(t, r.SaveWebToolResult(ctx, a.Scope, id, chat.WebToolResult{Text: "changed"}), storage.ErrConflict)
 }
+func TestWebToolFetchMetadataBoundAndImmutable(t *testing.T) {
+	r, _ := database(t)
+	_, a := webAction(t, r)
+	a.Outcome = "authorized"
+	require.NoError(t, r.RecordWebAuthorization(ctx, a))
+	id := uuid.NewString()
+	_, _, err := r.BeginWebTool(ctx, a.Scope, id, 1)
+	require.NoError(t, err)
+	for _, field := range []string{"requested", "final", "type"} {
+		bad := chat.WebToolResult{Text: "content"}
+		switch field {
+		case "requested":
+			bad.RequestedURL = strings.Repeat("u", 2049)
+		case "final":
+			bad.FinalURL = strings.Repeat("u", 2049)
+		case "type":
+			bad.ContentType = strings.Repeat("t", 129)
+		}
+		require.ErrorIs(t, r.SaveWebToolResult(ctx, a.Scope, id, bad), chat.ErrInvalid, field)
+	}
+	result := chat.WebToolResult{Text: "content", RequestedURL: "https://example.com/", FinalURL: "https://example.com/final", ContentType: "text/html", Truncated: true}
+	require.NoError(t, r.SaveWebToolResult(ctx, a.Scope, id, result))
+	got, err := r.WebToolResult(ctx, a.Scope.ConversationID, a.Scope.ToolCallID)
+	require.NoError(t, err)
+	require.Equal(t, result, got)
+	changed := result
+	changed.FinalURL = "https://other.example/"
+	require.ErrorIs(t, r.SaveWebToolResult(ctx, a.Scope, id, changed), storage.ErrConflict)
+	changed = result
+	changed.Truncated = false
+	require.ErrorIs(t, r.SaveWebToolResult(ctx, a.Scope, id, changed), storage.ErrConflict)
+}
+
 func TestWebToolOrdinaryCompletionRetainsMissingAck(t *testing.T) {
 	r, p := database(t)
 	ref, a := webAction(t, r)
