@@ -13,7 +13,7 @@ const (
 	WebSessionName             = "WebChatSessionWorkflow"
 	WebAgentsQueue             = "web-chat-agents"
 	WebLLMQueue                = "web-chat-llm"
-	WebDocumentsQueue          = "web-chat-documents" // reserved; child execution belongs to Task9
+	WebDocumentsQueue          = "web-chat-documents"
 	WebCheckCommandActivity    = "CheckChatCommand"
 	WebAdmissionActivity       = "RecordChatAdmission"
 	WebResumeAdmissionActivity = "ResumeChatAdmission"
@@ -418,7 +418,7 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 			state.RecoveryPhase = "join"
 		}
 		if state.RecoveryPhase == "tools" {
-			if err := state.webBatch(ctx, turnCtx, join, func() bool {
+			if err := state.webBatch(ctx, turnCtx, join, in.Model, func() bool {
 				return operations >= in.ContinueAfter || len(state.PendingAdmissions) > 0 || workflow.GetInfo(ctx).GetContinueAsNewSuggested()
 			}); err != nil {
 				if ctx.Err() != nil {
@@ -441,6 +441,9 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 		if state.RecoveryPhase == "join" || state.RecoveryPhase == "cancel_join" {
 			var pending int64
 			if err := workflow.ExecuteActivity(webStorageContext(ctx), WebSealModelActivity, ref).Get(ctx, &pending); err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
 				if err = recoverTurn(err); err != nil {
 					return err
 				}
@@ -453,10 +456,15 @@ func WebChatSessionWorkflow(ctx workflow.Context, in WebSessionInput) error {
 			if pending != 0 && state.Control != nil {
 				state.UnconfirmedModelInvocations = pending
 				state.Status = "cancelling_interrupted"
-				// Durable missing acknowledgments, not elapsed time. Never reset,
-				// settle, CAN into newer work, or assume an older attempt joined.
-				return workflow.Await(ctx, func() bool { return false })
+				// Recheck durable evidence, never infer cleanup from elapsed time.
+				// A late physical return may acknowledge an older timed-out body.
+				// The seal stays closed and replacement remains queued until ZERO.
+				if err := workflow.Sleep(ctx, 5*time.Second); err != nil {
+					return err
+				}
+				continue
 			}
+			state.UnconfirmedModelInvocations = 0
 			state.RecoveryPhase = "settle"
 			if state.Control != nil {
 				state.RecoveryPhase = "cancel_settle"

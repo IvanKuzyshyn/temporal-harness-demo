@@ -32,7 +32,17 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	}
 	return b.Buffer.Write(p)
 }
-func (ContainerParser) Parse(parent context.Context, b []byte, media string, extract bool) (out Document, err error) {
+
+type parserOutput struct {
+	Document
+	Raster []byte `json:"raster,omitempty"`
+}
+
+func (p ContainerParser) Parse(parent context.Context, b []byte, media string, extract bool) (Document, error) {
+	out, err := p.run(parent, b, media, extract, false)
+	return out.Document, err
+}
+func (ContainerParser) run(parent context.Context, b []byte, media string, extract, render bool) (out parserOutput, err error) {
 	if len(b) > MaxBytes {
 		return out, ErrTooLarge
 	}
@@ -76,7 +86,8 @@ func (ContainerParser) Parse(parent context.Context, b []byte, media string, ext
 		Data    []byte `json:"data"`
 		Media   string `json:"media"`
 		Extract bool   `json:"extract"`
-	}{b, media, extract})
+		Render  bool   `json:"render"`
+	}{b, media, extract, render})
 	cmd := exec.CommandContext(ctx, "docker", "start", "-ai", name)
 	cmd.Stdin = bytes.NewReader(raw)
 	output := &boundedBuffer{max: 2 * 1024 * 1024}
@@ -89,10 +100,13 @@ func (ContainerParser) Parse(parent context.Context, b []byte, media string, ext
 		return out, fmt.Errorf("bounded parser rejected input (%s): %w", strings.TrimSpace(diag.String()), ErrInvalid)
 	}
 	if e := json.Unmarshal(output.Bytes(), &out); e != nil {
-		return Document{}, fmt.Errorf("parser protocol: %w", ErrInvalid)
+		return parserOutput{}, fmt.Errorf("parser protocol: %w", ErrInvalid)
 	}
 	if len([]rune(out.Text)) > 200000 || out.Pages < 0 || (out.Status != "completed" && out.Status != "unsupported") || (!extract && out.Text != "") {
-		return Document{}, ErrInvalid
+		return parserOutput{}, ErrInvalid
+	}
+	if (!render && len(out.Raster) > 0) || len(out.Raster) > MaxBytes {
+		return parserOutput{}, ErrInvalid
 	}
 	return out, ctx.Err()
 }
