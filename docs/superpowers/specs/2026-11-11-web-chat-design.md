@@ -243,6 +243,8 @@ No authentication does not mean unrestricted HTTP access: bind loopback, reject 
 
 ## 12. Open verification gates, not hidden assumptions
 
+**User amendment (2026-11-11, before Task 2):** “Let's move on even knowing this qwen issue. We can investigate it later.” The known Qwen larger-image quality investigation is explicitly deferred; its Task 1 progression gate no longer blocks downstream implementation. Original failures and raw qualification evidence remain authoritative, and `imageAdmissionQualified:false` remains unchanged. This amendment does not qualify image admission, waive downstream context/resource bounds, or authorize model fallback. The stop/report rule below remains applicable to new unapproved failures, not this accepted deferral.
+
 - Exact models must demonstrate image/tool support and acceptable latency on the actual machine. If either fails, stop and report; changing a required model needs approval.
 - Parser/rasterizer selection and model image token reservation need measured qualification before finalizing dependencies.
 - The Vercel template was reviewed as published reference text; implementation must inspect its live UI/source and license before adapting components. It is a visual reference, not a requirement to import its execution architecture.

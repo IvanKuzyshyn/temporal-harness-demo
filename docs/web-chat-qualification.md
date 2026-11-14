@@ -1,6 +1,10 @@
 # Web-chat runtime qualification — 2026-11-11
 
-## Status: BLOCKED (useful runtime scaffolding committed)
+## Status: implementation unblocked by user; image admission remains unqualified
+
+**User amendment (2026-11-11, before Task 2):** “Let's move on even knowing this qwen issue. We can investigate it later.” Investigation of the known larger-image Qwen quality failures is deferred; the Task 1 progression gate is removed for that accepted issue. The historical blocked assessment and all original raw evidence below are preserved. `imageAdmissionQualified:false` remains unchanged. This is not image certification, does not waive downstream context admission/resource bounds, and does not authorize fallback. Task 2 performs no Qwen rerun/investigation.
+
+### Historical Task 1 assessment (before the amendment)
 
 The current-code **small-image semantic** gate and the independent longer-text
 incremental-receipt gate pass for both exact required models. Short-image stream
@@ -18,6 +22,26 @@ workflow/queue is registered. The legacy Go runtime and `mise run setup` remain;
 its description now explicitly says it is legacy. Task 13 owns the replacement
 `setup`/`up`/`down` implementation. Never delete `.data/`, stop shared Ollama or
 Temporal, or use volume deletion to test persistence.
+
+## Task 2 storage verification (2026-11-11)
+
+Storage foundation is implemented; see [repository contracts](web-chat-storage.md).
+`scripts/test-web-integration.sh storage` passed migration **up/down/up**, ten
+race-enabled real-Postgres repository/security tests, and separate restart
+write/read tests. Final project was
+`webchat-storage-38c623acd6ed4c71a342a5b89175dc0d`, with database
+`webchat_test_38c623acd6ed4c71a342a5b89175dc0d` and loopback ports 60803 then
+60883 after Docker reassigned the ephemeral binding. Actual server start time
+changed from `2026-11-11 16:47:55.780172+00` to
+`2026-11-11 16:48:03.512412+00`; accepted intent/history survived. Cleanup removed
+only this generated project and its ownership-checked test volume; inspection
+found no leftover storage-test containers, networks, or volumes.
+
+Serialized `go build ./...`, `go vet -p 1 ./...`, and
+`go test -p 1 -count=1 ./...` all passed through mise; legacy tests remain intact.
+Missing integration configuration and unavailable Docker both exited nonzero.
+Self-review only in this task (no agents); independent review is controller-owned.
+This evidence does not qualify Qwen images, API/Temporal execution, or UI behavior.
 
 ## Verified pins and provenance
 
