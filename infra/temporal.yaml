@@ -1,0 +1,68 @@
+# enable-template
+# Local single-node configuration, based on Temporal v1.32.2 config/docker.yaml.
+log:
+  stdout: true
+  level: warn
+persistence:
+  numHistoryShards: 4
+  defaultStore: default
+  visibilityStore: visibility
+  datastores:
+    default:
+      sql:
+        pluginName: postgres12
+        databaseName: temporal
+        connectAddr: postgres:5432
+        connectProtocol: tcp
+        user: temporal
+        password: {{ env "WEBCHAT_TEMPORAL_DB_PASSWORD" | quote }}
+        maxConns: 10
+        maxIdleConns: 5
+    visibility:
+      sql:
+        pluginName: postgres12
+        databaseName: temporal_visibility
+        connectAddr: postgres:5432
+        connectProtocol: tcp
+        user: temporal
+        password: {{ env "WEBCHAT_TEMPORAL_DB_PASSWORD" | quote }}
+        maxConns: 5
+        maxIdleConns: 2
+global:
+  membership:
+    maxJoinDuration: 30s
+    broadcastAddress: {{ env "TEMPORAL_BROADCAST_ADDRESS" | quote }}
+services:
+  frontend:
+    rpc:
+      grpcPort: 7233
+      membershipPort: 6933
+      bindOnIP: 0.0.0.0
+      httpPort: 7243
+  matching:
+    rpc:
+      grpcPort: 7235
+      membershipPort: 6935
+      bindOnIP: 0.0.0.0
+  history:
+    rpc:
+      grpcPort: 7234
+      membershipPort: 6934
+      bindOnIP: 0.0.0.0
+  worker:
+    rpc:
+      grpcPort: 7239
+      membershipPort: 6939
+      bindOnIP: 0.0.0.0
+clusterMetadata:
+  enableGlobalNamespace: false
+  failoverVersionIncrement: 10
+  masterClusterName: active
+  currentClusterName: active
+  clusterInformation:
+    active:
+      enabled: true
+      initialFailoverVersion: 1
+      rpcName: frontend
+      rpcAddress: 127.0.0.1:7233
+      httpAddress: 127.0.0.1:7243
