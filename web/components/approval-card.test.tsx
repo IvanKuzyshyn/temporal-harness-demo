@@ -4,6 +4,7 @@ import { ApprovalCard } from "./approval-card";
 it("shows plain-language action and real consent controls without identity or argument dumps", () => {
   const html = renderToStaticMarkup(
     <ApprovalCard
+      conversationId="a"
       approval={
         {
           id: "private-approval-id",

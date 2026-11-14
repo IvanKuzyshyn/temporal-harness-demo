@@ -2,19 +2,29 @@
 import { useEffect, useState } from "react";
 import type { Metadata } from "../lib/contracts";
 import type { Control } from "../lib/use-controls";
+import { useAttachmentLabel } from "./attachment-label";
 
 type Decision = "once" | "all" | "deny";
 export function ApprovalCard({
+  conversationId,
   approval,
   policy,
   busy,
   onDecision,
 }: {
+  conversationId: string;
   approval: NonNullable<Metadata["pendingApproval"]>;
   policy: Metadata["policy"];
   busy: boolean;
   onDecision: (decision: Decision) => void;
 }) {
+  const file = approval.toolName === "file_upload";
+  const target = useAttachmentLabel(
+    conversationId,
+    file ? approval.arguments.attachmentId : undefined,
+    JSON.stringify([approval.id, approval.actionHash, approval.toolCallId]),
+  );
+  const unidentified = file && !target.label;
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -39,8 +49,16 @@ export function ApprovalCard({
       <p className="approval-action">
         {approval.toolName === "web_fetch"
           ? "Read this web page?"
-          : "Read the selected attachment?"}
+          : "Read this attachment?"}
       </p>
+      {file && (
+        <p className="attachment-identity" role="status">
+          {target.label ??
+            (target.failed
+              ? "Cannot identify the requested attachment. Approval is disabled; refresh to retry."
+              : "Loading requested attachment name…")}
+        </p>
+      )}
       <p className="approval-description">
         {String(
           (approval.arguments as Record<string, unknown>)[
@@ -50,15 +68,15 @@ export function ApprovalCard({
       </p>
       {(expired || stale) && (
         <p className="warning" role="status">
-          {expired ? "Approval expired." : "Approval scope is stale."} Waiting
-          for refreshed saved state; no new permission was granted.
+          {expired ? "Approval expired." : "Approval scope is stale."}{" "}
+          Waiting for refreshed saved state; no new permission was granted.
         </p>
       )}
       <div className="action-row">
         <button
           type="button"
           className="primary"
-          disabled={busy || expired || stale}
+          disabled={busy || expired || stale || unidentified}
           onClick={() => onDecision("once")}
         >
           Approve once
@@ -66,7 +84,7 @@ export function ApprovalCard({
         <button
           type="button"
           className="secondary"
-          disabled={busy || expired || stale}
+          disabled={busy || expired || stale || unidentified}
           onClick={() => onDecision("all")}
           aria-label="Approve all for this conversation"
         >
@@ -82,8 +100,8 @@ export function ApprovalCard({
         </button>
       </div>
       <p className="scope-line">
-        Approve all allows web pages and attachments in this conversation until
-        revoked.
+        Approve all allows web pages and attachments in this conversation
+        until revoked.
       </p>
     </section>
   );

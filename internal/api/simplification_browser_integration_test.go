@@ -35,12 +35,39 @@ func TestSimplificationBrowserRuntime(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dir, 0700))
 	r, p := database(t)
 	ctx := context.Background()
+	store, err := attachments.NewStore(filepath.Join(dir, "attachments"), r, nil)
+	require.NoError(t, err)
+	defer store.Close()
 	fixtures := map[string]string{}
-	for _, kind := range []string{"empty", "populated", "approval", "error"} {
+	for _, kind := range []string{"empty", "populated", "approval", "error", "tool-failure", "attachment-approval"} {
 		c, err := r.CreateConversation(ctx, "qwen3.5:9b")
 		require.NoError(t, err)
 		fixtures[kind] = string(c.ID)
 		if kind == "empty" {
+			continue
+		}
+		if kind == "attachment-approval" {
+			var older chat.Attachment
+			for i, text := range []string{"First document: original budget. Synthetic fixture.", "Second document: revised budget. Please compare with the first. Synthetic fixture."} {
+				a, e := store.Put(ctx, c.ID, strings.NewReader(text), attachments.UploadMetadata{Name: "report.txt", MediaType: "text/plain"})
+				require.NoError(t, e)
+				if i == 0 {
+					older = a
+				}
+				cmd, e := r.AcceptCommand(ctx, chat.CommandInput{RequestID: uuid.NewString(), ConversationID: c.ID, Kind: chat.CommandMessage, Payload: chat.CommandPayload{Text: text, AttachmentIDs: []chat.AttachmentID{a.ID}}})
+				require.NoError(t, e)
+				require.NoError(t, r.RecordCommandResult(ctx, c.ID, cmd.CommandID, "dispatched", "accepted", []byte(`{"state":"accepted"}`)))
+				if i == 0 {
+					_, e = p.Exec(ctx, "UPDATE turns SET status='completed' WHERE id=$1", cmd.TurnID)
+				} else {
+					args, _ := json.Marshal(map[string]string{"attachmentId": string(older.ID), "instruction": "Summarize the original budget before comparing it with the revision."})
+					tool := chat.ToolCall{ID: uuid.NewString(), ConversationID: c.ID, TurnID: cmd.TurnID, LogicalKey: "review/older-attachment", Name: "file_upload", Arguments: args, ActionHash: strings.Repeat("b", 64), ParentWorkflowID: c.WorkflowID, Status: "pending"}
+					require.NoError(t, r.RecordToolCall(ctx, tool))
+					require.NoError(t, r.RecordApproval(ctx, chat.Approval{ID: uuid.NewString(), ConversationID: c.ID, ToolCallID: tool.ID, ActionHash: tool.ActionHash, Deadline: time.Now().Add(time.Hour)}))
+					_, e = p.Exec(ctx, "UPDATE turns SET status='awaiting_approval' WHERE id=$1", cmd.TurnID)
+				}
+				require.NoError(t, e)
+			}
 			continue
 		}
 		text := "How can I make a small project easier to maintain?"
@@ -54,6 +81,10 @@ func TestSimplificationBrowserRuntime(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, r.RecordCommandResult(ctx, c.ID, cmd.CommandID, "dispatched", "accepted", []byte(`{"state":"accepted"}`)))
 		switch kind {
+		case "tool-failure":
+			require.NoError(t, r.RecordToolCall(ctx, chat.ToolCall{ID: uuid.NewString(), ConversationID: c.ID, TurnID: cmd.TurnID, LogicalKey: "review/failed-tool", Name: "web_fetch", Arguments: []byte(`{"url":"https://example.com/article"}`), ActionHash: strings.Repeat("c", 64), ParentWorkflowID: c.WorkflowID, Status: "failed", Result: []byte(`{"error":"tool_failed"}`)}))
+			require.NoError(t, r.AppendMessage(ctx, chat.MessageRecord{EntryID: uuid.NewString(), ConversationID: c.ID, TurnID: cmd.TurnID, Role: "assistant", Text: "Keep changes small and test their boundaries. This completed answer and failed web operation are synthetic saved records, not provider output.", LogicalStep: 1, ResultKind: "response", CompletionState: "completed"}))
+			_, err = p.Exec(ctx, "UPDATE turns SET status='completed' WHERE id=$1", cmd.TurnID)
 		case "populated":
 			require.NoError(t, r.AppendMessage(ctx, chat.MessageRecord{EntryID: uuid.NewString(), ConversationID: c.ID, TurnID: cmd.TurnID, Role: "assistant", Text: "Start with a few simple habits:\n\n1. **Keep the scope small.** Give each change one clear purpose.\n2. **Test the boundaries.** Cover the inputs that are easiest to get wrong.\n3. **Write down decisions.** Explain why, not just how.\n\nA short README and a reliable test command are a useful starting point.\n\n```sh\ngo test -p 1 ./...\n```\n\nThis is a synthetic review fixture, not a model response.", LogicalStep: 1, ResultKind: "response", CompletionState: "completed"}))
 			_, err = p.Exec(ctx, "UPDATE turns SET status='completed' WHERE id=$1", cmd.TurnID)
@@ -75,9 +106,6 @@ func TestSimplificationBrowserRuntime(t *testing.T) {
 	require.NoError(t, webListener.Close())
 	origin := "http://" + webAddr
 	key := strings.ReplaceAll(uuid.NewString()+uuid.NewString(), "-", "")
-	store, err := attachments.NewStore(filepath.Join(dir, "attachments"), r, nil)
-	require.NoError(t, err)
-	defer store.Close()
 	handler, err := api.NewServer(r, api.Config{ListenAddress: apiListener.Addr().String(), ProxySecret: key, BrowserOrigin: origin, Attachments: store})
 	require.NoError(t, err)
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}

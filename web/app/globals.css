@@ -657,6 +657,12 @@ main {
 .approval-action {
   margin: 6px 0;
 }
+.attachment-identity {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
 .approval-description {
   margin: 6px 0 12px;
   white-space: pre-wrap;

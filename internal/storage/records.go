@@ -64,6 +64,28 @@ func (r *Repository) GetAttachment(ctx context.Context, c chat.ConversationID, i
 	err = json.Unmarshal(images, &a.DerivedImageKeys)
 	return a, err
 }
+
+// AttachmentLabel contains only metadata needed for informed consent, not bytes,
+// extraction, paths or checksums. Number includes staged/failed uploads so a later
+// status transition cannot renumber another file. Creation is conversation-locked.
+type AttachmentLabel struct {
+	ID             chat.AttachmentID   `json:"id"`
+	ConversationID chat.ConversationID `json:"conversationId"`
+	Name           string              `json:"name"`
+	UploadNumber   int64               `json:"uploadNumber"`
+}
+
+func (r *Repository) GetAttachmentLabel(ctx context.Context, c chat.ConversationID, id chat.AttachmentID) (AttachmentLabel, error) {
+	var label AttachmentLabel
+	if !chat.ValidID(string(c)) || !chat.ValidID(string(id)) {
+		return label, chat.ErrInvalid
+	}
+	err := r.pool.QueryRow(ctx, `SELECT a.id::text,a.conversation_id::text,a.original_name,
+ (SELECT count(*) FROM attachments b WHERE b.conversation_id=a.conversation_id AND (b.created_at,b.id)<=(a.created_at,a.id))
+ FROM attachments a WHERE a.conversation_id=$1 AND a.id=$2 AND a.status='ready'`, c, id).Scan(&label.ID, &label.ConversationID, &label.Name, &label.UploadNumber)
+	return label, dbError(err)
+}
+
 func (r *Repository) MarkAttachmentReady(ctx context.Context, c chat.ConversationID, id chat.AttachmentID, checksum string) error {
 	if !chat.ValidID(string(id)) || !chat.ValidHash(checksum) {
 		return chat.ErrInvalid

@@ -880,6 +880,7 @@ function ChatSession({
               )}
               {state.metadata?.pendingApproval && (
                 <ApprovalCard
+                  conversationId={id}
                   approval={state.metadata.pendingApproval}
                   policy={state.metadata.policy}
                   busy={controls.pending("Decision")}

@@ -140,11 +140,15 @@ a missing middle reopens older paging rather than silently hiding that gap.
   Live text follows only while already near the end. Reload restores canonical
   history, never stale
   in-memory token text; unsent drafts are per-conversation local storage.
-- Approval-required, policy, failed/cancelled/incomplete output, source failures,
-  partial/omitted context and lossy-memory qualifications remain visible outside
-  collapsed detail sections. Context accounting is labeled request bounds, not
-  measured provider usage. Approval controls, upload and trusted attachment
-  previews belong to Task 12; this UI does not pretend those controls exist.
+- Required consent, revoke, failed/cancelled/incomplete output and the reply-length
+  warning remain visible. A durable failed tool outcome adds a concise notice to
+  its own turn even if that turn completes; raw errors/results are not rendered.
+  Partial/omitted-context, lossy-memory, provenance and accounting diagnostics are
+  not presented, and there are no collapsed detail sections. Attachment consent
+  resolves the exact requested ID through scoped metadata only, showing its name
+  and stable upload number (also in saved messages). Loading/failure cannot enable
+  permission; Deny retains the normal expiry/scope fences. Upload and explicit
+  trusted raster preview controls are implemented.
 - Host, Origin and Fetch Metadata are checked on both hops. Browser mutations need
   an exact same origin. No CORS relaxation, browser database access, Temporal
   credentials, or client-supplied proxy authentication is introduced. Incoming
@@ -155,10 +159,14 @@ a missing middle reopens older paging rather than silently hiding that gap.
   `noopener noreferrer` and no-referrer policy. JavaScript/data/protocol-relative
   URLs are inert. CSP additionally restricts connect/image/media/frame/object
   destinations; this is defense in depth, not permission to relax Markdown safety.
-- No external font/image/CDN assets are loaded. A user-selected trusted attachment
-  preview is a distinct future feature, not an exception for arbitrary Markdown.
+- No external font/image/CDN assets are loaded. Trusted raster previews require
+  explicit user activation; attachment-name metadata never loads original bytes
+  or media. This is not an exception for arbitrary Markdown.
 
-## Visual reference and licensing
+## Historical Task 11 visual reference and licensing
+
+The following records the original Task 11 adaptation, not the current accepted
+Task 15 dark layout. It is retained as historical design/licensing evidence.
 
 Inspected live: https://vercel.com/templates/next.js/chatbot and
 https://chatbot.ai-sdk.dev/demo. Inspected upstream repository **vercel/chatbot**,

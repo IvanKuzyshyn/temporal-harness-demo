@@ -32,6 +32,21 @@ func (r *singleFileReader) Read(p []byte) (int, error) {
 	return n, e
 }
 func (s *Server) attachment(w http.ResponseWriter, r *http.Request, c chat.ConversationID, path []string) {
+	// Metadata shares the route's host/proxy/origin and conversation fences, but
+	// must never open originals or require an available parser/blob store.
+	if len(path) == 2 && path[1] == "metadata" && r.Method == "GET" {
+		if s.repo == nil {
+			fail(w, 503, "storage_unavailable")
+			return
+		}
+		label, err := s.repo.GetAttachmentLabel(r.Context(), c, chat.AttachmentID(path[0]))
+		if err != nil {
+			storageError(w, err)
+			return
+		}
+		respond(w, 200, map[string]any{"attachment": label})
+		return
+	}
 	store := s.config.Attachments
 	if store == nil || s.repo == nil {
 		fail(w, 503, "attachment_store_unavailable")
