@@ -5,9 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/config"
-	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
-	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm/ollama"
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/activities"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/workflows"
 	temporalclient "go.temporal.io/sdk/client"
 	temporalworker "go.temporal.io/sdk/worker"
@@ -54,21 +52,21 @@ func TestWorkerQueuesLimitsAndCleanup(t *testing.T) {
 			var workers []*fakeWorker
 			var queues []string
 			dial := func(ctx context.Context, o temporalclient.Options) (temporalclient.Client, error) {
-				if o.Logger == nil || o.HostPort != "address" {
+				if o.HostPort != "address" {
 					t.Fatalf("options=%+v", o)
 				}
 				return c, nil
 			}
 			factory := func(_ temporalclient.Client, q string, o temporalworker.Options) temporalworker.Worker {
 				queues = append(queues, q)
-				if q == workflows.LLMQueue && o.MaxConcurrentActivityExecutionSize != 1 {
+				if q == workflows.WebLLMQueue && o.MaxConcurrentActivityExecutionSize != 1 {
 					t.Fatal(o.MaxConcurrentActivityExecutionSize)
 				}
-				w := &fakeWorker{fail: fail && q == workflows.LLMQueue}
+				w := &fakeWorker{fail: fail && q == workflows.WebLLMQueue}
 				workers = append(workers, w)
 				return w
 			}
-			r, err := start(context.Background(), config.Config{Model: "mock", TemporalAddress: "address"}, dial, factory)
+			r, err := startWeb(context.Background(), "address", &activities.ChatActivities{}, dial, factory)
 			if fail {
 				if err == nil || r != nil {
 					t.Fatal("expected failure")
@@ -77,7 +75,7 @@ func TestWorkerQueuesLimitsAndCleanup(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if len(queues) != 3 || queues[2] != workflows.SubagentsQueue {
+				if len(queues) != 3 || queues[2] != workflows.WebDocumentsQueue {
 					t.Fatal(queues)
 				}
 				if err = r.Close(); err != nil {
@@ -97,7 +95,7 @@ func TestWorkerQueuesLimitsAndCleanup(t *testing.T) {
 	}
 }
 func TestCancellationDuringWorkerStart(t *testing.T) {
-	for _, cancelQueue := range []string{workflows.AgentsQueue, workflows.LLMQueue, workflows.SubagentsQueue} {
+	for _, cancelQueue := range []string{workflows.WebAgentsQueue, workflows.WebLLMQueue, workflows.WebDocumentsQueue} {
 		t.Run(cancelQueue, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -119,7 +117,7 @@ func TestCancellationDuringWorkerStart(t *testing.T) {
 				workers = append(workers, w)
 				return w
 			}
-			r, err := start(ctx, config.Config{Model: "mock"}, dial, factory)
+			r, err := startWeb(ctx, "address", &activities.ChatActivities{}, dial, factory)
 			if r != nil || !errors.Is(err, context.Canceled) {
 				t.Fatalf("runner=%v err=%v", r, err)
 			}
@@ -132,25 +130,5 @@ func TestCancellationDuringWorkerStart(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestModelSelectionAndHostNormalization(t *testing.T) {
-	for _, host := range []string{"127.0.0.1:11434", "http://localhost:11434", "https://localhost:11434", ""} {
-		model := newRequestModel(config.Config{Model: "mock", OllamaHost: host}, &recordingModel{}, func(normalized string) (llm.Model, error) {
-			if _, err := ollama.New(normalized); err != nil {
-				t.Fatal(host, err)
-			}
-			return &recordingModel{}, nil
-		})
-		if _, err := model.Chat(context.Background(), llm.Request{Model: "gemma4:e4b"}, func(llm.Delta) error { return nil }); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := selectModel(config.Config{Model: "client-real", OllamaHost: ":bad"}).Chat(context.Background(), llm.Request{Model: "mock"}, func(llm.Delta) error { return nil }); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := selectModel(config.Config{Model: "mock", OllamaHost: "ftp://localhost"}).Chat(context.Background(), llm.Request{Model: "original-real"}, nil); err == nil {
-		t.Fatal("accepted invalid scheme")
 	}
 }

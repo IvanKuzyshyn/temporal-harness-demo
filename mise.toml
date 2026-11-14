@@ -1,33 +1,33 @@
 [tools]
 go = "1.27.3"
-"github:temporalio/cli" = "1.10.0" # `temporal` shorthand points to the server, not CLI.
+"github:temporalio/cli" = "1.10.0"
 ollama = "0.40.15"
 node = "24.21.0"
 pnpm = "12.18.0"
-
-[env]
-HARNESS_MODEL = "{{ env.HARNESS_MODEL | default(value='gemma4:e4b') }}"
-TEMPORAL_ADDRESS = "{{ env.TEMPORAL_ADDRESS | default(value='localhost:7233') }}"
-OLLAMA_HOST = "{{ env.OLLAMA_HOST | default(value='127.0.0.1:11434') }}"
+python = "3.12.16"
 
 [tasks.setup]
-description = "Legacy CLI setup (not the new web-chat lifecycle): install tools, build, start dependencies, pull model"
-run = ["mise install", "ollama --version", "go mod download", "go build -o bin/harness ./cmd/harness", "./bin/harness doctor --fix"]
+description = "Install pinned dependencies, build fresh assets/helper, ensure exact models; leave no newly owned services running"
+run = "bash scripts/dev/setup.sh"
 
-[tasks.demo]
-run = "./bin/harness demo"
+[tasks.up]
+description = "Background the owned local web-chat stack and verify readiness"
+run = "bash scripts/dev/up.sh"
+
+[tasks.down]
+description = "Stop verified owned services; preserve all data/models and accepted workflow work"
+run = "bash scripts/dev/down.sh"
 
 [tasks.test]
-run = "go test ./..."
+run = "go test -p 1 ./..."
 
 [tasks.lint]
 run = "go vet ./..."
 
-# Temporary Task 1 commands. Full setup/up/down ownership arrives in Task 13.
 [tasks."web:build"]
-description = "Task 1 shell only; does not start services"
+description = "Internal frontend-only build; use setup for fresh production assets"
 run = "pnpm --dir web build"
 
 [tasks."web:qualify"]
-description = "Opt-in live probes of both exact models on shared loopback Ollama"
+description = "Opt-in live probes; known Qwen failures remain recorded, never ignored"
 run = "go run ./scripts/qualify-chat-models.go"

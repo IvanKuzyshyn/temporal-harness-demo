@@ -109,9 +109,7 @@ func TestAdmissionOutageRollsOverBeforeRestoration(t *testing.T) {
 			page, err := f.repo.ListMessages(f.ctx, c.ID, "", 10)
 			require.NoError(t, err)
 			require.Len(t, page.Messages, 2)
-			events, err := f.repo.ListEvents(f.ctx, c.ID, 0, 10)
-			require.NoError(t, err)
-			require.Len(t, events, 1)
+			assertTextOutcome(t, f, c.ID, map[chat.TurnID]textOutcome{cmd.TurnID: {completed: true, maxAttempt: 1}})
 			t.Logf("real %s outage survived two bounded CAN handoffs before restore; same dispatcher identity recovered once", stage)
 		})
 	}

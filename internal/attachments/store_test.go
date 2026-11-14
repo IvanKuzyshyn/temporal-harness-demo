@@ -61,7 +61,13 @@ func fixtureStore(t *testing.T) (*Store, *memoryRepository, chat.ConversationID)
 	t.Helper()
 	root := t.TempDir()
 	r := &memoryRepository{rows: map[chat.AttachmentID]chat.Attachment{}, root: root}
-	s, e := NewStore(root, r, nil)
+	// Pure filesystem tests never launch an unconfigured helper. Parser gates
+	// explicitly opt into the trusted setup image; zero-value parser fails closed.
+	p := ContainerParser{}
+	if os.Getenv("WEBCHAT_TEST_PARSERS") == "1" {
+		p = realParser(t)
+	}
+	s, e := NewStore(root, r, p)
 	require.NoError(t, e)
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
 	return s, r, chat.ConversationID(uuid.NewString())

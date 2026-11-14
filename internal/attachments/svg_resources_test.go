@@ -15,7 +15,7 @@ import (
 // This wrapper forwards every production argument unchanged; no parser, Docker
 // response, resource boundary or image is mocked.
 func TestSVGContainerResourceBoundary(t *testing.T) {
-	realParser(t)
+	p := realParser(t)
 	docker, e := exec.LookPath("docker")
 	require.NoError(t, e)
 	dir := t.TempDir()
@@ -23,7 +23,7 @@ func TestSVGContainerResourceBoundary(t *testing.T) {
 	script := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = create ]; then\n %q \"$@\" || exit $?\n %q inspect \"$4\" > %q\nelse\n exec %q \"$@\"\nfi\n", docker, docker, evidence, docker)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0700))
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	_, e = (ContainerParser{}).Rasterize(context.Background(), []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16"/></svg>`))
+	_, e = p.Rasterize(context.Background(), []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><rect width="16" height="16"/></svg>`))
 	require.NoError(t, e)
 	raw, e := os.ReadFile(evidence)
 	require.NoError(t, e)

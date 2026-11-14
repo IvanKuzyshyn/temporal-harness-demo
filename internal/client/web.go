@@ -120,30 +120,7 @@ func (g *WebGateway) ObserveHealth(ctx context.Context) {
 	defer g.reachable.Store(false)
 	defer g.polling.Store(false)
 	for {
-		probe, cancel := context.WithTimeout(ctx, 3*time.Second)
-		_, err := g.sdk.CheckHealth(probe, &tc.CheckHealthRequest{})
-		g.reachable.Store(err == nil)
-		ready := err == nil
-		for _, q := range []struct {
-			name string
-			kind enumspb.TaskQueueType
-		}{{workflows.WebAgentsQueue, enumspb.TASK_QUEUE_TYPE_WORKFLOW}, {workflows.WebAgentsQueue, enumspb.TASK_QUEUE_TYPE_ACTIVITY}, {workflows.WebLLMQueue, enumspb.TASK_QUEUE_TYPE_ACTIVITY}} {
-			if !ready {
-				break
-			}
-			desc, e := g.sdk.DescribeTaskQueue(probe, q.name, q.kind)
-			found := false
-			if e == nil {
-				for _, p := range desc.Pollers {
-					if p.LastAccessTime != nil && time.Since(p.LastAccessTime.AsTime()) < 90*time.Second {
-						found = true
-					}
-				}
-			}
-			ready = found
-		}
-		g.polling.Store(ready)
-		cancel()
+		g.probeHealth(ctx)
 		timer := time.NewTimer(2 * time.Second)
 		select {
 		case <-ctx.Done():
@@ -152,6 +129,41 @@ func (g *WebGateway) ObserveHealth(ctx context.Context) {
 		case <-timer.C:
 		}
 	}
+}
+
+// A synchronous probe keeps queue coverage directly testable without scheduling
+// sleeps. The outer observer owns cadence and resets state on shutdown.
+func (g *WebGateway) probeHealth(ctx context.Context) {
+	probe, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	_, err := g.sdk.CheckHealth(probe, &tc.CheckHealthRequest{})
+	g.reachable.Store(err == nil)
+	ready := err == nil
+	for _, q := range []struct {
+		name string
+		kind enumspb.TaskQueueType
+	}{
+		{workflows.WebAgentsQueue, enumspb.TASK_QUEUE_TYPE_WORKFLOW},
+		{workflows.WebAgentsQueue, enumspb.TASK_QUEUE_TYPE_ACTIVITY},
+		{workflows.WebLLMQueue, enumspb.TASK_QUEUE_TYPE_ACTIVITY},
+		{workflows.WebDocumentsQueue, enumspb.TASK_QUEUE_TYPE_WORKFLOW},
+		{workflows.WebDocumentsQueue, enumspb.TASK_QUEUE_TYPE_ACTIVITY},
+	} {
+		if !ready {
+			break
+		}
+		desc, e := g.sdk.DescribeTaskQueue(probe, q.name, q.kind)
+		found := false
+		if e == nil {
+			for _, p := range desc.Pollers {
+				if p.LastAccessTime != nil && time.Since(p.LastAccessTime.AsTime()) < 90*time.Second {
+					found = true
+				}
+			}
+		}
+		ready = found
+	}
+	g.polling.Store(ready)
 }
 
 var _ dispatch.SessionGateway = (*WebGateway)(nil)

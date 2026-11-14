@@ -1,6 +1,7 @@
-# Task 1 infrastructure only. Host services/lifecycle are implemented later.
+# Internal Docker dependencies. Public lifecycle: mise run setup|up|down.
+# Host processes and exact ownership are managed by scripts/dev/.
 name: webchat-local
-# Host API/worker use the SAME absolute directory (Task13 exports this mapping).
+# Host API/worker use the SAME absolute directory (lifecycle exports this mapping).
 # This bind storage is deliberately outside Docker container writable layers;
 # compose down cannot remove original bytes. Never point it at legacy .data.
 x-webchat-host-environment:
@@ -8,6 +9,8 @@ x-webchat-host-environment:
 services:
   attachment-parser:
     profiles: ["tools"]
+    # Tooling profile only; this mutable convenience tag is NOT runtime identity.
+    # Trusted host setup uses an exclusive build tag and binds its immutable ID.
     image: webchat-attachment-parser:1
     build: ./infra/attachment-parser
     network_mode: none

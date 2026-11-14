@@ -53,6 +53,15 @@ func NewStore(path string, r Repository, p Parser) (*Store, error) {
 	if !filepath.IsAbs(path) || r == nil {
 		return nil, ErrInvalid
 	}
+	if p == nil {
+		// API and worker bind the trusted startup environment once, never per
+		// request. Explicit Parser injection is for internal/test adapters only.
+		var err error
+		p, err = NewContainerParser(os.Getenv("WEBCHAT_PARSER_IMAGE_ID"))
+		if err != nil {
+			return nil, err
+		}
+	}
 	if e := os.MkdirAll(path, 0700); e != nil {
 		return nil, e
 	}
@@ -61,9 +70,6 @@ func NewStore(path string, r Repository, p Parser) (*Store, error) {
 		return nil, e
 	}
 	s := &Store{root: root, repo: r, parser: p}
-	if p == nil {
-		s.parser = ContainerParser{}
-	}
 	// API and worker may start concurrently. Serialize layout publication too;
 	// an O_EXCL marker is not readable until its contents are written/fsynced.
 	startup, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -100,7 +106,14 @@ func (s *Store) Close() error { return s.root.Close() }
 // Advisory cross-process lock serializes mutation/recovery, including streams.
 // Open uses immutable finalized objects and never needs the writer lock.
 func (s *Store) lock(ctx context.Context) (func(), error) {
-	f, e := s.root.OpenFile(".lock", os.O_CREATE|os.O_RDWR, 0600)
+	// Concurrent nonexclusive O_CREATE can return ENOENT on Darwin/APFS even
+	// while the other opener creates .lock in a stable directory. Use an atomic
+	// create-or-open protocol instead: only EEXIST permits a noncreating open.
+	// Never retry ENOENT or replace/unlink the inode that other writers lock.
+	f, e := s.root.OpenFile(".lock", os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+	if errors.Is(e, os.ErrExist) {
+		f, e = s.root.OpenFile(".lock", os.O_RDWR, 0600)
+	}
 	if e != nil {
 		return nil, e
 	}

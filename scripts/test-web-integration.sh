@@ -30,6 +30,13 @@ cleanup() {
     wait "$temporal_pid" || true
     if [[ "$status" != 0 ]]; then tail -60 "$work/temporal.log"; fi
   fi
+  # Explicit retention mode for acceptance sessions that must not delete data.
+  # Stops only this test-owned stack; keeps SQL volume, receipts and server DB.
+  if [[ "${WEBCHAT_TEST_RETAIN:-0}" == 1 ]]; then
+    docker compose -p "$project" -f "$work/compose.yaml" stop --timeout 10 || status=1
+    echo "Retained test artifacts: work=$work project=$project volume=$volume"
+    exit "$status"
+  fi
   docker compose -p "$project" -f "$work/compose.yaml" down --timeout 10 || status=1
   if docker volume inspect "$volume" >/dev/null 2>&1; then
     owner=$(docker volume inspect --format '{{index .Labels "com.docker.compose.project"}}' "$volume")
@@ -37,7 +44,7 @@ cleanup() {
       docker volume rm "$volume" >/dev/null || status=1
     else echo "REFUSING cleanup of unowned volume $volume" >&2; status=1; fi
   fi
-  rm -f "$work/compose.yaml" "$work/receipt" "$work/temporal.log" "$work/temporal.db" "$work/temporal.db-shm" "$work/temporal.db-wal" "$work/restart.request" "$work/restart.request.done"
+  rm -f "$work/compose.yaml" "$work/receipt" "$work/temporal.log" "$work/temporal.db" "$work/temporal.db-shm" "$work/temporal.db-wal" "$work/restart.request" "$work/restart.request.done" "$work/parser-image.id"
   rmdir "$work" || true
   exit "$status"
 }
@@ -81,8 +88,18 @@ port=$("${compose[@]}" port postgres 5432)
 export WEBCHAT_TEST_DATABASE_URL="postgres://webchat:$WEBCHAT_TEST_APP_PASSWORD@$port/$database?sslmode=disable"
 echo "Restarted Postgres address=$port"
 WEBCHAT_TEST_PHASE=restart-read run -v -run '^TestRestartRead$'
+if [[ "$mode" != storage ]]; then
+  # Only this unique project owns the build tag. Never inspect a shared alias.
+  # containerd --iidfile may hold an unroutable config digest, so resolve OUR
+  # build tag to the daemon's local content ID. Retain the tag/image reference.
+  parser_tag="webchat-parser-build:${project#webchat-storage-}"
+  docker build --iidfile "$work/parser-image.id" -t "$parser_tag" infra/attachment-parser
+  export WEBCHAT_PARSER_IMAGE_ID
+  WEBCHAT_PARSER_IMAGE_ID=$(docker image inspect --format '{{.Id}}' "$parser_tag")
+  echo "Owned parser build tag=$parser_tag runtimeID=$WEBCHAT_PARSER_IMAGE_ID"
+  [[ "$WEBCHAT_PARSER_IMAGE_ID" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo 'invalid parser build ID' >&2; exit 1; }
+fi
 if [[ "$mode" == attachments || "$mode" == analysis || "$mode" == context ]]; then
-  docker build -t webchat-attachment-parser:1 infra/attachment-parser
   export WEBCHAT_TEST_PARSERS=1
   mise exec -- go test -p 1 -count=1 -timeout 3m -race -tags integration -v ./internal/attachments/...
 fi

@@ -7,20 +7,45 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
 
-// Build with: docker build -t webchat-attachment-parser:1 infra/attachment-parser
-// No caller/model controls the image, command, mounts or container options.
-const ParserImage = "webchat-attachment-parser:1"
+// Only trusted setup configuration may supply a full local content ID. No
+// request/model controls the image, command, mounts or container options.
+var parserImageID = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+
+func validParserImage(id string) error {
+	if !parserImageID.MatchString(id) {
+		return errors.New("WEBCHAT_PARSER_IMAGE_ID must be a full sha256 image ID from trusted setup; run mise run setup")
+	}
+	return nil
+}
+
+// NewContainerParser captures the setup-owned immutable ID once. Tags, registry
+// references and truncated IDs are forbidden. Inspection never pulls an image.
+func NewContainerParser(imageID string) (ContainerParser, error) {
+	if err := validParserImage(imageID); err != nil {
+		return ContainerParser{}, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", imageID)
+	out := &boundedBuffer{max: 4096}
+	cmd.Stdout = out
+	if err := cmd.Run(); err != nil || strings.TrimSpace(out.String()) != imageID {
+		return ContainerParser{}, errors.New("WEBCHAT_PARSER_IMAGE_ID unavailable or identity mismatch; restore the trusted setup image or run mise run setup (no fallback)")
+	}
+	return ContainerParser{imageID: imageID}, nil
+}
 
 var ErrCleanupUnconfirmed = errors.New("parser cleanup unconfirmed")
 var ErrPersistence = errors.New("attachment persistence unavailable")
 
-type ContainerParser struct{}
+type ContainerParser struct{ imageID string }
 type boundedBuffer struct {
 	bytes.Buffer
 	max int
@@ -42,7 +67,10 @@ func (p ContainerParser) Parse(parent context.Context, b []byte, media string, e
 	out, err := p.run(parent, b, media, extract, false)
 	return out.Document, err
 }
-func (ContainerParser) run(parent context.Context, b []byte, media string, extract, render bool) (out parserOutput, err error) {
+func (p ContainerParser) run(parent context.Context, b []byte, media string, extract, render bool) (out parserOutput, err error) {
+	if err := validParserImage(p.imageID); err != nil {
+		return out, err
+	}
 	if len(b) > MaxBytes {
 		return out, ErrTooLarge
 	}
@@ -67,7 +95,7 @@ func (ContainerParser) run(parent context.Context, b []byte, media string, extra
 	}()
 	createCtx, createCancel := context.WithTimeout(context.WithoutCancel(parent), 10*time.Second)
 	defer createCancel()
-	create := exec.CommandContext(createCtx, "docker", "create", "--pull=never", "--name", name, "--label", "webchat.owner="+name, "--network", "none", "--read-only", "--memory", "512m", "--memory-swap", "512m", "--cpus", "1", "--pids-limit", "32", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "65534:65534", "--ulimit", "nofile=64:64", "--ulimit", "cpu=8:8", "-i", ParserImage)
+	create := exec.CommandContext(createCtx, "docker", "create", "--pull=never", "--name", name, "--label", "webchat.owner="+name, "--network", "none", "--read-only", "--memory", "512m", "--memory-swap", "512m", "--cpus", "1", "--pids-limit", "32", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", "65534:65534", "--ulimit", "nofile=64:64", "--ulimit", "cpu=8:8", "-i", p.imageID)
 	var diag boundedBuffer
 	diag.max = 8192
 	create.Stderr = &diag
@@ -77,7 +105,7 @@ func (ContainerParser) run(parent context.Context, b []byte, media string, extra
 			return out, fmt.Errorf("%w: create outcome unknown", ErrCleanupUnconfirmed)
 		}
 		// A transport failure can also lose a successful daemon acknowledgment.
-		return out, fmt.Errorf("%w: create failed (build %s): %v", ErrCleanupUnconfirmed, ParserImage, e)
+		return out, fmt.Errorf("%w: create failed (build %s): %v", ErrCleanupUnconfirmed, p.imageID, e)
 	}
 	if e := ctx.Err(); e != nil {
 		return out, e

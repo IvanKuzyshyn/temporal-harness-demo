@@ -308,11 +308,26 @@ const busyMetadata = {
   pendingApproval: approval,
 };
 
-it.each(["once", "all", "deny"])(
-  "approvalOnceAndAll decision %s remains pending until durable result, then shows asynchronous rejection",
-  async (decision) => {
-    post = async (i) =>
-      Response.json({ ...receipt(i), resultState: "pending", result: null });
+it.each([
+  ["once", "immediate"],
+  ["all", "immediate"],
+  ["deny", "immediate"],
+  ["once", "deferred"],
+  ["all", "deferred"],
+  ["deny", "deferred"],
+])(
+  "approvalOnceAndAll decision %s remains pending until durable result, then shows asynchronous rejection (response=%s)",
+  async (decision, delivery) => {
+    let respond!: (response: Response) => void;
+    post = async (i) => {
+      if (delivery === "deferred")
+        return new Promise<Response>((resolve) => (respond = resolve));
+      return Response.json({
+        ...receipt(i),
+        resultState: "pending",
+        result: null,
+      });
+    };
     await mount({ metadata: busyMetadata });
     const name =
       decision === "once"
@@ -331,7 +346,30 @@ it.each(["once", "all", "deny"])(
     expect(
       screen.getByRole("region", { name: "Approval needed" }).textContent,
     ).toContain("Translate visible text");
-    expect(screen.getByText(/Decision.*awaiting execution/i)).toBeTruthy();
+    if (delivery === "deferred") {
+      // Dispatch is not a receipt: no clock/sleep can release this response.
+      expect(screen.getByText(/Decision.*sending/)).toBeTruthy();
+      expect(screen.queryByText(/Decision.*awaiting execution/i)).toBeNull();
+      respond(
+        Response.json({
+          ...receipt(sent[0]),
+          resultState: "pending",
+          result: null,
+        }),
+      );
+    }
+    // Wait for receipt consumption AND its render, not just request dispatch.
+    expect(await screen.findByText(/Decision.*awaiting execution/i)).toBeTruthy();
+    expect(
+      screen
+        .getByRole("region", { name: "Approval needed" })
+        .getAttribute("aria-busy"),
+    ).toBe("true");
+    expect(
+      (screen.getByRole("button", { name }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.queryByText(/Decision.*admitted by execution/)).toBeNull();
+    expect(screen.queryByText(/invalid_approval/)).toBeNull();
     await act(async () =>
       Source.snapshot(
         [
@@ -345,7 +383,10 @@ it.each(["once", "all", "deny"])(
       ),
     );
     expect(screen.getAllByText(/invalid_approval/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Decision.*rejected: invalid_approval/)).toBeTruthy();
+    expect(screen.queryByText(/Decision.*awaiting execution/i)).toBeNull();
     expect(screen.queryByText(/Decision applied/)).toBeNull();
+    expect(sent).toHaveLength(1);
   },
 );
 it("approvalRevokeAfterReload restores policy from server, not session memory", async () => {

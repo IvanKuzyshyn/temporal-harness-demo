@@ -1,4 +1,6 @@
-# Event protocol v1
+# Historical: terminal event protocol v1
+
+> Retired JSONL display transport. Web lifecycle events use SQL/SSE; see [web streaming](web-chat-streaming.md). The historical protocol below is not shipped.
 
 Each record is one UTF-8 JSON object followed by LF. Fields are `seq` (uint64, strictly increasing per stream), `ts` (RFC3339Nano), `workflowId`, `runId`, `parentWorkflowId` (empty for parent), `type`, `pattern`, `data`.
 

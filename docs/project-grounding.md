@@ -1,4 +1,6 @@
-# Evidence-grounded project requests
+# Historical: evidence-grounded project requests
+
+> Project discovery, local coding tools and fixture forcing are retired. This document is historical evidence only, not a current runtime or replay contract.
 
 In new sessions, ordinary `run`/`tui` requests use the session's effective local project root and model. They do not select the calculator fixture or the harness-enforced `/demo` plan. Old executions retain their versioned demo-routing behavior until rollover or a new execution. “Explain this project” is an ordinary model request, not a script. Existing sessions retain their original configuration; reconnecting does not change their root or model.
 

@@ -101,6 +101,7 @@ func run() error {
 	defer sdk.Close()
 	repo := storage.New(pool)
 	if root := os.Getenv("WEBCHAT_ATTACHMENT_ROOT"); root != "" {
+		// nil binds/validates trusted WEBCHAT_PARSER_IMAGE_ID once at startup.
 		files, e := attachments.NewStore(root, repo, nil)
 		if e != nil {
 			return fmt.Errorf("attachment store: %w", e)

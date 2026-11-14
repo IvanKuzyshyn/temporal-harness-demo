@@ -78,7 +78,7 @@ func TestPublishedMetadataCorruptionStillFailsClosed(t *testing.T) {
 	t.Run("marker", func(t *testing.T) {
 		s, r, _ := fixtureStore(t)
 		require.NoError(t, s.root.WriteFile(".webchat-attachments-v1", []byte("corrupt final"), 0600))
-		other, e := NewStore(r.root, r, nil)
+		other, e := NewStore(r.root, r, s.parser)
 		require.ErrorIs(t, e, ErrInvalid)
 		require.Nil(t, other)
 		b, e := s.root.ReadFile(".webchat-attachments-v1")

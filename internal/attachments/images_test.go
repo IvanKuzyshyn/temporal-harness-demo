@@ -90,8 +90,7 @@ func TestImageDimensionsBound(t *testing.T) {
 	}
 }
 func TestSVGNoExternalResources(t *testing.T) {
-	realParser(t)
-	p := ContainerParser{}
+	p := realParser(t)
 	good := `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="16"><rect width="32" height="16" fill="red"/></svg>`
 	b, e := p.Rasterize(context.Background(), []byte(good))
 	require.NoError(t, e)

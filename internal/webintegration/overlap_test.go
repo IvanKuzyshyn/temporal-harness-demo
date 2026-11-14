@@ -5,6 +5,7 @@ package webintegration_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -114,14 +115,16 @@ func TestOverlappingChatModelAttemptsRealTemporal(t *testing.T) {
 			require.NoError(t, f.pool.QueryRow(f.ctx, "SELECT status,coalesce(result_entry_id::text,'') FROM model_steps WHERE turn_id=$1 AND attempt=$2", cmd.TurnID, winner).Scan(&status, &entry))
 			require.Equal(t, "completed", status)
 			require.Equal(t, chat.LogicalID(cmd.TurnID, "final"), entry)
-			var running, answers, events int
+			var running, answers int
 			require.NoError(t, f.pool.QueryRow(f.ctx, "SELECT count(*) FROM model_steps WHERE turn_id=$1 AND status='running'", cmd.TurnID).Scan(&running))
 			require.Zero(t, running)
 			require.NoError(t, f.pool.QueryRow(f.ctx, "SELECT count(*) FROM messages WHERE turn_id=$1 AND role='assistant'", cmd.TurnID).Scan(&answers))
 			require.Equal(t, 1, answers)
-			require.NoError(t, f.pool.QueryRow(f.ctx, "SELECT count(*) FROM events WHERE turn_id=$1", cmd.TurnID).Scan(&events))
-			require.Equal(t, 1, events)
-			t.Logf("real activity timeout/overlap: winner attempt %d, one answer/event, no running attempts", winner)
+			var winningAttempt string
+			require.NoError(t, f.pool.QueryRow(f.ctx, "SELECT attempt_id::text FROM chat_model_results WHERE conversation_id=$1 AND turn_id=$2 AND logical_step=0", c.ID, cmd.TurnID).Scan(&winningAttempt))
+			require.Equal(t, chat.LogicalID(cmd.TurnID, fmt.Sprintf("model/0/attempt/%d", winner)), winningAttempt)
+			assertTextOutcome(t, f, c.ID, map[chat.TurnID]textOutcome{cmd.TurnID: {completed: true, maxAttempt: 2}})
+			t.Logf("real activity timeout/overlap: winner attempt %d, one final answer/canonical completion, registered bounded previews, no running attempts", winner)
 		})
 	}
 }

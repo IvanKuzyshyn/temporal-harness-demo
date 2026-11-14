@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"net"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/config"
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/activities"
 	"go.temporal.io/api/workflowservice/v1"
 	temporalclient "go.temporal.io/sdk/client"
 	temporalworker "go.temporal.io/sdk/worker"
@@ -128,6 +129,9 @@ func awaitStartup(t *testing.T, ch <-chan struct{}, what string) {
 	select {
 	case <-ch:
 	case <-time.After(3 * time.Second):
+		buf := make([]byte, 1<<20)
+		n := runtime.Stack(buf, true)
+		t.Logf("transport observer diagnostic (before test server cleanup):\n%s", buf[:n])
 		t.Fatalf("timed out waiting for %s", what)
 	}
 }
@@ -167,7 +171,7 @@ func TestStartupCancellationRealGRPC(t *testing.T) {
 			returned := make(chan struct{})
 			go func() {
 				defer close(returned)
-				runner, startErr = start(ctx, config.Config{Model: "mock", TemporalAddress: address}, dial, factory)
+				runner, startErr = startWeb(ctx, address, &activities.ChatActivities{}, dial, factory)
 			}()
 			// Even on an assertion failure, unblock and join the test's caller.
 			t.Cleanup(func() {
@@ -222,7 +226,7 @@ func TestRuntimeCancellationPreservesShutdownRPCs(t *testing.T) {
 	s, address, _ := serveStartup(t, false, false)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	r, err := Start(ctx, config.Config{Model: "mock", TemporalAddress: address})
+	r, err := StartWeb(ctx, address, &activities.ChatActivities{})
 	if err != nil {
 		t.Fatal(err)
 	}

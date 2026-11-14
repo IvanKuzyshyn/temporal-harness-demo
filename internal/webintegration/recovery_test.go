@@ -82,9 +82,7 @@ func TestPersistenceExhaustionRecoversAdmittedInboxAndDispatcher(t *testing.T) {
 	assert.Equal(t, a.TurnID, state.ActiveTurn)
 	require.Len(t, state.Inbox, 1)
 	require.Equal(t, b.TurnID, state.Inbox[0].TurnID)
-	events, err := f.repo.ListEvents(f.ctx, c.ID, 0, 20)
-	require.NoError(t, err)
-	require.Empty(t, events)
+	assertTextOutcome(t, f, c.ID, map[chat.TurnID]textOutcome{a.TurnID: {maxAttempt: 1}, b.TurnID: {maxAttempt: 1}})
 	restore()
 	third := f.command(t, c, "third through real dispatcher after restore")
 	require.Eventually(t, func() bool {
@@ -101,6 +99,11 @@ func TestPersistenceExhaustionRecoversAdmittedInboxAndDispatcher(t *testing.T) {
 	page, err := f.repo.ListMessages(f.ctx, c.ID, "", 20)
 	require.NoError(t, err)
 	require.Len(t, page.Messages, 6)
+	assertTextOutcome(t, f, c.ID, map[chat.TurnID]textOutcome{
+		a.TurnID:     {completed: true, maxAttempt: 1},
+		b.TurnID:     {completed: true, maxAttempt: 1},
+		third.TurnID: {completed: true, maxAttempt: 1},
+	})
 	// The failed batch consumes the third budget slot: recovery must carry the
 	// active settlement and the admitted second turn through a real rollover.
 	id := run.GetRunID()

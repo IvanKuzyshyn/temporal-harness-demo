@@ -42,6 +42,9 @@ func startWeb(ctx context.Context, address string, a *activities.ChatActivities,
 		}
 	}()
 	for _, q := range []string{workflows.WebAgentsQueue, workflows.WebLLMQueue, workflows.WebDocumentsQueue} {
+		if err = ctx.Err(); err != nil {
+			return nil, err
+		}
 		opts := tw.Options{WorkerStopTimeout: 10 * time.Second}
 		if q == workflows.WebLLMQueue {
 			opts.MaxConcurrentActivityExecutionSize = 1
@@ -76,6 +79,11 @@ func startWeb(ctx context.Context, address string, a *activities.ChatActivities,
 			return nil, err
 		}
 		if err = w.Start(); err != nil {
+			// SDK startup may report a derived cancellation when the caller's
+			// deadline expired. Preserve the caller's authoritative cause.
+			if ctx.Err() != nil {
+				err = ctx.Err()
+			}
 			return nil, fmt.Errorf("start web worker: %w", err)
 		}
 	}
