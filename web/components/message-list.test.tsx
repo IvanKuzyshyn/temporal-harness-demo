@@ -1,46 +1,125 @@
+// @vitest-environment jsdom
+import "@testing-library/jest-dom/vitest";
 import { it, expect } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MessageList, WorkStatus } from "./message-list";
-import { initialState } from "../lib/event-reducer";
-it("summarizes a queued backlog while keeping identifiable entries and per-message status", () => {
-  const state = initialState("a");
-  for (let n = 1; n <= 25; n++) {
-    state.turns[`t${n}`] = { id: `t${n}`, status: "queued", reason: "" };
-    state.messages.push({
-      entryId: `m${n}`,
-      turnId: `t${n}`,
+import { initialState, reduceEvent } from "../lib/event-reducer";
+import { render, within, cleanup } from "@testing-library/react";
+import { afterEach } from "vitest";
+afterEach(cleanup);
+
+it.each(["tool.state", "snapshot"])(
+  "shows a failed operation on its completed turn from %s, never another turn",
+  (type) => {
+    let s = initialState("a");
+    s.messages = [
+      {
+        entryId: "question",
+        conversationId: "a",
+        turnId: "t",
+        role: "user",
+        text: "Read the page",
+        sequence: 1,
+      },
+      {
+        entryId: "answer",
+        conversationId: "a",
+        turnId: "t",
+        role: "assistant",
+        text: "A general answer",
+        sequence: 2,
+      },
+      {
+        entryId: "other",
+        conversationId: "a",
+        turnId: "other",
+        role: "assistant",
+        text: "Unrelated answer",
+        sequence: 3,
+      },
+    ] as any;
+    s.turns.t = { id: "t", status: "completed", reason: "" };
+    const tool = {
+      id: "private-tool",
+      turnId: "t",
+      name: "web_fetch",
+      status: "failed",
+      result: { error: "private-network-error" },
+      sources: [],
+    };
+    s = reduceEvent(type === "snapshot" ? initialState("a") : s, {
+      id: "1",
       conversationId: "a",
-      role: "user",
-      text: `Question ${n} about a distinct topic`,
-      attachmentIds: [],
-      logicalStep: 0,
-      resultKind: "input",
-      completionState: "completed",
-      context: null,
-      sequence: n,
-      createdAt: "",
-    });
-  }
-  const html = renderToStaticMarkup(<WorkStatus state={state} />);
-  const visible = html.replace(/<details[\s\S]*?<\/details>/g, "");
-  expect(html).toContain("<summary>25 queued messages</summary>");
-  expect((visible.match(/class="live-status"/g) ?? []).length).toBe(0);
-  expect(html).toContain("Question 1 about a distinct topic");
-  expect(html).toContain("Question 25 about a distinct topic");
-  expect(renderToStaticMarkup(<MessageList state={state} />)).toContain(
-    "Queued",
-  );
-});
-it("exposes failed pending approval policy and lossy coverage without opening details", () => {
+      turnId: null,
+      stepId: null,
+      attempt: null,
+      type,
+      data:
+        type === "snapshot"
+          ? {
+              reset: true,
+              messages: s.messages,
+              turns: Object.values(s.turns),
+              tools: [tool],
+              commands: [],
+              attempts: [],
+              before: "",
+              metadata: null,
+            }
+          : tool,
+    } as any);
+    const { container } = render(<MessageList state={s} />);
+    const answer = container.querySelector(
+      '[data-message-id="answer"]',
+    )! as HTMLElement;
+    expect(within(answer).getByRole("status")).toHaveTextContent(
+      "A web page could not be read.",
+    );
+    expect(
+      container.querySelector('[data-message-id="question"]'),
+    ).not.toHaveTextContent("could not");
+    expect(
+      container.querySelector('[data-message-id="other"]'),
+    ).not.toHaveTextContent("could not");
+    expect(container.textContent).not.toMatch(
+      /private-tool|private-network-error/,
+    );
+    expect(container.querySelector("details,pre")).toBeNull();
+  },
+);
+
+it("reports an attachment failure even before an assistant answer, but not denied/cancelled/successful tools", () => {
   const s = initialState("a");
-  s.loaded = true;
+  s.messages = [
+    {
+      entryId: "question",
+      conversationId: "a",
+      turnId: "t",
+      role: "user",
+      text: "Read file",
+    },
+  ] as any;
+  s.tools.failed = {
+    id: "failed",
+    turnId: "t",
+    name: "file_upload",
+    status: "failed",
+    result: null,
+    sources: [],
+  };
+  const { container, rerender } = render(<MessageList state={s} />);
+  expect(container).toHaveTextContent("An attachment could not be read.");
+  for (const status of ["denied", "cancelled", "completed"]) {
+    s.tools.failed.status = status;
+    rerender(<MessageList state={s} />);
+    expect(container).not.toHaveTextContent("could not be read");
+  }
+});
+it("keeps queued/failed messages and action-required notices without diagnostic panels", () => {
+  const s = initialState("a");
   s.turns.t = { id: "t", status: "failed", reason: "model_error" };
   s.metadata = {
-    pendingApproval: {
-      toolName: "web_fetch",
-      arguments: { url: "https://example.com" },
-      deadline: "tomorrow",
-    },
+    pendingApproval: { toolName: "web_fetch" },
     policy: { approvalAll: true },
     dispatcherConnected: false,
   } as any;
@@ -52,45 +131,49 @@ it("exposes failed pending approval policy and lossy coverage without opening de
       role: "assistant",
       text: "Partial answer",
       completionState: "incomplete",
-      sequence: 1,
       context: {
         coverage: {
-          sourceLimited: true,
-          omittedExchanges: 0,
-          summaryVersion: 1,
           recentExchanges: 6,
-          summaryBoundary: 2,
-          evidence: { included: [], eligible: 2, omitted: 2, deduplicated: 0 },
-          quotations: {
-            included: [],
-            eligible: 3,
-            omitted: 3,
-            deduplicated: 0,
-          },
+          omittedExchanges: 2,
+          outputTruncated: true,
         },
-        accounting: {
-          method: "bound",
-          inputTokens: 123,
-          outputTokens: 2000,
-          imageTokens: 0,
-          reserve: 2384,
-          total: 4507,
-        },
+        accounting: { inputTokens: 123 },
       },
     },
   ] as any;
+  s.tools.tool = {
+    id: "trace-secret",
+    name: "web_fetch",
+    arguments: { url: "https://example.com/private-diagnostic" },
+    status: "failed",
+  } as any;
+  s.drafts.draft = {
+    text: "Still writing",
+    attempt: 42,
+    bounded: true,
+  } as any;
   const html = renderToStaticMarkup(
     <>
       <WorkStatus state={s} />
       <MessageList state={s} />
     </>,
   );
-  expect(html).toContain("model_error");
+  expect(html).toContain("Failed");
   expect(html).toContain("Approval needed");
-  expect(html).toContain("Conversation approval enabled");
-  expect(html).toContain("Bounded, lossy context");
-  expect(html).toContain("2 tool sources omitted");
-  expect(html).toContain("3 quotation pairs omitted");
-  expect(html).toContain("not measured usage");
+  expect(html).toContain("Partial answer");
   expect(html).toContain("Incomplete");
+  expect(html).toContain("Still writing");
+  for (const diagnostic of [
+    "<details",
+    "Context provenance",
+    "Bounded, lossy",
+    "tool sources omitted",
+    "inputTokens",
+    "trace-secret",
+    "private-diagnostic",
+    "attempt 42",
+    "Saved state",
+    "Work status",
+  ])
+    expect(html).not.toContain(diagnostic);
 });

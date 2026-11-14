@@ -1,4 +1,8 @@
-# Durable browser interactions (Task12)
+# Durable browser interactions (current simplification)
+
+Current UI follows the inspected dark AI SDK Chatbot layout, with Qwen as the only
+enabled model and one selected attachment. Historical Task12 qualification notes
+below remain evidence, not current operating instructions.
 
 The UI extends the [streaming client](web-chat-streaming.md) and uses the
 [private API](web-api.md) verbatim. It does not authorize tools or write SQL.
@@ -17,8 +21,8 @@ The UI extends the [streaming client](web-chat-streaming.md) and uses the
   fenced by mounted session and immutable request ID, and terminal receipts do
   not regress to pending.
 - HTTP202 means saved intent. `resultState:accepted` means workflow admission,
-  not completion. The UI says “admitted by execution; see saved work state.”
-  Asynchronous rejection stays visible. Cancellation waits for actual cleanup
+  not completion. Pending delivery and asynchronous rejection stay visible;
+  accepted receipt/execution chatter is not rendered. Cancellation waits for actual cleanup
   joins; a held/missing acknowledgment is not treated as cancelled or replaced.
 - Message-size413 correction keeps the Task11 typed pre-acceptance exception;
   other uncertain message/control failures retain their retry identity. Storage
@@ -27,9 +31,10 @@ The UI extends the [streaming client](web-chat-streaming.md) and uses the
 - Policy, active work, pending approval and saved history come from the server
   on reopen. Revoke's contract contains requestId only, not an invented version
   assertion. Policy revision/toolset and exact approval/action identity remain
-  visible; expired or stale projected scopes disable decision controls.
-- Pending approval is outside collapsed work details and precedes old rejection
-  notices. Narrow-width tests check actual button bounds inside the scroll panel,
+  enforced but are not displayed as diagnostics. Expired or stale projected
+  scopes disable decision controls.
+- Pending approval shows its plain-language action and approve once/all/deny,
+  with compact contextual revoke. There are no collapsed work/details panels. Narrow-width tests check actual button bounds inside the scroll panel,
   not just DOM presence. Once covers the exact action/retries; All covers the
   current versioned toolset; revocation does not undo already-authorized work.
 
@@ -37,17 +42,20 @@ The UI extends the [streaming client](web-chat-streaming.md) and uses the
 
 Picker/drop performs count/type/byte checks, then sends one multipart file per
 request. Only a ready response belonging to the original conversation supplies an
-ID. Up to four distinct selections are submitted, at most1,048,576 original bytes
+ID. At most one selected attachment is submitted, at most1,048,576 original bytes
 each. Server signature/parser errors are actionable, not bypassed by extensions.
-A conversation-owned sequential batch completes all captured files after SPA
+A conversation-owned upload completes its single captured file after SPA
 navigation, saving only into its original chat's draft. Remounting observes the
-same active lock/progress; a late error is retained and does not discard later
-files. Completed ready selections and errors survive reload. A full page reload
+same active lock/progress; late errors remain with their original conversation.
+Multi-drop and rapid second selection reject without uploading/discarding extras.
+Old multi-file drafts/pending intents require explicit editing/removal before send
+or replacement. Completed ready selections and errors survive reload. A full page reload
 cannot recover in-memory File bytes: unfinished names show explicit interrupted /
 reselect guidance (an in-flight request may already have saved an original).
 Removing a selection clears local selection only; originals/history are not deleted.
 
-Saved messages expose their canonical attachment IDs with **Attach again**.
+Saved messages retain canonical attachment IDs behind **Attach again**, without
+rendering raw identifiers in the transcript.
 This works after clearing local storage: new analysis creates a new action with
 its new instruction and needs authorization. Metadata placeholders are deliberate
 when a saved ID has no known safe raster type; no new metadata API was invented.
@@ -63,11 +71,15 @@ stay metadata-only. The user preview does not grant the model original access.
 The [Task9 image profile](web-chat-image-profile.md) remains unchanged: each image
 action uses one640×160 normalized PNG, bounded printable ASCII instruction and
 pinned Ollama0.40.15/MLX/model digests, with no optional image history/tools. The
-UI exposes these constraints and never rewrites a rejected instruction. General
-`imageAdmissionQualified:false`, known larger-Qwen limitations, no OCR/fallback,
-and lossy context warnings remain. Image error outcomes are not translations.
+UI does not render a technical profile panel and never rewrites a rejected
+instruction. General `imageAdmissionQualified:false`, known larger-Qwen limitations
+and no OCR/fallback remain backend constraints; context diagnostics are hidden.
+Actual failure/incomplete-output notices remain visible. Image error outcomes are
+not translations.
 Deliberate cancellation gets neutral saved-attachment guidance, not format/runtime
 troubleshooting; actual failures keep actionable guidance and native result data.
+
+## Historical Task12 qualification (not re-certified by simplification)
 
 **R2 is OPEN / DEFERRED under explicit user waiver:** “Let's defer Qwen issue and
 continue work.” This new decision covers the narrow-profile Qwen parent's
@@ -99,11 +111,17 @@ mise exec -- pnpm --dir web typecheck
 mise exec -- pnpm --dir web build
 # Install a browser in a task-owned cache if needed; don't alter a shared install.
 PLAYWRIGHT_BROWSERS_PATH=/absolute/owned/browser-cache mise exec -- pnpm --dir web exec playwright install chromium
-PLAYWRIGHT_BROWSERS_PATH=/absolute/owned/browser-cache mise exec -- pnpm --dir web exec playwright test
+PLAYWRIGHT_BROWSERS_PATH=/absolute/owned/browser-cache mise exec -- pnpm --dir web exec playwright test tests/chat.spec.ts
 ```
 
 `tests/chat.spec.ts` routes deterministic HTTP/SSE fixtures through the actual
-React app; it is not provider evidence. `tests/chat-live.spec.ts` opts into an
+React app; it is not provider evidence.
+
+### Historical live runbook — adaptation and separate authorization required
+
+The old live cases below still assume both models/multiple files and are not the
+current simplification gate. Do not run them as a zero-inference review fixture.
+`tests/chat-live.spec.ts` opts into an
 actual executable API/worker/Next stack with isolated Postgres/Temporal and the
 existing Ollama provider. Both exact models have separate full-final acceptance
 assertions; these provider-invoking cases were **not run** in the fix1 diagnostic

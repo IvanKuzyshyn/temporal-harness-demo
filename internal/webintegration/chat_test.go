@@ -169,7 +169,7 @@ func (r *lostAck) SettleClaim(ctx context.Context, c storage.CommandClaim, s str
 func TestLostGatewayAcknowledgement(t *testing.T) {
 	f := setup(t)
 	f.start(t, f.repo, mock.New())
-	c := f.conversation(t, "gemma4:e4b")
+	c := f.conversation(t, "qwen3.5:9b")
 	cmd := f.command(t, c, "one durable answer")
 	// Other tests' terminal workflow commands are not in the dispatcher lane.
 	_, err := f.pool.Exec(f.ctx, "UPDATE commands SET next_attempt_at=clock_timestamp()+interval '1 day' WHERE conversation_id<>$1", c.ID)
@@ -302,7 +302,7 @@ func TestDatabaseOutageDuringFinalPersistence(t *testing.T) {
 	t.Log("actual test Postgres paused through settlement timeout; Temporal completion stayed zero until DB recovered")
 }
 func TestRealAPITextChat(t *testing.T) {
-	for _, model := range []string{"qwen3.5:9b", "gemma4:e4b"} {
+	for _, model := range chat.EnabledModels() {
 		t.Run(model, func(t *testing.T) {
 			f := setup(t)
 			var m llm.Model = mock.New()

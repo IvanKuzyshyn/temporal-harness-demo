@@ -62,20 +62,20 @@ it("validates exact byte and count limits for picker and drop before upload", as
   expect(screen.getByRole("alert").textContent).toContain("1,048,576");
   fireEvent.drop(screen.getByRole("region", { name: "Attachments" }), {
     dataTransfer: {
-      files: Array.from({ length: 5 }, () => new File(["x"], "n.txt")),
+      files: Array.from({ length: 2 }, () => new File(["x"], "n.txt")),
     },
   });
-  expect(screen.getByRole("alert").textContent).toContain("four");
+  expect(screen.getByRole("alert").textContent).toContain("one attachment");
   expect(fetcher).not.toHaveBeenCalled();
 });
-it("server validation failure is actionable, preserves earlier ready files and clears accessible busy state", async () => {
+it("server validation failure is actionable and clears accessible busy state", async () => {
   fetcher.mockResolvedValue(
     Response.json(
       { error: { code: "invalid_signature_or_unreadable_file" } },
       { status: 422 },
     ),
   );
-  render(<Picker initial={[{ id: "old", name: "already.txt" }]} />);
+  render(<Picker />);
   fireEvent.change(screen.getByLabelText("Attach files"), {
     target: { files: [new File(["not-png"], "bad.png")] },
   });
@@ -85,7 +85,6 @@ it("server validation failure is actionable, preserves earlier ready files and c
   expect((await screen.findByRole("alert")).textContent).toMatch(
     /Renaming.*does not convert/,
   );
-  expect(screen.getByText("already.txt")).toBeTruthy();
   expect(
     screen
       .getByRole("region", { name: "Attachments" })

@@ -22,7 +22,7 @@ func TestBudgetIncludesSchemasAndImages(t *testing.T) {
 	_, err := Assemble(r, nil, DefaultBudget())
 	require.Error(t, err)
 	ref := llm.ImageReference{AttachmentID: chat.AttachmentID(uuid.NewString()), Checksum: strings.Repeat("a", 64), DerivedKey: llm.NarrowImageProfile}
-	for _, model := range []string{"qwen3.5:9b", "gemma4:e4b"} {
+	for _, model := range chat.EnabledModels() {
 		img, err := ollama.ImageRequest(model, "Translate.", ref)
 		require.NoError(t, err)
 		out, err := Assemble(img, nil, DefaultBudget())
@@ -56,7 +56,7 @@ func TestToolPairsNotSplit(t *testing.T) {
 	require.Error(t, err, "orphan tool group")
 }
 func TestReplacementContextProvenance(t *testing.T) {
-	turn := chat.Turn{Model: "gemma4:e4b", Text: "correction", ReplacementTarget: chat.TurnID(uuid.NewString()), OriginalText: "original", OriginalAttachmentIDs: []chat.AttachmentID{chat.AttachmentID(uuid.NewString())}}
+	turn := chat.Turn{Model: "qwen3.5:9b", Text: "correction", ReplacementTarget: chat.TurnID(uuid.NewString()), OriginalText: "original", OriginalAttachmentIDs: []chat.AttachmentID{chat.AttachmentID(uuid.NewString())}}
 	r, err := Mandatory(turn, "limited history")
 	require.NoError(t, err)
 	out, err := Assemble(r, [][]llm.Message{{{Role: "user", Content: "prior"}, {Role: "assistant", Content: "completed"}}}, DefaultBudget())

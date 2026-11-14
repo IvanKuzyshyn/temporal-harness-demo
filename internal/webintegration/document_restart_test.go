@@ -35,7 +35,7 @@ func TestDocumentWorkerRestartAndFollowUp(t *testing.T) {
 	store, e := attachments.NewStore(root, f.repo, nil)
 	require.NoError(t, e)
 	defer func() { store.Close() }()
-	c := f.conversation(t, "gemma4:e4b")
+	c := f.conversation(t, "qwen3.5:9b")
 	file, e := store.Put(f.ctx, c.ID, strings.NewReader("restart document"), attachments.UploadMetadata{Name: "restart.txt", MediaType: "text/plain"})
 	require.NoError(t, e)
 	m := &restartDocumentModel{started: make(chan struct{})}

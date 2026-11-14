@@ -142,6 +142,13 @@ func (r *Repository) AcceptCommand(ctx context.Context, in chat.CommandInput) (o
 		}
 		var turn chat.TurnID
 		if in.Kind == chat.CommandMessage || in.Kind == chat.CommandReplace {
+			var model string
+			if e := tx.QueryRow(ctx, "SELECT model FROM conversations WHERE id=$1", in.ConversationID).Scan(&model); e != nil {
+				return e
+			}
+			if !chat.ValidModel(model) {
+				return chat.ErrInvalid
+			}
 			turn = chat.TurnID(uuid.NewString())
 			kind := "message"
 			if in.Kind == chat.CommandReplace {
@@ -179,7 +186,7 @@ func (r *Repository) AcceptCommand(ctx context.Context, in chat.CommandInput) (o
 	return out, err
 }
 func validateMessage(m chat.MessageRecord) error {
-	if !chat.ValidID(m.EntryID) || !chat.ValidID(string(m.TurnID)) || !chat.ValidID(string(m.ConversationID)) || m.LogicalStep < 0 || m.ResultKind == "" || (m.Role != "user" && m.Role != "assistant") || (m.CompletionState != "completed" && m.CompletionState != "incomplete") || len(m.AttachmentIDs) > 4 {
+	if !chat.ValidID(m.EntryID) || !chat.ValidID(string(m.TurnID)) || !chat.ValidID(string(m.ConversationID)) || m.LogicalStep < 0 || m.ResultKind == "" || (m.Role != "user" && m.Role != "assistant") || (m.CompletionState != "completed" && m.CompletionState != "incomplete") || len(m.AttachmentIDs) > chat.MaxAttachments {
 		return chat.ErrInvalid
 	}
 	seen := map[chat.AttachmentID]bool{}

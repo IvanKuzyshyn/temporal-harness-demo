@@ -18,7 +18,7 @@ import (
 // accidentally overriding legacy provider defaults with zero options.
 func TestTextWireAdmissionDispatchParity(t *testing.T) {
 	off, on := false, true
-	for _, model := range []string{"qwen3.5:9b", "gemma4:e4b"} {
+	for _, model := range []string{"qwen3.5:9b"} {
 		for _, tc := range []struct {
 			name            string
 			context, output int

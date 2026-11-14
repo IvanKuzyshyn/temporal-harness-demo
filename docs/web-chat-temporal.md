@@ -12,7 +12,7 @@ closed web tool protocol, not production fetch/file adapters.
 
 ## Run
 
-Apply application migrations with `web-api -migrate` (now version **5**), then run
+Apply application migrations with `web-api -migrate` (current version **9**), then run
 `cmd/web-worker` and `cmd/web-api` with the private API/DB configuration described
 in [web-api.md](web-api.md). Build with `mise exec -- go build -p 1 ./...`.
 Additional configuration:
@@ -20,8 +20,8 @@ Additional configuration:
 - `WEBCHAT_TEMPORAL_ADDRESS`: default `127.0.0.1:7233`, shared by API and worker.
 - `WEBCHAT_OLLAMA_URL`: worker-only explicit HTTP(S) URL, default
   `http://127.0.0.1:11434`. No environment-selected model/provider fallback.
-- The public model allowlist is still exactly **qwen3.5:9b** (default) and
-  **gemma4:e4b**. Every inference request uses the conversation's stored model.
+- The current enabled public catalog is **qwen3.5:9b** only. Gemma is disabled
+  without fallback; older both-model test observations below are historical. Every inference request uses the conversation's stored model.
 - `web-worker -test-mock` is an explicit test-only provider selection, permitted
   only with a `webchat_test_` application database. `mock` is not an API model.
   Production does not silently fall back when Ollama or a model is unavailable.

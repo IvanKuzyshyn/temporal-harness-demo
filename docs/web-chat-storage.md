@@ -1,6 +1,6 @@
 # Web-chat application storage (Tasks 2–8)
 
-Current schema **8** adds bounded final-response context metadata and a completed-context index; [bounded context](web-chat-context.md) defines immutable summary boundaries/ownership and limited-memory API semantics. Schema7 added immutable action-scoped document manifest/chunk summaries in `document_analysis_parts`; schema6's pure extraction cache is unchanged. The API/worker require schema8. Canonical context evidence is selected from existing authorized, owned terminal tool results on completed turns (newest four by completion sequence/tool-call ID), independently of summaries; no additional migration, original-byte read, or mutation of recorded evidence is required. Up to four earliest completed original user/assistant message pairs outside the newest six are also selected, independent of summary watermarks, with message identities and UTF-8 text hashes. They establish speaker attribution only; generated summaries, source quotations and canonical tool observations retain separate provenance under the same admission limits. See [analysis contracts](web-chat-analysis.md). Original bytes stay in the explicitly configured durable host directory. See [attachment contracts](web-chat-attachments.md) for atomic byte-before-ready publication, ownership-verified recovery, exact authorization and parser limits.
+Current schema **9** adds Qwen-only new-write admission and a single attachment position using `NOT VALID` constraints: old rows remain readable, without compatibility guarantees for further execution. No reset or historical rewrite is required. Schema8 added bounded final-response context metadata and a completed-context index; [bounded context](web-chat-context.md) defines immutable summary boundaries/ownership and limited-memory API semantics. Schema7 added immutable action-scoped document manifest/chunk summaries in `document_analysis_parts`; schema6's pure extraction cache is unchanged. The API/worker require schema9. Canonical context evidence is selected from existing authorized, owned terminal tool results on completed turns (newest four by completion sequence/tool-call ID), independently of summaries; no additional migration, original-byte read, or mutation of recorded evidence is required. Up to four earliest completed original user/assistant message pairs outside the newest six are also selected, independent of summary watermarks, with message identities and UTF-8 text hashes. They establish speaker attribution only; generated summaries, source quotations and canonical tool observations retain separate provenance under the same admission limits. See [analysis contracts](web-chat-analysis.md). Original bytes stay in the explicitly configured durable host directory. See [attachment contracts](web-chat-attachments.md) for atomic byte-before-ready publication, ownership-verified recovery, exact authorization and parser limits.
 
 Schema **5** adds step-aware immutable model candidates, recorded approval scope
 and outcomes, effective versioned policy, exact tool authorization/result ownership
@@ -75,9 +75,9 @@ supported. Duplicate/aliased parameters use pgx's input-order resolution; only
 the final resolved application identity is used.
 
 All domain structs are in `internal/chat/contracts.go`. Identity strings must
-be nonzero, lowercase, hyphenated UUIDs. Models are exactly `qwen3.5:9b` and
-`gemma4:e4b`; the API may default to Qwen but storage never silently substitutes
-an unsupported model.
+be nonzero, lowercase, hyphenated UUIDs. The enabled catalog is currently only `qwen3.5:9b`;
+storage rejects new prompts/replacements on disabled stored models rather than
+silently substituting Qwen. Historical model identities remain readable.
 
 ### Conversation, commands, history
 
@@ -226,7 +226,7 @@ links, attempts, actions, approvals, command targets, summaries, and events.
 Messages cannot be updated/deleted. Attachment joins must be inserted in the
 message's creation transaction (tracked with Postgres xid8), and cannot be
 changed/deleted afterward. Attachment links require ready metadata and at most
-four distinct positions. Migrations add listing indexes and durable unique
+one position (`ordinal = 0`) for new writes; historical positions are retained. Migrations add listing indexes and durable unique
 identities, with no dependencies on Temporal tables or extensions.
 
 `storage.ErrConflict` identifies changed identity payload/unique logical-key

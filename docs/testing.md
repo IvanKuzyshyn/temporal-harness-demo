@@ -45,6 +45,17 @@ The retained Task9 live-image utility also requires that trusted `WEBCHAT_PARSER
 
 `chat` covers the full web integration set with mock/injected models and real SQL/Temporal. For all parser stages plus the full set, use `WEBCHAT_TEST_CHAT_RUN=. scripts/test-web-integration.sh context`. `context` includes attachment/parser, context, child/replacement and hard-death boundaries. Tests retain meaningful fault assertions. Injected invalid/cancellation/shutdown SDK logs are expected but some log assertions remain assigned Task14; output is not described as pristine. Live image/parent tests are separate opt-in qualification gates, not automatically certified by mock integration.
 
+The simplification follow-up enables only Qwen and one selected attachment.
+`tests/chat.spec.ts` is the current deterministic browser suite; older live
+both-model/four-file qualification cases need separate scope adaptation before
+use. Task14 and original full-stack qualification remain incomplete; this
+follow-up does not certify them or repair retained Qwen semantic failures.
+The opt-in `TestSimplificationBrowserRuntime` in `internal/api` serves actual
+API/SQL with synthetic saved empty/populated/approval/error states, zero inference
+and no dispatcher. Set an absolute `WEBCHAT_SIMPLIFICATION_BROWSER_DIR`, an
+isolated `webchat_test_` database and trusted parser image ID; read `ready.json`
+and create `done` to stop its owned Next/API children. New commands queue only.
+
 Frontend Vitest covers interaction/security/stream reconciliation. Playwright `web/tests/` uses explicit `WEBCHAT_TEST_BROWSER_URL` and owns browser contexts; the live app runner is opt-in and separately provisioned. Its exact assertions remain unchanged, including known Qwen semantic failures; do not blanket-ignore them. Browser source is only presentation, never a substitute for SQL/workflow evidence.
 
 CI runs pinned tools, Go build/vet/race(-p1), lifecycle tests, frozen frontend install/test/typecheck/build, and the **full** real isolated web integration set. Task13's broad gate exposed four inherited failures, reproduced on base `a21098e`: `TestAdmissionOutageRollsOverBeforeRestoration`, `TestDatabaseOutageDuringFinalPersistence`, `TestOverlappingChatModelAttemptsRealTemporal`, and `TestPersistenceExhaustionRecoversAdmittedInboxAndDispatcher`. Older event-count assertions encountered current `message.delta` rows. The four tests now validate every event's domain/scope: only legitimate bounded registered-attempt previews are provisional, and there must still be exactly one correct canonical completion/final assistant per settled turn (zero before persistence). Unknown/malformed events and premature/duplicate/missing completion remain failures, with 21 negative controls in the default Go suite; all pages are checked against SQL totals. No production behavior changed for this compatibility correction. The scoped four-test and subsequent **full** integration gates passed; original base/current RED logs remain in the Task13 report evidence. These failures were separate from the two Qwen qualification exceptions. CI does not download/qualify the local multi-GB MLX models; actual public lifecycle/browser acceptance is a separately recorded host gate.

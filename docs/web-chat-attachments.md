@@ -1,4 +1,4 @@
-# Durable attachments (Task8 foundation, current schema8)
+# Durable attachments (Task8 foundation, current schema9)
 
 Task10 adds [bounded context](web-chat-context.md) metadata without changing original-byte storage or attachment authorization. Up to four already-authorized persisted results can be retained independently of lossy summaries, with exact instruction/scope, source hashes and partial/error/truncation metadata. This neither reopens originals nor permits new analysis; immutable recorded output is not guaranteed factual truth.
 
@@ -16,7 +16,7 @@ API startup recovers owned incomplete uploads before accepting HTTP. Recovery ha
 - Returns201 `{"attachment":{"id","conversationId","name","mediaType","size","checksum","status":"ready"}}` (keys shown, not literal JSON values). No original bytes, extracted text or storage paths in the response. Upload is **not** consent. Upload retries without a returned ID may create a separate object; upload itself has no request-ID/exactly-once claim.
 - `GET /conversations/{id}/attachments/{attachmentId}` returns the original exact bytes only after scoped ready lookup and checksum/size verification. All originals, **including SVG and raster images**, use attachment disposition and `X-Content-Type-Options: nosniff`; Task8 exposes no inline-preview route.
 - Wrong/missing conversation404; >1MiB413 `file_exceeds_1048576_bytes`; signature/format/parseability rejection422 `invalid_signature_or_unreadable_file`; missing helper/store/infrastructure503. Multipart/header errors400/415. No internal parser diagnostics in HTTP errors.
-- Multiple uploads may exist independently. Admission of message/replacement permits at most **four distinct owned ready IDs**, atomically enforced by existing command validation/message joins. Staged/foreign IDs never admit. Attachment-only messages now execute.
+- Multiple uploads may exist independently. Admission of message/replacement permits at most **one owned ready ID**, atomically enforced by existing command validation/message joins. Staged/foreign IDs never admit. Attachment-only messages now execute.
 
 ## Filesystem protocol and recovery
 

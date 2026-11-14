@@ -50,7 +50,6 @@ func TestBoundedUnicodeRenderedAdmission(t *testing.T) {
 	require.Greater(t, cost, 12000)
 	r.Model = "gemma4:e4b"
 	r.Messages[0].Content = "start" + strings.Repeat(" ", 5000) + "end"
-	cost, err = TextInputBound(r)
-	require.NoError(t, err)
-	require.Greater(t, cost, 12000)
+	_, err = TextInputBound(r)
+	require.Error(t, err, "disabled model must not reach bounded inference")
 }

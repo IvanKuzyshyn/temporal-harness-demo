@@ -134,7 +134,7 @@ func TestDocumentPDFDOCXChildHelperSQL(t *testing.T) {
 			s, e := attachments.NewStore(t.TempDir(), f.repo, nil)
 			require.NoError(t, e)
 			defer s.Close()
-			c := f.conversation(t, "gemma4:e4b")
+			c := f.conversation(t, "qwen3.5:9b")
 			file, e := s.Put(f.ctx, c.ID, bytes.NewReader(v.data), attachments.UploadMetadata{Name: v.name, MediaType: v.media})
 			require.NoError(t, e)
 			m := &documentModel{}

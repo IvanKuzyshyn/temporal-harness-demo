@@ -38,7 +38,22 @@ func ValidID(s string) bool {
 	u, e := uuid.Parse(s)
 	return e == nil && u != uuid.Nil && u.String() == s
 }
-func ValidModel(s string) bool { return s == "qwen3.5:9b" || s == "gemma4:e4b" }
+
+// EnabledModels returns a fresh catalog so callers cannot mutate admission.
+// Provider routing remains model-driven; adding a model requires explicit
+// qualification, profile/pin and database admission changes.
+func EnabledModels() []string { return []string{"qwen3.5:9b"} }
+func ValidModel(s string) bool {
+	for _, model := range EnabledModels() {
+		if s == model {
+			return true
+		}
+	}
+	return false
+}
+
+const MaxAttachments = 1
+
 func ValidHash(s string) bool {
 	b, e := hex.DecodeString(s)
 	return e == nil && len(b) == 32 && strings.ToLower(s) == s
@@ -77,7 +92,7 @@ func (in CommandInput) Digest() (string, error) {
 	p := in.Payload
 	hasMessage := p.Text != "" || len(p.AttachmentIDs) > 0
 	hasDecision := p.ApprovalID != "" || p.ActionHash != "" || p.Decision != ""
-	if len(p.AttachmentIDs) > 4 {
+	if len(p.AttachmentIDs) > MaxAttachments {
 		return "", ErrInvalid
 	}
 	seen := map[AttachmentID]bool{}

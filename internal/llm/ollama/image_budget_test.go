@@ -10,7 +10,7 @@ import (
 )
 
 func TestNarrowImageNearBudgetAdmission(t *testing.T) {
-	for _, model := range []string{"qwen3.5:9b", "gemma4:e4b"} {
+	for _, model := range []string{"qwen3.5:9b"} {
 		t.Run(model, func(t *testing.T) {
 			req := profileRequest(model)
 			lo, hi := 1, 4096

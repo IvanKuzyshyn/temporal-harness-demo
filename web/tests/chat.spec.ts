@@ -8,7 +8,7 @@ const turn = "33333333-3333-4333-8333-333333333333";
 const conversation = {
   id,
   title: "Durable interaction fixture",
-  model: "gemma4:e4b" as const,
+  model: "qwen3.5:9b" as const,
   workflowId: "web-chat/" + id,
   lifecycle: "open" as const,
   policyRevision: 0,
@@ -59,6 +59,9 @@ function snapshot(): Snapshot {
 async function fixture(page: Page) {
   let s = snapshot();
   const posts: { path: string; body: Record<string, unknown> }[] = [];
+  let uploads = 0;
+  const requests: string[] = [];
+  const labels = new Map([[file, { name: "text.png", uploadNumber: 1 }]]);
   const png = Buffer.from(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j0WQAAAAASUVORK5CYII=",
     "base64",
@@ -66,12 +69,31 @@ async function fixture(page: Page) {
   await page.route("**/api/**", async (route) => {
     const req = route.request(),
       path = new URL(req.url()).pathname;
+    requests.push(path);
+    const metadata = path.match(/\/attachments\/([^/]+)\/metadata$/);
+    if (metadata) {
+      const label = labels.get(metadata[1]);
+      return route.fulfill(
+        label
+          ? {
+              json: {
+                attachment: {
+                  id: metadata[1],
+                  conversationId: id,
+                  ...label,
+                },
+              },
+            }
+          : { status: 404, json: { error: { code: "not_found" } } },
+      );
+    }
     if (path.endsWith("/events"))
       return route.fulfill({
         contentType: "text/event-stream",
         body: `id: 1\ndata: ${JSON.stringify({ id: "1", conversationId: id, turnId: null, stepId: null, attempt: null, type: "snapshot", data: s })}\n\n`,
       });
-    if (path.endsWith("/attachments") && req.method() === "POST")
+    if (path.endsWith("/attachments") && req.method() === "POST") {
+      uploads++;
       return route.fulfill({
         status: 201,
         json: {
@@ -86,6 +108,7 @@ async function fixture(page: Page) {
           },
         },
       });
+    }
     if (path.endsWith("/attachments/" + file))
       return route.fulfill({
         contentType: "image/png",
@@ -121,12 +144,19 @@ async function fixture(page: Page) {
     return route.fulfill({ json: s.metadata });
   });
   await page.goto(`/chat/${id}`);
-  await expect(page.getByRole("textbox", { name: "Message" })).toBeVisible();
+  await expect(
+    page.getByRole("textbox", { name: "Message" }),
+  ).toBeVisible();
   await expect(
     page.getByRole("region", { name: "Approval needed" }),
   ).toBeVisible();
   return {
     posts,
+    requests,
+    labels,
+    get uploads() {
+      return uploads;
+    },
     get state() {
       return s;
     },
@@ -138,9 +168,124 @@ async function fixture(page: Page) {
     },
   };
 }
+test("completed answer retains turn-associated failed-tool warning after reload", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  f.state.metadata.pendingApproval = null;
+  f.state.metadata.activeTurn = null;
+  f.state.turns = [{ id: turn, status: "completed", reason: "" }];
+  f.state.messages = [
+    {
+      entryId: "answer",
+      conversationId: id,
+      turnId: turn,
+      role: "assistant",
+      text: "A general answer",
+      attachmentIds: [],
+      logicalStep: 1,
+      resultKind: "response",
+      completionState: "completed",
+      context: null,
+      sequence: 1,
+      createdAt: "",
+    },
+    {
+      entryId: "other",
+      conversationId: id,
+      turnId: "other-turn",
+      role: "assistant",
+      text: "Unrelated answer",
+      attachmentIds: [],
+      logicalStep: 1,
+      resultKind: "response",
+      completionState: "completed",
+      context: null,
+      sequence: 2,
+      createdAt: "",
+    },
+  ];
+  f.state.tools = [
+    {
+      id: "private-tool",
+      turnId: turn,
+      name: "web_fetch",
+      status: "failed",
+      result: { error: "private-error" },
+      sources: [],
+    },
+  ];
+  await f.refresh(f.state);
+  const failed = page.locator('[data-message-id="answer"]');
+  await expect(failed).toContainText("A web page could not be read.");
+  await page.reload();
+  await expect(failed).toContainText("A web page could not be read.");
+  await expect(page.locator('[data-message-id="other"]')).not.toContainText(
+    "could not",
+  );
+  await expect(page.locator("details")).toHaveCount(0);
+  await expect(page.locator("body")).not.toContainText("private-error");
+});
+
+test("older duplicate-name attachment stays identifiable on narrow reload without reading originals", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  const newer = "44444444-4444-4444-8444-444444444444";
+  // Long duplicate names exercise wrapping rather than relying on desktop width.
+  const name = "report_" + "budget".repeat(15) + ".txt";
+  f.labels.set(file, { name, uploadNumber: 1 });
+  f.labels.set(newer, { name, uploadNumber: 2 });
+  f.state.messages = [file, newer].map((a, index) => ({
+    entryId: "message-" + index,
+    conversationId: id,
+    turnId: "turn-" + index,
+    role: "user",
+    text: index ? "Revised budget" : "Original budget",
+    attachmentIds: [a],
+    logicalStep: 0,
+    resultKind: "input",
+    completionState: "completed",
+    context: null,
+    sequence: index + 1,
+    createdAt: "",
+  }));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  const consent = page.getByRole("region", { name: "Approval needed" });
+  await expect(consent).toContainText(name + " · Upload 1");
+  await expect(consent).not.toContainText("Upload 2");
+  await expect(page.locator('[data-message-id="message-1"]')).toContainText(
+    name + " · Upload 2",
+  );
+  await expect(consent.locator(".attachment-identity")).toBeInViewport();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  expect(
+    f.requests.filter((p) => /\/attachments\/[^/]+$/.test(p)),
+  ).toHaveLength(0);
+  await expect(page.locator("img,iframe,object")).toHaveCount(0);
+  await page.reload();
+  await expect(consent).toContainText(name + " · Upload 1");
+  f.labels.delete(file);
+  await page.reload();
+  await expect(consent).toContainText(
+    "Cannot identify the requested attachment",
+  );
+  await expect(
+    consent.getByRole("button", { name: "Approve once", exact: true }),
+  ).toBeDisabled();
+  await expect(consent.getByRole("button", { name: "Deny" })).toBeEnabled();
+});
+
 test("approvalOnceAndAll", async ({ page }) => {
   const f = await fixture(page);
-  await page.getByRole("button", { name: "Approve once", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Approve once", exact: true })
+    .click();
   await expect.poll(() => f.posts.length).toBe(1);
   expect(f.posts[0].body).toMatchObject({
     actionHash: "a".repeat(64),
@@ -167,7 +312,9 @@ test("approvalOnceAndAll", async ({ page }) => {
   f.state.metadata.pendingApproval = null;
   f.state.metadata.policy.approvalAll = true;
   await f.refresh(f.state);
-  await expect(page.getByText("Conversation approval enabled")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Revoke approval" }),
+  ).toBeVisible();
 });
 test("approvalRevokeAfterReload", async ({ page }) => {
   const f = await fixture(page);
@@ -176,11 +323,15 @@ test("approvalRevokeAfterReload", async ({ page }) => {
   await page.getByRole("button", { name: "Revoke approval" }).click();
   await expect.poll(() => f.posts.length).toBe(1);
   expect(f.posts[0].path).toMatch(/approval-policy\/revoke$/);
-  await expect(page.getByText("Conversation approval enabled")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Revoke approval" }),
+  ).toBeVisible();
   f.state.commands[0] = { ...f.state.commands[0], resultState: "accepted" };
   f.state.metadata.policy.approvalAll = false;
   await f.refresh(f.state);
-  await expect(page.getByText("Conversation approval enabled")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Revoke approval" }),
+  ).toHaveCount(0);
 });
 test("replaceDoesNotCancelNewerTurn", async ({ page }) => {
   const f = await fixture(page);
@@ -199,7 +350,11 @@ test("replaceDoesNotCancelNewerTurn", async ({ page }) => {
     result: { code: "stale_target" },
   };
   await f.refresh(f.state);
-  await expect(page.getByText("Command rejected: stale_target")).toBeVisible();
+  await expect(
+    page.getByText(
+      "An action could not be completed. Refresh and try again.",
+    ),
+  ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Stop current turn" }),
   ).toBeEnabled();
@@ -210,15 +365,21 @@ test("uploadAndTranslateImage", async ({ page }) => {
   await page.getByLabel("Attach files").setInputFiles({
     name: "text.png",
     mimeType: "image/png",
-    buffer: Buffer.from("test fixture; server validation separately tested"),
+    buffer: Buffer.from(
+      "test fixture; server validation separately tested",
+    ),
   });
   await page.getByRole("button", { name: "Preview raster" }).click();
   const image = page.getByRole("img", { name: "Preview of text.png" });
   await expect(image).toBeVisible();
   await expect
-    .poll(() => image.evaluate((el) => (el as HTMLImageElement).naturalWidth))
+    .poll(() =>
+      image.evaluate((el) => (el as HTMLImageElement).naturalWidth),
+    )
     .toBe(1);
-  await page.getByRole("textbox").fill("Translate visible text into English.");
+  await page
+    .getByRole("textbox")
+    .fill("Translate visible text into English.");
   await page.getByRole("button", { name: "Send message" }).click();
   await expect.poll(() => f.posts.length).toBe(1);
   expect(f.posts[0].body.attachmentIds).toEqual([file]);
@@ -245,7 +406,9 @@ test("reopenAttachmentFollowUp", async ({ page }) => {
   ];
   await page.evaluate(() => localStorage.clear());
   await page.reload();
-  await page.getByRole("button", { name: "Attach again " + file }).click();
+  await page
+    .getByRole("button", { name: "Attach again text.png · Upload 1" })
+    .click();
   await page.getByRole("textbox").fill("Describe that image.");
   await page.getByRole("button", { name: "Send message" }).click();
   await expect.poll(() => f.posts.length).toBe(1);
@@ -259,14 +422,17 @@ test("queuedMessageVisible", async ({ page }) => {
   await expect.poll(() => f.posts.length).toBe(1);
   f.state.turns = [{ id: "follow-up", status: "queued", reason: "" }];
   await f.refresh(f.state);
-  await expect(page.getByText("1 queued message")).toBeVisible();
+  await expect(page.getByText("Follow-up queued")).toBeVisible();
   expect(f.posts[0].path).toMatch(/messages$/);
 });
 test("switchChatRetainsDraft", async ({ page }) => {
   await fixture(page);
   await page.getByRole("textbox").fill("Unsent draft");
   await page.getByRole("link", { name: "New chat", exact: true }).click();
-  await page.getByRole("link", { name: /Durable interaction fixture/ }).click();
+  await page.getByRole("button", { name: "Toggle sidebar" }).click();
+  await page
+    .getByRole("link", { name: /Durable interaction fixture/ })
+    .click();
   await expect(page.getByRole("textbox")).toHaveValue("Unsent draft");
 });
 test("pendingApprovalAlwaysVisible and keyboard/narrow layout", async ({
@@ -283,7 +449,12 @@ test("pendingApprovalAlwaysVisible and keyboard/narrow layout", async ({
     result: { code: "stale_target" },
   }));
   await f.refresh(f.state);
-  await expect(page.getByText("Command rejected: stale_target")).toHaveCount(4);
+  await expect(
+    page.getByText(
+      "An action could not be completed. Refresh and try again.",
+    ),
+  ).toHaveCount(1);
+  await expect(page.locator("details")).toHaveCount(0);
   await expect(
     page.getByRole("region", { name: "Approval needed" }),
   ).toBeVisible();
@@ -298,14 +469,18 @@ test("pendingApprovalAlwaysVisible and keyboard/narrow layout", async ({
     "Deny",
   ]) {
     expect(
-      await page.getByRole("button", { name, exact: true }).evaluate((el) => {
-        const button = el.getBoundingClientRect(),
-          panel = el.closest(".interaction-panel")!.getBoundingClientRect();
-        return button.top >= panel.top && button.bottom <= panel.bottom;
-      }),
+      await page
+        .getByRole("button", { name, exact: true })
+        .evaluate((el) => {
+          const button = el.getBoundingClientRect(),
+            panel = el.closest(".approval-card")!.getBoundingClientRect();
+          return button.top >= panel.top && button.bottom <= panel.bottom;
+        }),
     ).toBe(true);
   }
-  await page.getByRole("button", { name: "Approve once", exact: true }).focus();
+  await page
+    .getByRole("button", { name: "Approve once", exact: true })
+    .focus();
   await expect(
     page.getByRole("button", { name: "Approve once", exact: true }),
   ).toBeFocused();
@@ -318,4 +493,110 @@ test("pendingApprovalAlwaysVisible and keyboard/narrow layout", async ({
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBe(true);
+});
+
+test("mobile sidebar Escape restores focus to the visible opener", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await fixture(page);
+  await page.getByRole("button", { name: "Toggle sidebar" }).click();
+  await expect(
+    page.getByRole("button", { name: "Close sidebar", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(
+    page.getByRole("button", { name: "Toggle sidebar" }),
+  ).toBeFocused();
+});
+
+test("single attachment: multi-drop, second selection and reload cannot discard or upload extras", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  expect(
+    await page.getByLabel("Attach files").getAttribute("multiple"),
+  ).toBeNull();
+  await page.evaluate(() => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(["a"], "a.txt", { type: "text/plain" }));
+    transfer.items.add(new File(["b"], "b.txt", { type: "text/plain" }));
+    document
+      .querySelector(".attachment-picker")!
+      .dispatchEvent(
+        new DragEvent("drop", { bubbles: true, dataTransfer: transfer }),
+      );
+  });
+  await expect(
+    page.getByRole("region", { name: "Attachments" }).getByRole("alert"),
+  ).toContainText("one attachment per message");
+  expect(f.uploads).toBe(0);
+  await page.getByLabel("Attach files").setInputFiles({
+    name: "text.png",
+    mimeType: "image/png",
+    buffer: Buffer.from("fixture"),
+  });
+  await expect(
+    page.getByRole("button", { name: "Remove text.png" }),
+  ).toBeVisible();
+  await page.getByLabel("Attach files").setInputFiles({
+    name: "second.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("fixture"),
+  });
+  await expect(
+    page.getByRole("region", { name: "Attachments" }).getByRole("alert"),
+  ).toContainText("one attachment per message");
+  expect(f.uploads).toBe(1);
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "Remove text.png" }),
+  ).toBeVisible();
+  await page.getByRole("textbox").fill("Keep this attachment");
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect.poll(() => f.posts.length).toBe(1);
+  expect(f.posts[0].body.attachmentIds).toEqual([file]);
+});
+
+test("legacy multi-file pending draft requires explicit edit and removal before replacement", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  await page.evaluate(
+    ({ id, file }) => {
+      localStorage.setItem(
+        "chat.attachments." + id,
+        JSON.stringify([
+          { id: file, name: "one.txt" },
+          { id: "second", name: "two.txt" },
+        ]),
+      );
+      localStorage.setItem(
+        "chat.draft." + id,
+        JSON.stringify("Retained draft"),
+      );
+      localStorage.setItem(
+        "chat.pending." + id,
+        JSON.stringify({
+          requestId: "old",
+          text: "Retained draft",
+          attachmentIds: [file, "second"],
+        }),
+      );
+    },
+    { id, file },
+  );
+  await page.reload();
+  await expect(page.getByText(/one attachment per message/)).toBeVisible();
+  await page
+    .getByRole("button", { name: "Retry saved submission" })
+    .click();
+  expect(f.posts).toHaveLength(0);
+  await page.getByRole("button", { name: "Edit saved submission" }).click();
+  await page.getByRole("button", { name: "Remove two.txt" }).click();
+  await expect(page.getByRole("textbox")).toHaveValue("Retained draft");
+  await page.getByRole("button", { name: "Replace current turn" }).click();
+  await expect.poll(() => f.posts.length).toBe(1);
+  expect(f.posts[0].body.attachmentIds).toEqual([file]);
+  expect(f.posts[0].body.expectedActiveTurnId).toBe(turn);
 });

@@ -4,6 +4,8 @@ import type { SelectedAttachment } from "../lib/contracts";
 import { saved } from "../lib/api";
 import {
   attachmentTypes,
+  MAX_ATTACHMENTS,
+  singleAttachmentError,
   idleBatch,
   uploadBatch,
   uploadErrors,
@@ -53,11 +55,15 @@ export function AttachmentPicker({
     };
   }, [id]);
   async function add(files: File[]) {
-    if (disabled || uploadBatch(id).active || !files.length) return;
-    if (files.length + current.current.selected.length > 4) {
+    if (disabled || !files.length) return;
+    if (uploadBatch(id).active) {
       setError(
-        "At most four attachments per message. Remove a selection before adding more.",
+        "An upload is already in progress. Wait before choosing another file.",
       );
+      return;
+    }
+    if (files.length + current.current.selected.length > MAX_ATTACHMENTS) {
+      setError(singleAttachmentError);
       return;
     }
     const invalid = files.find(
@@ -99,20 +105,22 @@ export function AttachmentPicker({
     >
       <div className="attachment-toolbar">
         <label className="attach-button">
-          {busy ? "Uploading…" : "+ Attach files"}
+          <span aria-hidden="true">{busy ? "…" : "＋"}</span>
+          <span className="sr-only">Attach a file</span>
           <input
             type="file"
             aria-label="Attach files"
             accept={accept}
-            multiple
-            disabled={disabled || busy || selected.length >= 4}
+            disabled={disabled || busy}
             onChange={(e) => {
               void add(Array.from(e.target.files ?? []));
               e.target.value = "";
             }}
           />
         </label>
-        <span>Drop files here · 1 MiB each · up to 4</span>
+        <span className="sr-only">
+          One file, up to 1 MiB. TXT, Markdown, PDF, DOCX, PNG, JPEG or SVG.
+        </span>
       </div>
       {selected.length > 0 && (
         <ul className="attachment-list">
@@ -132,21 +140,10 @@ export function AttachmentPicker({
           ))}
         </ul>
       )}
-      {busy && (
-        <p role="status">
-          Uploading and validating files ({batch.remaining.length} remaining).
-          Wait before sending.
-        </p>
-      )}
+      {busy && <p role="status">Uploading… Wait before sending.</p>}
       {(error || batch.errors.length > 0) && (
         <p role="alert" className="warning">
           {[error, ...batch.errors].filter(Boolean).join(" ")}
-        </p>
-      )}
-      {selected.length > 0 && (
-        <p className="scope-line">
-          Ready IDs only. Model access still requires approval. Removing a
-          selection does not delete originals.
         </p>
       )}
     </section>
@@ -174,7 +171,7 @@ function RasterPreview({
     };
   }, []);
   if (!["image/png", "image/jpeg"].includes(attachment.mediaType ?? ""))
-    return <small>Metadata only · no inline preview</small>;
+    return null;
   async function preview() {
     setBusy(true);
     try {
@@ -220,29 +217,5 @@ function RasterPreview({
       )}
       {error && <small role="status">{error}</small>}
     </>
-  );
-}
-export function ImageLimits() {
-  return (
-    <details className="image-limits">
-      <summary>Supported files & image limits</summary>
-      <p>
-        TXT/Markdown, embedded-text PDF, DOCX, PNG, JPEG and constrained static
-        SVG. Images: at most 20 megapixels and 8192 pixels per dimension. SVG
-        has no scripts, fonts, text, external resources or browser preview.
-      </p>
-      <p>
-        Image analysis uses one 640×160 normalized raster per action;
-        downsampling may lose detail. Use a printable ASCII instruction (up to
-        4096 bytes, also subject to context budget); [img- and &lt;| sequences
-        are unsupported. Instructions are never silently rewritten.
-      </p>
-      <p>
-        Only the pinned Ollama 0.40.15 / MLX runtime and exact model digests are
-        admitted. A mismatch requires restoring that runtime or requalification,
-        not fallback. Arbitrary image quality is not qualified; known
-        larger-image Qwen failures remain. No OCR or model fallback.
-      </p>
-    </details>
   );
 }
