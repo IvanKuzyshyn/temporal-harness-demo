@@ -81,7 +81,7 @@ func TestContinueAsNewCommandDedup(t *testing.T) {
 	e.ExecuteWorkflow(w.WebChatSessionWorkflow, w.WebSessionInput{ConversationID: c, Model: "qwen3.5:9b", Carry: &w.WebSessionState{LastMessageSequence: 101, Completed: 100}})
 	require.Zero(t, calls)
 }
-func TestWebUnsupportedControlsRejected(t *testing.T) {
+func TestWebRevokeAcceptedWithoutPendingApproval(t *testing.T) {
 	e, c := setupWeb(t)
 	cmd := webCommand(c, 1)
 	cmd.Kind = chat.CommandRevoke
@@ -91,7 +91,7 @@ func TestWebUnsupportedControlsRejected(t *testing.T) {
 	e.RegisterDelayedCallback(func() {
 		e.UpdateWorkflow("revoke", string(cmd.CommandID), &testsuite.TestUpdateCallback{OnComplete: func(v any, err error) {
 			require.NoError(t, err)
-			require.Equal(t, chat.AdmissionResult{State: "rejected", Code: "invalid_command"}, v)
+			require.Equal(t, chat.AdmissionResult{State: "accepted", PolicyRevision: 1}, v)
 		}, OnReject: func(err error) { t.Error(err) }}, cmd)
 	}, 0)
 	e.RegisterDelayedCallback(func() { e.CancelWorkflow() }, time.Minute)

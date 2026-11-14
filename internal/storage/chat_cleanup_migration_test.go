@@ -41,6 +41,10 @@ func TestMigrationChatCleanupUpgrade(t *testing.T) {
 	require.EqualValues(t, 1, pending, "old failed status is not proof of cleanup")
 	require.ErrorIs(t, r.PersistTurnResult(ctx, chat.TurnResult{TurnRef: ref, Status: "cancelled"}), storage.ErrChatCleanupUnconfirmed)
 	// Verify downgrade compatibility and re-upgrade without inventing evidence.
+	newer, err := app.Files.ReadFile("000005_web_approvals.down.sql")
+	require.NoError(t, err)
+	_, err = p.Exec(ctx, string(newer))
+	require.NoError(t, err)
 	down, err := app.Files.ReadFile("000004_chat_cleanup.down.sql")
 	require.NoError(t, err)
 	_, err = p.Exec(ctx, string(down))

@@ -1,4 +1,7 @@
-# Private web-chat API (Tasks 3–5)
+# Private web-chat API (Tasks 3–6)
+
+Task6 approval/step/cancellation semantics and adapter handoff are specified in
+[recorded approvals](web-chat-approvals.md).
 
 This is the **Next.js server-to-Go contract**, without an `/api` prefix. The
 browser talks only to Next.js; Next.js adds `/api` to its public route names.
@@ -26,7 +29,7 @@ Export configuration explicitly (the binary does not automatically source `.env`
   passwords; edit credentials deliberately rather than reinitializing volumes.
 
 `bin/web-api -migrate` applies embedded migrations and exits. `bin/web-api` requires
-schema version 4 and serves HTTP. Effective pgx user/database/startup parameters
+schema version 5 and serves HTTP. Effective pgx user/database/startup parameters
 are validated before connecting, including query/environment/service overrides;
 only the validated config is used. Application identity must be `webchat`, never
 Temporal's database/role. Runtime connection hosts and fallback hosts must be
@@ -160,16 +163,16 @@ runs. Later retry cancellation/success cannot bypass this durable barrier. Ordin
 completion/failure without an accepted control retains retry-safe hard-worker-loss
 recovery: missing cleanup acknowledgments do not block canonical settlement or
 normal follow-ups, and are not falsely marked confirmed. See the runtime document for
-completion linearization, recovery and operator limits. Approvals/revocation and
-new attachment-bearing messages/replacements still reject `invalid_command`.
+completion linearization, recovery and operator limits. Task6 implements approval/revocation Updates. New attachment-bearing
+messages/replacements still reject `invalid_command` until the attachment tasks.
 
 Metadata is a repeatable-read Postgres projection. `observedAt` is an API read
 observation, **not a workflow confirmation**. `authoritative:false` and
 `workflowConfirmedAt:null` are deliberate. `activeTurn` and `pendingApproval` may
-lag or be null; they never authorize controls/content. Approval policy revision
-is available, but Task 2 did not persist the effective approve-all flag, so
-`approvalAll:"unknown"` remains honest until Task 4 adds an authoritative policy
-projection. Do not infer the flag from the revision. Command lookup reads the
+lag or be null; they never authorize controls/content. Policy now includes a boolean `approvalAll`, persisted set version and revision.
+The flag is true only when the saved grant matches the current registered set.
+Pending approval includes canonical arguments/tool name/content reference for
+consent display. These remain projections, never authorization. Command lookup reads the
 latest committed admission receipt, not live execution status.
 
 ## JSON schemas
@@ -201,13 +204,13 @@ message content, digest equality, freshness) are enforced/described above.
     "Created":{"type":"object","additionalProperties":false,"required":["conversation","payloadDigest"],"properties":{"conversation":{"$ref":"#/$defs/Conversation"},"payloadDigest":{"$ref":"#/$defs/Digest"}}},
     "ConversationPage":{"type":"object","additionalProperties":false,"required":["conversations","cursor"],"properties":{"conversations":{"type":"array","maxItems":200,"items":{"$ref":"#/$defs/Conversation"}},"cursor":{"type":"string"}}},
     "Receipt":{"type":"object","additionalProperties":false,"required":["commandId","turnId","payloadDigest","dispatchState","resultState","result"],"properties":{"commandId":{"$ref":"#/$defs/ID"},"turnId":{"$ref":"#/$defs/NullableID"},"payloadDigest":{"$ref":"#/$defs/Digest"},"dispatchState":{"enum":["pending","dispatched"]},"resultState":{"enum":["pending","accepted","rejected"]},"result":{"type":["object","null"],"description":"Immutable gateway projection; new dispatcher writes GatewayResult. Existing storage projections may have other JSON object fields."}}},
-    "GatewayResult":{"type":"object","additionalProperties":false,"required":["state"],"properties":{"state":{"enum":["pending","accepted","rejected"]},"code":{"enum":["stale_target","invalid_approval","approval_expired","conversation_closed","policy_conflict","control_conflict","invalid_command"]},"targetTurnId":{"$ref":"#/$defs/ID"},"replacementTurnId":{"$ref":"#/$defs/ID"}},"if":{"properties":{"state":{"const":"rejected"}}},"then":{"required":["code"]}},
+    "GatewayResult":{"type":"object","additionalProperties":false,"required":["state"],"properties":{"policyRevision":{"type":"integer","minimum":0},"grantedToolset":{"type":"string","maxLength":128},"state":{"enum":["pending","accepted","rejected"]},"code":{"enum":["stale_target","invalid_approval","approval_expired","conversation_closed","policy_conflict","control_conflict","invalid_command"]},"targetTurnId":{"$ref":"#/$defs/ID"},"replacementTurnId":{"$ref":"#/$defs/ID"}},"if":{"properties":{"state":{"const":"rejected"}}},"then":{"required":["code"]}},
     "Message":{"type":"object","additionalProperties":false,"required":["entryId","conversationId","turnId","role","text","attachmentIds","logicalStep","resultKind","completionState","sequence","createdAt"],"properties":{"entryId":{"$ref":"#/$defs/ID"},"conversationId":{"$ref":"#/$defs/ID"},"turnId":{"$ref":"#/$defs/ID"},"role":{"enum":["user","assistant"]},"text":{"type":"string"},"attachmentIds":{"$ref":"#/$defs/Attachments"},"logicalStep":{"type":"integer","minimum":0},"resultKind":{"type":"string","minLength":1},"completionState":{"enum":["completed","incomplete"]},"sequence":{"type":"integer","minimum":1},"createdAt":{"$ref":"#/$defs/Time"}}},
     "MessagePage":{"type":"object","additionalProperties":false,"required":["messages","before"],"properties":{"messages":{"type":"array","maxItems":200,"items":{"$ref":"#/$defs/Message"}},"before":{"type":"string"}}},
     "ActiveTurn":{"type":"object","additionalProperties":false,"required":["id","status","updatedAt"],"properties":{"id":{"$ref":"#/$defs/ID"},"status":{"enum":["running","awaiting_approval","cancelling"]},"updatedAt":{"$ref":"#/$defs/Time"}}},
-    "PendingApproval":{"type":"object","additionalProperties":false,"required":["id","toolCallId","actionHash","deadline","policyRevision"],"properties":{"id":{"$ref":"#/$defs/ID"},"toolCallId":{"$ref":"#/$defs/ID"},"actionHash":{"$ref":"#/$defs/Digest"},"deadline":{"$ref":"#/$defs/Time"},"policyRevision":{"type":"integer","minimum":0}}},
+    "PendingApproval":{"type":"object","additionalProperties":false,"required":["id","toolCallId","actionHash","deadline","policyRevision","toolName","arguments","contentRef","toolsetVersion"],"properties":{"toolName":{"enum":["web_fetch","file_upload"]},"arguments":{"type":"object"},"contentRef":{"type":"string"},"toolsetVersion":{"type":"string","maxLength":128},"id":{"$ref":"#/$defs/ID"},"toolCallId":{"$ref":"#/$defs/ID"},"actionHash":{"$ref":"#/$defs/Digest"},"deadline":{"$ref":"#/$defs/Time"},"policyRevision":{"type":"integer","minimum":0}}},
     "Freshness":{"type":"object","additionalProperties":false,"required":["source","authoritative","observedAt","workflowConfirmedAt"],"properties":{"source":{"const":"postgres_projection"},"authoritative":{"const":false},"observedAt":{"$ref":"#/$defs/Time"},"workflowConfirmedAt":{"type":"null"}}},
-    "Metadata":{"type":"object","additionalProperties":false,"required":["conversation","activeTurn","pendingApproval","policy","freshness","dispatcherConnected"],"properties":{"conversation":{"$ref":"#/$defs/Conversation"},"activeTurn":{"anyOf":[{"$ref":"#/$defs/ActiveTurn"},{"type":"null"}]},"pendingApproval":{"anyOf":[{"$ref":"#/$defs/PendingApproval"},{"type":"null"}]},"policy":{"type":"object","additionalProperties":false,"required":["revision","approvalAll"],"properties":{"revision":{"type":"integer","minimum":0},"approvalAll":{"const":"unknown"}}},"freshness":{"$ref":"#/$defs/Freshness"},"dispatcherConnected":{"type":"boolean"}}},
+    "Metadata":{"type":"object","additionalProperties":false,"required":["conversation","activeTurn","pendingApproval","policy","freshness","dispatcherConnected"],"properties":{"conversation":{"$ref":"#/$defs/Conversation"},"activeTurn":{"anyOf":[{"$ref":"#/$defs/ActiveTurn"},{"type":"null"}]},"pendingApproval":{"anyOf":[{"$ref":"#/$defs/PendingApproval"},{"type":"null"}]},"policy":{"type":"object","additionalProperties":false,"required":["revision","approvalAll","toolsetVersion"],"properties":{"revision":{"type":"integer","minimum":0},"approvalAll":{"type":"boolean"},"toolsetVersion":{"type":"string","maxLength":128}}},"freshness":{"$ref":"#/$defs/Freshness"},"dispatcherConnected":{"type":"boolean"}}},
     "Models":{"type":"object","additionalProperties":false,"required":["models"],"properties":{"models":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"object","additionalProperties":false,"required":["id","default","availability","capabilities"],"properties":{"id":{"$ref":"#/$defs/Model"},"default":{"type":"boolean"},"availability":{"const":"unknown"},"capabilities":{"type":"object","additionalProperties":false,"required":["text","tools","images","imageAdmissionQualified"],"properties":{"text":{"const":"unverified"},"tools":{"const":"unverified"},"images":{"const":"unverified"},"imageAdmissionQualified":{"const":false}}}}}}}},
     "Health":{"type":"object","additionalProperties":false,"required":["alive","storageReady","acceptingCommands","dispatcher","workersPolling","reconciliationReady"],"properties":{"alive":{"const":true},"storageReady":{"type":"boolean"},"acceptingCommands":{"type":"boolean"},"dispatcher":{"enum":["unavailable","connected"]},"workersPolling":{"type":"boolean"},"reconciliationReady":{"type":"boolean"}}},
     "Error":{"type":"object","additionalProperties":false,"required":["error"],"properties":{"error":{"type":"object","additionalProperties":false,"required":["code"],"properties":{"code":{"enum":["forbidden","invalid_request","invalid_json","invalid_query","not_found","reference_not_found","conflict","body_too_large","prompt_too_large","unsupported_media_type","storage_unavailable","not_implemented","method_not_allowed"]}}}}},

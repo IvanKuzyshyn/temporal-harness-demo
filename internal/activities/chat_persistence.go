@@ -7,6 +7,7 @@ import (
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/chat"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/storage"
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/tools"
 	"go.temporal.io/sdk/temporal"
 )
 
@@ -31,6 +32,7 @@ type ChatRepository interface {
 type ChatActivities struct {
 	Repository ChatRepository
 	Model      llm.Model
+	WebTools   *tools.WebRegistry
 }
 
 func chatStorageError(err error) error {

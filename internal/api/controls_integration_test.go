@@ -36,7 +36,7 @@ func TestAllControlRoutesAndProjectionFreshness(t *testing.T) {
 	require.Equal(t, 200, w.Code)
 	require.Contains(t, w.Body.String(), `"authoritative":false`)
 	require.Contains(t, w.Body.String(), approvalID)
-	require.Contains(t, w.Body.String(), `"approvalAll":"unknown"`)
+	require.Contains(t, w.Body.String(), `"approvalAll":false`)
 	for _, tc := range []struct{ path, fields, kind string }{
 		{"/replace", fmt.Sprintf(`,"expectedActiveTurnId":%q,"text":"corrected"`, a.TurnID), "replace"},
 		{"/stop", fmt.Sprintf(`,"expectedActiveTurnId":%q`, a.TurnID), "stop"},

@@ -1,4 +1,10 @@
-# Web-chat application storage (Tasks 2–4)
+# Web-chat application storage (Tasks 2–6)
+
+Schema **5** adds step-aware immutable model candidates, recorded approval scope
+and outcomes, effective versioned policy, exact tool authorization/result ownership
+and a per-body tool cleanup ledger. See [recorded approvals](web-chat-approvals.md)
+for the current interfaces, migration constraints and Task7/8/9 handoff. Earlier
+text-only/cleanup contracts below remain the baseline except as extended there.
 
 This package persists application content and **intent**, not execution authority.
 Only Temporal can adjudicate active-turn freshness, replacement races, tool

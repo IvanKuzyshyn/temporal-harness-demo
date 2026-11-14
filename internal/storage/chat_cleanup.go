@@ -58,7 +58,7 @@ func (r *Repository) SealChatModelInvocations(ctx context.Context, ref chat.Turn
 		if tag.RowsAffected() != 1 {
 			return ErrConflict
 		}
-		return tx.QueryRow(ctx, `SELECT count(*) FROM chat_model_invocations WHERE conversation_id=$1 AND turn_id=$2 AND cleanup_confirmed_at IS NULL`, ref.ConversationID, ref.TurnID).Scan(&pending)
+		return tx.QueryRow(ctx, `SELECT (SELECT count(*) FROM chat_model_invocations WHERE conversation_id=$1 AND turn_id=$2 AND cleanup_confirmed_at IS NULL) + (SELECT count(*) FROM web_tool_invocations WHERE conversation_id=$1 AND turn_id=$2 AND cleanup_confirmed_at IS NULL)`, ref.ConversationID, ref.TurnID).Scan(&pending)
 	})
 	return
 }

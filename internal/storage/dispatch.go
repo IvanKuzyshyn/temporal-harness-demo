@@ -137,13 +137,18 @@ type TurnProjection struct {
 	UpdatedAt time.Time   `json:"updatedAt"`
 }
 type ApprovalProjection struct {
-	ID             string    `json:"id"`
-	ToolCallID     string    `json:"toolCallId"`
-	ActionHash     string    `json:"actionHash"`
-	Deadline       time.Time `json:"deadline"`
-	PolicyRevision int64     `json:"policyRevision"`
+	ToolName       string          `json:"toolName"`
+	Arguments      json.RawMessage `json:"arguments"`
+	ContentRef     string          `json:"contentRef"`
+	ToolsetVersion string          `json:"toolsetVersion"`
+	ID             string          `json:"id"`
+	ToolCallID     string          `json:"toolCallId"`
+	ActionHash     string          `json:"actionHash"`
+	Deadline       time.Time       `json:"deadline"`
+	PolicyRevision int64           `json:"policyRevision"`
 }
 type ConversationProjection struct {
+	ApprovalToolset string
 	Conversation    chat.Conversation
 	ActiveTurn      *TurnProjection
 	PendingApproval *ApprovalProjection
@@ -163,6 +168,9 @@ func (r *Repository) GetConversationProjection(ctx context.Context, id chat.Conv
 	if err != nil {
 		return out, err
 	}
+	if err = tx.QueryRow(ctx, `SELECT approval_toolset FROM conversations WHERE id=$1`, id).Scan(&out.ApprovalToolset); err != nil {
+		return out, err
+	}
 	var turn TurnProjection
 	err = tx.QueryRow(ctx, "SELECT id::text,status,updated_at FROM turns WHERE conversation_id=$1 AND status IN ('running','awaiting_approval','cancelling') ORDER BY created_at,id LIMIT 1", id).Scan(&turn.ID, &turn.Status, &turn.UpdatedAt)
 	if err == nil {
@@ -171,10 +179,10 @@ func (r *Repository) GetConversationProjection(ctx context.Context, id chat.Conv
 		return out, err
 	}
 	var a ApprovalProjection
-	err = tx.QueryRow(ctx, `SELECT a.id::text,a.tool_call_id::text,a.action_hash,a.deadline,a.policy_revision FROM approvals a
+	err = tx.QueryRow(ctx, `SELECT a.id::text,a.tool_call_id::text,a.action_hash,a.deadline,a.policy_revision,t.name,t.arguments,coalesce(a.scope->>'ContentRef',''),coalesce(a.scope->>'ToolsetVersion','') FROM approvals a
  JOIN tool_calls t ON t.id=a.tool_call_id JOIN turns u ON u.id=t.turn_id
- WHERE a.conversation_id=$1 AND a.decision IS NULL AND a.deadline>clock_timestamp()
- AND u.status='awaiting_approval' ORDER BY a.created_at,a.id LIMIT 1`, id).Scan(&a.ID, &a.ToolCallID, &a.ActionHash, &a.Deadline, &a.PolicyRevision)
+ WHERE a.conversation_id=$1 AND a.decision IS NULL AND a.outcome IS NULL AND a.deadline>clock_timestamp()
+ AND u.status='awaiting_approval' ORDER BY a.created_at,a.id LIMIT 1`, id).Scan(&a.ID, &a.ToolCallID, &a.ActionHash, &a.Deadline, &a.PolicyRevision, &a.ToolName, &a.Arguments, &a.ContentRef, &a.ToolsetVersion)
 	if err == nil {
 		out.PendingApproval = &a
 	} else if !errors.Is(err, pgx.ErrNoRows) {

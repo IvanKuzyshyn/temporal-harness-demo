@@ -7,6 +7,7 @@ import (
 
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/activities"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/workflows"
+	"go.temporal.io/sdk/activity"
 	tc "go.temporal.io/sdk/client"
 	tw "go.temporal.io/sdk/worker"
 	"google.golang.org/grpc"
@@ -51,8 +52,11 @@ func startWeb(ctx context.Context, address string, a *activities.ChatActivities,
 			w.RegisterActivity(a.MarkChatCancelling)
 			w.RegisterActivity(a.SealChatModelInvocations)
 			w.RegisterActivity(a.PersistTurnResult)
+			w.RegisterActivity(a.RecordWebApproval)
+			w.RegisterActivity(a.RecordWebAuthorization)
+			w.RegisterActivity(a.ExecuteWebTool)
 		} else {
-			w.RegisterActivity(a.ChatModel)
+			w.RegisterActivityWithOptions(a.ChatStep, activity.RegisterOptions{Name: workflows.WebModelActivity})
 		}
 		if err = ctx.Err(); err != nil {
 			return nil, err

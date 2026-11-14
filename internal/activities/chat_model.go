@@ -20,10 +20,9 @@ import (
 
 const chatSystemPrompt = "You are a helpful general chatbot. No tools or attachment access are available. History coverage is limited to recent completed text exchanges that fit; older exchanges are omitted, not summarized. Do not claim full conversation memory. Ask for missing context when needed."
 
-// Count UTF-8 BYTES as tokens (conservative byte-tokenizer upper bound), plus
-// 128 tokens per message for framing. All instructions are included. 12000 input
-// + 2000 output + 2384 reserve <= 16384. Never pass oversized text to truncation.
-func chatRequest(turn chat.Turn, recent []chat.Exchange) (llm.Request, error) {
+// Build mandatory current input without selecting history or budgeting against
+// a different path's prompt. Web requests also reserve schemas and tool groups.
+func mandatoryChatRequest(turn chat.Turn, prompt string) (llm.Request, error) {
 	req := llm.Request{Model: turn.Model, ContextWindow: 16384, MaxOutputTokens: 2000, MaxResponseBytes: 65536}
 	if !chat.ValidModel(turn.Model) || !utf8.ValidString(turn.Text) {
 		return req, &ollama.InvalidRequestError{Err: errors.New("invalid text model input")}
@@ -36,8 +35,22 @@ func chatRequest(turn chat.Turn, recent []chat.Exchange) (llm.Request, error) {
 			{Role: "system", Content: "The preceding user prompt is retained provenance of the cancelled target. The following user message corrects it. No cancelled assistant draft is completed context. Attachment bytes/content are not authorized and have not been read."},
 		}
 	}
-	used := len(chatSystemPrompt) + len(turn.Text) + 256
-	for _, m := range provenance {
+	req.Messages = append(req.Messages, llm.Message{Role: "system", Content: prompt})
+	req.Messages = append(req.Messages, provenance...)
+	req.Messages = append(req.Messages, llm.Message{Role: "user", Content: turn.Text})
+	return req, nil
+}
+
+// Count UTF-8 BYTES as tokens (conservative byte-tokenizer upper bound), plus
+// 128 tokens per message for framing. All instructions are included. 12000 input
+// + 2000 output + 2384 reserve <= 16384. Never pass oversized text to truncation.
+func chatRequest(turn chat.Turn, recent []chat.Exchange) (llm.Request, error) {
+	req, err := mandatoryChatRequest(turn, chatSystemPrompt)
+	if err != nil {
+		return req, err
+	}
+	used := 0
+	for _, m := range req.Messages {
 		used += len(m.Content) + 128
 	}
 	if used > 12000 {
@@ -55,12 +68,12 @@ func chatRequest(turn chat.Turn, recent []chat.Exchange) (llm.Request, error) {
 			break
 		}
 	}
-	req.Messages = append(req.Messages, llm.Message{Role: "system", Content: chatSystemPrompt})
+	mandatory := req.Messages
+	req.Messages = []llm.Message{mandatory[0]}
 	for i := len(selected) - 1; i >= 0; i-- {
 		req.Messages = append(req.Messages, llm.Message{Role: "user", Content: selected[i].User}, llm.Message{Role: "assistant", Content: selected[i].Assistant})
 	}
-	req.Messages = append(req.Messages, provenance...)
-	req.Messages = append(req.Messages, llm.Message{Role: "user", Content: turn.Text})
+	req.Messages = append(req.Messages, mandatory[1:]...)
 	return req, nil
 }
 
@@ -145,12 +158,17 @@ func (a *ChatActivities) runChatModel(ctx context.Context, ref chat.TurnRef, att
 	if err != nil {
 		return err
 	}
-	req, err := chatRequest(turn, history)
+	var req llm.Request
+	if a.WebTools != nil {
+		req, err = a.webRequest(ctx, ref, turn, history)
+	} else {
+		req, err = chatRequest(turn, history)
+	}
 	if err != nil {
 		return err
 	}
-	attemptID := chat.LogicalID(ref.TurnID, fmt.Sprintf("model/0/attempt/%d", attempt))
-	cached, err := a.Repository.BeginChatModelAttempt(ctx, chat.ModelAttempt{ID: attemptID, ConversationID: ref.ConversationID, TurnID: ref.TurnID, Attempt: attempt, Status: "running"})
+	attemptID := chat.LogicalID(ref.TurnID, fmt.Sprintf("model/%d/attempt/%d", ref.Step, attempt))
+	cached, err := a.Repository.BeginChatModelAttempt(ctx, chat.ModelAttempt{ID: attemptID, ConversationID: ref.ConversationID, TurnID: ref.TurnID, LogicalStep: ref.Step, Attempt: attempt, Status: "running"})
 	if err != nil {
 		return err
 	}
@@ -172,8 +190,12 @@ func (a *ChatActivities) runChatModel(ctx context.Context, ref chat.TurnRef, att
 	if err == nil {
 		err = ctx.Err()
 	}
-	if err == nil && (len(response.Message.ToolCalls) != 0 || len(response.Message.Content) > 65536 || !utf8.ValidString(response.Message.Content)) {
+	if err == nil && ((len(response.Message.ToolCalls) != 0 && a.WebTools == nil) || len(response.Message.ToolCalls) > 4 || len(response.Message.Content) > 65536 || !utf8.ValidString(response.Message.Content)) {
 		err = &ollama.InvalidRequestError{Err: errors.New("unsupported model output")}
+	}
+	var calls []chat.WebModelCall
+	if err == nil && len(response.Message.ToolCalls) > 0 {
+		calls, err = a.webCalls(ctx, ref, response.Message.ToolCalls)
 	}
 	if err != nil {
 		// WorkerStop arrives before the SDK's context deadline. Use that still
@@ -192,7 +214,7 @@ func (a *ChatActivities) runChatModel(ctx context.Context, ref chat.TurnRef, att
 		}
 		return err
 	}
-	err = a.Repository.SaveChatModelResult(ctx, chat.ChatModelResult{TurnRef: ref, Text: response.Message.Content, Tokens: response.Tokens, AttemptID: attemptID, LimitedHistory: true})
+	err = a.Repository.SaveChatModelResult(ctx, chat.ChatModelResult{TurnRef: ref, Calls: calls, Text: response.Message.Content, Tokens: response.Tokens, AttemptID: attemptID, LimitedHistory: true})
 	if errors.Is(err, storage.ErrConflict) || errors.Is(err, storage.ErrStaleChatAttempt) {
 		// Never overwrite a canonical response. A different attempt's committed
 		// winner is reusable; changed output from THIS owner is still a defect.
