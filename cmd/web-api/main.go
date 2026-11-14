@@ -20,6 +20,7 @@ import (
 	tc "go.temporal.io/sdk/client"
 
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/api"
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/attachments"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/storage"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -85,7 +86,7 @@ func run() error {
 		return errors.New("application database unavailable")
 	}
 	var ready bool
-	if err = pool.QueryRow(startup, "SELECT version=5 AND NOT dirty FROM schema_migrations").Scan(&ready); err != nil || !ready {
+	if err = pool.QueryRow(startup, "SELECT version=6 AND NOT dirty FROM schema_migrations").Scan(&ready); err != nil || !ready {
 		return errors.New("application schema unavailable; run web-api -migrate")
 	}
 	address := os.Getenv("WEBCHAT_TEMPORAL_ADDRESS")
@@ -99,6 +100,21 @@ func run() error {
 	}
 	defer sdk.Close()
 	repo := storage.New(pool)
+	if root := os.Getenv("WEBCHAT_ATTACHMENT_ROOT"); root != "" {
+		files, e := attachments.NewStore(root, repo, nil)
+		if e != nil {
+			return fmt.Errorf("attachment store: %w", e)
+		}
+		defer files.Close()
+		recovery, done := context.WithTimeout(ctx, 2*time.Minute)
+		e = files.Recover(recovery)
+		done()
+		if e != nil {
+			return fmt.Errorf("attachment recovery: %w", e)
+		}
+		cfg.Attachments = files
+		cfg.RequestTimeout = 30 * time.Second
+	}
 	gateway := chatclient.NewWebGateway(sdk, repo)
 	var reconciling atomic.Bool
 	cfg.GatewayConnected = gateway.Connected
@@ -120,7 +136,7 @@ func run() error {
 	if err != nil {
 		return errors.New("cannot bind private API loopback address")
 	}
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 * 1024}
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 35 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 16 * 1024}
 	log.Printf("private API listening on %s; durable queue and supervised Temporal dispatch enabled", cfg.ListenAddress)
 	return supervise(ctx, func(runCtx context.Context) error { return serve(runCtx, server, listener) }, func(runCtx context.Context) error {
 		reconciling.Store(true)

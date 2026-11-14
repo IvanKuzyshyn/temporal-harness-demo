@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/attachments"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/chat"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/tools"
 )
@@ -41,6 +42,10 @@ func NewWebFetchAdapter(f *tools.Fetcher) tools.WebAdapter {
 	}
 }
 
-func productionWebTools() *tools.WebRegistry {
-	return tools.NewWebRegistry(map[string]tools.WebAdapter{"web_fetch": NewWebFetchAdapter(tools.NewFetcher())})
+func productionWebTools(stores ...*attachments.Store) *tools.WebRegistry {
+	adapters := map[string]tools.WebAdapter{"web_fetch": NewWebFetchAdapter(tools.NewFetcher())}
+	if len(stores) > 0 && stores[0] != nil {
+		adapters["file_upload"] = NewWebAttachmentAdapter(stores[0])
+	}
+	return tools.NewWebRegistry(adapters)
 }

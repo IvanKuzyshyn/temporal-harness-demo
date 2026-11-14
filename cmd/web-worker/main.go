@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/activities"
+	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/attachments"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm/mock"
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/llm/ollama"
@@ -54,7 +55,7 @@ func run() error {
 	}
 	defer pool.Close()
 	var ready bool
-	if err = pool.QueryRow(startup, "SELECT version=5 AND NOT dirty FROM schema_migrations").Scan(&ready); err != nil || !ready {
+	if err = pool.QueryRow(startup, "SELECT version=6 AND NOT dirty FROM schema_migrations").Scan(&ready); err != nil || !ready {
 		return errors.New("schema unavailable; run web-api -migrate")
 	}
 	address := os.Getenv("WEBCHAT_TEMPORAL_ADDRESS")
@@ -62,7 +63,16 @@ func run() error {
 		address = "127.0.0.1:7233"
 	}
 	// Worker lifecycle must not be tied to an expiring startup timeout.
-	runner, err := worker.StartWeb(ctx, address, &activities.ChatActivities{Repository: storage.New(pool), Model: model})
+	repo := storage.New(pool)
+	var files *attachments.Store
+	if root := os.Getenv("WEBCHAT_ATTACHMENT_ROOT"); root != "" {
+		files, err = attachments.NewStore(root, repo, nil)
+		if err != nil {
+			return fmt.Errorf("attachment store: %w", err)
+		}
+		defer files.Close()
+	}
+	runner, err := worker.StartWeb(ctx, address, &activities.ChatActivities{Repository: repo, Model: model, Attachments: files})
 	if err != nil {
 		return errors.New("Temporal worker startup failed")
 	}
