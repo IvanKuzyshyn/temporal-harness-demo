@@ -2,7 +2,7 @@
 # Only ephemeral, uniquely named test resources; never targets the developer stack.
 set -euo pipefail
 mode=${1:-}
-[[ "$mode" == storage || "$mode" == api || "$mode" == chat || "$mode" == replacement || "$mode" == approval || "$mode" == fetch || "$mode" == attachments || "$mode" == analysis || "$mode" == context ]] || { echo 'usage: scripts/test-web-integration.sh storage|api|chat|replacement|approval|fetch|attachments|analysis|context' >&2; exit 2; }
+[[ "$mode" == storage || "$mode" == api || "$mode" == chat || "$mode" == replacement || "$mode" == approval || "$mode" == fetch || "$mode" == attachments || "$mode" == analysis || "$mode" == context || "$mode" == stream ]] || { echo 'usage: scripts/test-web-integration.sh storage|api|chat|replacement|approval|fetch|attachments|analysis|context|stream' >&2; exit 2; }
 for tool in docker mise python3; do command -v "$tool" >/dev/null || { echo "required: $tool" >&2; exit 1; }; done
 docker info >/dev/null
 docker compose version >/dev/null
@@ -86,12 +86,12 @@ if [[ "$mode" == attachments || "$mode" == analysis || "$mode" == context ]]; th
   export WEBCHAT_TEST_PARSERS=1
   mise exec -- go test -p 1 -count=1 -timeout 3m -race -tags integration -v ./internal/attachments/...
 fi
-if [[ "$mode" == api || "$mode" == chat || "$mode" == replacement || "$mode" == approval || "$mode" == fetch || "$mode" == attachments || "$mode" == analysis || "$mode" == context ]]; then
+if [[ "$mode" == api || "$mode" == chat || "$mode" == replacement || "$mode" == approval || "$mode" == fetch || "$mode" == attachments || "$mode" == analysis || "$mode" == context || "$mode" == stream ]]; then
   # Serial packages: dispatcher scenarios deliberately reschedule commands in
   # this unique test database, never any developer/shared application database.
   mise exec -- go test -p 1 -count=1 -timeout 3m -race -tags integration -v ./cmd/web-api/... ./internal/api/... ./internal/dispatch/...
 fi
-if [[ "$mode" == chat || "$mode" == replacement || "$mode" == approval || "$mode" == fetch || "$mode" == attachments || "$mode" == analysis || "$mode" == context ]]; then
+if [[ "$mode" == chat || "$mode" == replacement || "$mode" == approval || "$mode" == fetch || "$mode" == attachments || "$mode" == analysis || "$mode" == context || "$mode" == stream ]]; then
   # Launch the pinned actual server as an owned child, never inherited services.
   read -r grpc_port http_port metrics_port < <(python3 - <<'PY'
 import socket
@@ -117,6 +117,7 @@ PY
   echo "Actual isolated Temporal address=$WEBCHAT_TEST_TEMPORAL_ADDRESS pid=$temporal_pid"
   export WEBCHAT_TEST_RESTART_REQUEST="$work/restart.request"
   default_run=.
+  if [[ "$mode" == stream ]]; then default_run='^TestStream'; fi
   if [[ "$mode" == context ]]; then default_run='Test(Context|Document|ImageApplication|ImageChild|ImageScope|Replacement|OrdinaryHardWorkerDeath|ContinueAsNewCommandDedup)'; fi
   if [[ "$mode" == analysis ]]; then default_run='Test(Document|AnalysisChild|ApprovedImage|ImageApplication|ImageScope|ImageChild|ParentCancellationJoinsDocumentChild|Attachment|WebToolTimedOutBodyBlocksAcceptedReplacement|ReplacementAfterTimedOutAttemptDoesNotBypassCleanup|OrdinaryHardWorkerDeathRecoversCanonicalResponseAndFollowUp)'; fi
   if [[ "$mode" == replacement ]]; then default_run='Test(Replacement|ClosedUnreceiptedControl|OrdinaryHardWorkerDeath)'; fi

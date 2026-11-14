@@ -11,6 +11,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -134,7 +135,11 @@ func decode(w http.ResponseWriter, r *http.Request, out any, allowed ...string) 
 	return true
 }
 func pageArgs(w http.ResponseWriter, r *http.Request, key string) (string, int, bool) {
-	q := r.URL.Query()
+	q, parseErr := url.ParseQuery(r.URL.RawQuery)
+	if parseErr != nil {
+		fail(w, 400, "invalid_query")
+		return "", 0, false
+	}
 	for k, v := range q {
 		if (k != "limit" && k != key) || len(v) != 1 {
 			fail(w, 400, "invalid_query")
@@ -157,6 +162,15 @@ func (s *Server) connected() bool {
 }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !s.secure(w, r) {
+		return
+	}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	if len(parts) == 3 && parts[0] == "conversations" && parts[2] == "events" {
+		if !chat.ValidID(parts[1]) {
+			fail(w, 400, "invalid_request")
+			return
+		}
+		s.events(w, r, chat.ConversationID(parts[1]))
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), s.config.RequestTimeout)
@@ -208,10 +222,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if len(path) >= 3 && path[2] == "attachments" {
 			s.attachment(w, r, id, path[3:])
-			return
-		}
-		if len(path) >= 3 && path[2] == "events" {
-			fail(w, 501, "not_implemented")
 			return
 		}
 		if len(path) == 2 && r.Method == "GET" {

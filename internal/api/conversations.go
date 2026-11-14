@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
-	"time"
 
 	"github.com/IvanKuzyshyn/temporal-harness-demo/internal/chat"
 )
@@ -84,7 +83,7 @@ func (s *Server) metadata(w http.ResponseWriter, r *http.Request, id chat.Conver
 		storageError(w, err)
 		return
 	}
-	respond(w, 200, map[string]any{"conversation": conversationJSON(p.Conversation), "activeTurn": p.ActiveTurn, "pendingApproval": p.PendingApproval, "policy": map[string]any{"revision": p.Conversation.PolicyRevision, "approvalAll": p.ApprovalToolset == chat.WebToolset, "toolsetVersion": p.ApprovalToolset}, "freshness": map[string]any{"source": "postgres_projection", "authoritative": false, "observedAt": time.Now().UTC(), "workflowConfirmedAt": nil}, "dispatcherConnected": s.connected()})
+	respond(w, 200, metadataJSON(p, s.connected()))
 }
 func (s *Server) history(w http.ResponseWriter, r *http.Request, id chat.ConversationID) {
 	before, n, ok := pageArgs(w, r, "before")
@@ -106,7 +105,7 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request, id chat.Convers
 	}
 	items := []any{}
 	for _, m := range page.Messages {
-		items = append(items, map[string]any{"entryId": m.EntryID, "conversationId": m.ConversationID, "turnId": m.TurnID, "role": m.Role, "text": m.Text, "attachmentIds": m.AttachmentIDs, "logicalStep": m.LogicalStep, "resultKind": m.ResultKind, "completionState": m.CompletionState, "context": m.Context, "sequence": m.Sequence, "createdAt": m.CreatedAt})
+		items = append(items, messageJSON(m))
 	}
 	respond(w, 200, map[string]any{"messages": items, "before": page.Before})
 }
